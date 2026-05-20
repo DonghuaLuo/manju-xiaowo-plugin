@@ -1,0 +1,13 @@
+.idea/
+
+frontend/node_modules/
+frontend/dist/
+
+backend/compile/
+**/__pycache__/
+*.py[cod]
+
+.env
+.env.*
+*.log
+/MIGRATION_CONSTRAINTS.md

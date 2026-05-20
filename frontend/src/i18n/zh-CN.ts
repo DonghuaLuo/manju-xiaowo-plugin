@@ -1,0 +1,41 @@
+// 简体中文语言包
+export const zhCN = {
+  // TitleBar
+  "titlebar.minimize": "最小化",
+  "titlebar.maximize": "最大化",
+  "titlebar.restore": "还原",
+  "titlebar.close": "关闭",
+  "titlebar.createShortcut": "创建桌面快捷方式",
+  "titlebar.shortcutTip": "在桌面创建快捷方式，方便快速启动",
+  "titlebar.shortcutName": "快捷方式名称",
+  "titlebar.openSource": "开源与版权信息",
+  "titlebar.openSourceDesc": "查看当前插件的上游项目、许可证、版权声明和修改说明。",
+  "titlebar.legalProject": "上游项目",
+  "titlebar.legalAuthor": "原始作者/组织",
+  "titlebar.legalLicense": "许可证名称",
+  "titlebar.legalHomepage": "上游地址",
+  "titlebar.legalUpstreamSourceModifiedYes": "上游源码已直接修改",
+  "titlebar.legalUpstreamSourceModifiedNo": "上游源码未直接修改",
+  "titlebar.legalIntegrationModifiedYes": "存在小蜗封装 / 集成改动",
+  "titlebar.legalIntegrationModifiedNo": "未声明小蜗封装 / 集成改动",
+  "titlebar.legalModified": "小蜗修改",
+  "titlebar.legalModifiedYes": "已修改",
+  "titlebar.legalModifiedNo": "未修改",
+  "titlebar.legalLicenseFiles": "LICENSE 文件",
+  "titlebar.legalNoticeFiles": "NOTICE 文件",
+  "titlebar.legalChangeFiles": "修改说明文件",
+  "titlebar.legalSummary": "说明",
+  "titlebar.legalTag": "许可",
+  "titlebar.openUpstream": "打开上游项目",
+  "titlebar.openLicense": "查看 LICENSE",
+  "titlebar.openNotice": "查看 NOTICE",
+  "titlebar.openChanges": "查看修改说明",
+  "titlebar.closeDialog": "关闭",
+  "titlebar.cancel": "取消",
+  "titlebar.confirm": "确定",
+
+  // 初始化提示
+  "init.loading": "正在初始化后端服务，请稍候...",
+  "init.tip": "插件已就绪，可以开始使用。",
+}
+
