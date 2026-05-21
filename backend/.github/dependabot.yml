@@ -1,0 +1,157 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Python dependencies via uv (pyproject.toml + uv.lock)
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    versioning-strategy: lockfile-only
+    labels:
+      - "dependencies"
+      - "python:uv"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      fastapi-stack:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "pydantic*"
+          - "python-multipart"
+          - "python-dotenv"
+      database:
+        patterns:
+          - "sqlalchemy*"
+          - "aiosqlite"
+          - "asyncpg"
+          - "alembic"
+      ai-sdks:
+        patterns:
+          - "claude-agent-sdk"
+          - "google-genai"
+          - "openai"
+          - "volcengine-python-sdk*"
+          - "xai-sdk"
+          - "instructor"
+      auth:
+        patterns:
+          - "pyjwt"
+          - "pwdlib*"
+      media:
+        patterns:
+          - "Pillow"
+          - "ffmpeg-python"
+          - "pyjianyingdraft"
+      document-parsing:
+        patterns:
+          - "pdf-oxide"
+          - "mammoth"
+          - "docx2txt"
+          - "ebooklib"
+          - "beautifulsoup4"
+          - "lxml"
+          - "charset-normalizer"
+      dev-dependencies:
+        patterns:
+          - "pytest*"
+          - "ruff"
+          - "basedpyright"
+          - "pre-commit"
+          - "python-docx"
+        update-types:
+          - "minor"
+          - "patch"
+      all-other:
+        patterns:
+          - "*"
+
+  # Frontend npm dependencies (pnpm)
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      i18n:
+        patterns:
+          - "i18next"
+          - "i18next-*"
+          - "react-i18next"
+      dnd-kit:
+        patterns:
+          - "@dnd-kit/*"
+      ui-libs:
+        patterns:
+          - "framer-motion"
+          - "lucide-react"
+          - "@floating-ui/*"
+          - "@lobehub/*"
+          - "@tanstack/react-virtual"
+          - "streamdown"
+      vite-tailwind:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "tailwindcss"
+          - "@tailwindcss/*"
+          - "autoprefixer"
+          - "postcss"
+      testing:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+          - "@testing-library/*"
+          - "jsdom"
+      eslint-stack:
+        patterns:
+          - "eslint"
+          - "eslint-*"
+          - "@eslint/*"
+          - "typescript-eslint"
+          - "globals"
+      dev-dependencies:
+        dependency-type: "development"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      all-other:
+        patterns:
+          - "*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"
