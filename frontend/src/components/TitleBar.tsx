@@ -3,11 +3,11 @@ import { PluginSDK } from "xiaowo-sdk"
 import { useTranslation } from "@/i18n"
 
 const LICENSE_TAG_TEXT = "License"
-
 type OpenSourceInfo = {
   upstreamName: string
   upstreamAuthor: string
   upstreamUrls: string[]
+  sourceRepositoryUrls: string[]
   upstreamSourceModified: boolean
   licenseName: string
   licenseSpdx: string
@@ -24,6 +24,7 @@ type PluginInfoPayload = {
     upstream_name?: string
     upstream_author?: string
     upstream_url?: string[]
+    source_url?: string[]
     upstream_source_modified?: boolean
     license_name?: string
     license_spdx?: string
@@ -45,6 +46,7 @@ const fallbackOpenSourceInfo: OpenSourceInfo = {
   upstreamName: "Unknown",
   upstreamAuthor: "Unknown",
   upstreamUrls: [],
+  sourceRepositoryUrls: [],
   upstreamSourceModified: false,
   licenseName: "License",
   licenseSpdx: "",
@@ -65,9 +67,8 @@ function normalizeOpenSourceInfo(
     upstreamName: raw.upstream_name || fallbackOpenSourceInfo.upstreamName,
     upstreamAuthor:
       raw.upstream_author || fallbackOpenSourceInfo.upstreamAuthor,
-    upstreamUrls: Array.isArray(raw.upstream_url)
-      ? raw.upstream_url.map((item) => item.trim()).filter(Boolean)
-      : [],
+    upstreamUrls: normalizeUrlList(raw.upstream_url),
+    sourceRepositoryUrls: normalizeUrlList(raw.source_url),
     upstreamSourceModified:
       typeof raw.upstream_source_modified === "boolean"
         ? raw.upstream_source_modified
@@ -89,6 +90,12 @@ function normalizeOpenSourceInfo(
     modificationNotice:
       raw.modification_notice || fallbackOpenSourceInfo.modificationNotice,
   }
+}
+
+function normalizeUrlList(value?: string[]) {
+  return Array.isArray(value)
+    ? value.map((item) => item.trim()).filter(Boolean)
+    : []
 }
 
 function getSourceLabel(tagText: string, index: number) {
@@ -467,15 +474,67 @@ export function TitleBar() {
                             : t("titlebar.legalIntegrationModifiedNo")}
                         </span>
                       </div>
-
                       {openSourceInfo.sourceRequired && (
-                        <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2 text-xs leading-relaxed text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/20 dark:text-rose-300">
-                          Source required
+                        <div
+                          className={`rounded-xl border px-3 py-2 text-xs leading-relaxed ${
+                            openSourceInfo.sourceRepositoryUrls.length > 0
+                              ? "border-emerald-200 bg-emerald-50/80 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-300"
+                              : "border-amber-200 bg-amber-50/80 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300"
+                          }`}
+                        >
+                          <div className="font-medium">
+                            {openSourceInfo.sourceRepositoryUrls.length > 0
+                              ? t("titlebar.sourceProvided")
+                              : t("titlebar.sourceRequired")}
+                          </div>
+                          <div className="mt-1 opacity-85">
+                            {openSourceInfo.sourceRepositoryUrls.length > 0
+                              ? t("titlebar.sourceProvidedDesc")
+                              : t("titlebar.sourceRequiredDesc")}
+                          </div>
                         </div>
                       )}
                     </div>
                   </div>
-
+                  {openSourceInfo.sourceRepositoryUrls.length > 0 && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/10">
+                      <div className="mb-3 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                        {t("titlebar.sourceRepositories")}
+                      </div>
+                      <div className="space-y-2">
+                        {openSourceInfo.sourceRepositoryUrls.map(
+                          (url, index) => (
+                            <button
+                              key={url}
+                              onClick={() => handleOpenUpstream(url)}
+                              className="group flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white/80 px-3 py-3 text-left transition-colors hover:border-emerald-300 hover:bg-emerald-100/70 dark:border-emerald-900/50 dark:bg-[#252526] dark:hover:border-emerald-800 dark:hover:bg-emerald-950/25"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex shrink-0 items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium tracking-[0.04em] text-emerald-700 uppercase dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+                                    {t("titlebar.sourceRepository")} {index + 1}
+                                  </span>
+                                  <span className="min-w-0 text-sm font-medium break-all text-emerald-700 transition-colors group-hover:text-emerald-800 dark:text-emerald-300 dark:group-hover:text-emerald-200">
+                                    {url}
+                                  </span>
+                                </div>
+                              </div>
+                              <svg
+                                className="size-4 shrink-0 text-emerald-500 transition-colors group-hover:text-emerald-700 dark:group-hover:text-emerald-300"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                              >
+                                <path d="M7 17L17 7" />
+                                <path d="M7 7h10v10" />
+                              </svg>
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {openSourceInfo.upstreamUrls.length > 0 && (
                     <div className="rounded-2xl border border-gray-200 bg-white/80 p-4 dark:border-[#3a3a3d] dark:bg-[#2c2c2c]/80">
                       <div className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">

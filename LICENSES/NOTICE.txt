@@ -1,0 +1,34 @@
+Manju Xiaowo Plugin
+===================
+
+This plugin is a Xiaowo desktop plugin distribution that includes and adapts
+ArcReel, an AGPL-3.0 licensed open-source AI video generation workspace.
+
+Upstream project:
+- Name: ArcReel
+- Repository: https://github.com/ArcReel/ArcReel
+- License: GNU Affero General Public License v3.0
+- Upstream copyright: ArcReel contributors, as recorded in the upstream
+  repository history and source files.
+
+Xiaowo plugin distribution:
+- Plugin ID: manju
+- Display name: AI 短剧 / 漫剧生成
+- Plugin repository: https://github.com/DonghuaLuo/manju-xiaowo-plugin
+- Gitee mirror: https://gitee.com/donghuax/manju-xiaowo-plugin
+- Adapter / packager: 小蜗工具（封装）
+
+No endorsement:
+This plugin distribution is an independent Xiaowo plugin package. Unless
+separately stated by the upstream project, the ArcReel project and its
+contributors do not endorse this plugin distribution, Xiaowo, or any commercial
+service built around this package.
+
+License files:
+- Root license: LICENSE
+- Plugin license copy: LICENSES/LICENSE.txt
+- Upstream license copy: backend/LICENSE
+
+Third-party dependencies:
+This repository references Python and frontend dependencies that are distributed
+under their own licenses. Their licenses are not replaced by this notice.

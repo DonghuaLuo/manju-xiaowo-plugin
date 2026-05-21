@@ -4,6 +4,37 @@
   "version": "1.00",
   "description": "剧本拆解、角色设计、分镜到成片一键合成。",
   "author": "小蜗工具（封装）",
+  "open_source": {
+    "upstream_name": "ArcReel",
+    "upstream_author": "ArcReel contributors",
+    "upstream_url": [
+      "https://github.com/ArcReel/ArcReel"
+    ],
+    "license_name": "GNU Affero General Public License v3.0",
+    "license_spdx": "AGPL-3.0-only",
+    "license_files": [
+      "LICENSE",
+      "LICENSES/LICENSE.txt",
+      "backend/LICENSE"
+    ],
+    "notice_files": [
+      "LICENSES/NOTICE.txt",
+      "LICENSES/SOURCE-OFFER.md"
+    ],
+    "copyright_files": [
+      "LICENSES/COPYRIGHT.txt"
+    ],
+    "source_required": true,
+    "source_url": [
+      "https://github.com/DonghuaLuo/manju-xiaowo-plugin",
+      "https://gitee.com/donghuax/manju-xiaowo-plugin"
+    ],
+    "upstream_source_modified": true,
+    "modification_notice": "小蜗工具将 ArcReel 源码封装为 manju 小蜗插件，新增插件 manifest、独立插件前端窗口、Python JSON-RPC 后端入口与小蜗 SDK 适配层，并将插件源码作为独立仓库开源分发。",
+    "modification_files": [
+      "LICENSES/CHANGES-XIAOWO.md"
+    ]
+  },
   "icon": "frontend/public/logo.png",
   "dev_mode": true,
   "frontend": {

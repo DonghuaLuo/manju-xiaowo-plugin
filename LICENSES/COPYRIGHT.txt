@@ -1,0 +1,67 @@
+Manju Xiaowo Plugin - Copyright and Source Attribution
+======================================================
+
+This file records the copyright and source attribution information for the
+manju Xiaowo plugin.
+
+1. Upstream Project
+-------------------
+
+Project name:
+ArcReel
+
+Repository:
+https://github.com/ArcReel/ArcReel
+
+License:
+GNU Affero General Public License v3.0
+
+SPDX identifier used by this plugin metadata:
+AGPL-3.0-only
+
+Upstream copyright holder / author attribution:
+ArcReel contributors, as recorded in the upstream Git repository history,
+release notes, source files, and project documentation.
+
+Imported upstream version / reference:
+- Upstream package version observed in backend/pyproject.toml: 0.14.0
+- Upstream default branch: main
+- Upstream commit used for reference: 825bb060868ddf18db33eaeb1607cee486451142
+- Upstream commit date: 2026-05-20T09:14:09Z
+- Local integration date: 2026-05-20
+
+2. Xiaowo Plugin Distribution
+-----------------------------
+
+Plugin ID:
+manju
+
+Plugin display title:
+AI 短剧 / 漫剧生成
+
+Plugin repository:
+https://github.com/DonghuaLuo/manju-xiaowo-plugin
+
+Gitee mirror:
+https://gitee.com/donghuax/manju-xiaowo-plugin
+
+Adapter / packager / distributor:
+小蜗工具（封装）
+
+Xiaowo plugin files and integration layer include, at minimum:
+- manifest.json
+- frontend/
+- backend/main.py
+- backend/handlers.py
+- backend/utils/
+- LICENSES/
+
+3. Scope Notice
+---------------
+
+This copyright notice applies to the manju Xiaowo plugin repository and the
+ArcReel-derived code included in it. It does not claim ownership over ArcReel
+or replace the upstream copyright notices.
+
+The Xiaowo main application and other Xiaowo plugins are separate projects and
+are not included in this plugin source repository.
