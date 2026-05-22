@@ -1,0 +1,24 @@
+html,
+body,
+#app-root {
+  height: 100%;
+  overflow: hidden;
+}
+
+.manju-plugin-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg, #0b0b0f);
+}
+
+.manju-app-host {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.manju-app-host > * {
+  height: 100%;
+}
