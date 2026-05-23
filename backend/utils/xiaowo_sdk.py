@@ -267,10 +267,10 @@ def _create_sdk_with_protected_verifier():
             self._pending_futures = set()
             self._pending_futures_lock = threading.Lock()
 
-        def _log_protocol_transport_error(self, message: str):
+        def _log_stdout_fallback_locked(self, reason: str):
             try:
-                sys.stderr.write(f"[xiaowo-sdk] {message}\n")
-                sys.stderr.flush()
+                _PROTOCOL_STDOUT.write(f"退回为stdout- {reason}\n")
+                _PROTOCOL_STDOUT.flush()
             except Exception:
                 pass
 
@@ -400,8 +400,8 @@ def _create_sdk_with_protected_verifier():
                         time.sleep(_PROTOCOL_PIPE_RETRY_DELAY_SECONDS)
 
             self._protocol_pipe_disabled = True
-            self._log_protocol_transport_error(
-                f"插件协议 pipe 不可用，回退 stdout: {last_error}"
+            self._log_stdout_fallback_locked(
+                f"插件协议 pipe 不可用: {last_error}"
             )
             return False
 
@@ -429,8 +429,8 @@ def _create_sdk_with_protected_verifier():
                         time.sleep(_PROTOCOL_PIPE_RETRY_DELAY_SECONDS)
 
             self._protocol_pipe_disabled = True
-            self._log_protocol_transport_error(
-                f"插件协议 pipe 发送失败，回退 stdout: {last_error}"
+            self._log_stdout_fallback_locked(
+                f"插件协议 pipe 发送失败: {last_error}"
             )
             return False
 
@@ -438,7 +438,7 @@ def _create_sdk_with_protected_verifier():
             if not self._protocol_pipe_disabled:
                 self._protocol_pipe_disabled = True
                 self._close_protocol_pipe_locked()
-                self._log_protocol_transport_error(reason)
+                self._log_stdout_fallback_locked(reason)
 
         def _write_stdout_protocol_locked(self, payload: Dict[str, Any]):
             message = f"{self.MSG_START}{json.dumps(payload, ensure_ascii=False)}{self.MSG_END}\n"
