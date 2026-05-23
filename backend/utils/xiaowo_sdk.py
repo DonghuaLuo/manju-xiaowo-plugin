@@ -234,8 +234,7 @@ def _create_sdk_with_protected_verifier():
                 _PROTOCOL_PIPE_VERSION,
             ).strip()
             self._protocol_pipe_fd = None
-            self._protocol_ack_queue = None
-            self._protocol_ack_thread = None
+            self._protocol_read_buffer = b""
             self._protocol_seq = 0
             self._protocol_pipe_disabled = not (
                 self._protocol_pipe_path
@@ -269,7 +268,7 @@ def _create_sdk_with_protected_verifier():
 
         def _log_stdout_fallback_locked(self, reason: str):
             try:
-                _PROTOCOL_STDOUT.write(f"退回为stdout- {reason}\n")
+                _PROTOCOL_STDOUT.write(f"退回为stdout: {reason}\n")
                 _PROTOCOL_STDOUT.flush()
             except Exception:
                 pass
@@ -283,36 +282,42 @@ def _create_sdk_with_protected_verifier():
         def _close_protocol_pipe_locked(self):
             fd = self._protocol_pipe_fd
             self._protocol_pipe_fd = None
-            self._protocol_ack_queue = None
+            self._protocol_read_buffer = b""
             if fd is not None:
                 try:
                     os.close(fd)
                 except Exception:
                     pass
 
-        def _ack_reader_worker(self, fd: int, ack_queue):
-            buffer = b""
+        def _read_protocol_pipe_chunk_locked(self, timeout_seconds: float) -> bytes:
+            fd = self._protocol_pipe_fd
+            if fd is None:
+                raise RuntimeError("插件协议 pipe 未连接")
+
+            result_queue = queue.Queue(maxsize=1)
+
+            def read_once():
+                try:
+                    result_queue.put(("ok", os.read(fd, 4096)))
+                except Exception as exc:
+                    result_queue.put(("error", exc))
+
+            reader = threading.Thread(
+                target=read_once,
+                name="xiaowo-protocol-ack-read-once",
+                daemon=True,
+            )
+            reader.start()
             try:
-                while True:
-                    chunk = os.read(fd, 4096)
-                    if not chunk:
-                        ack_queue.put({"type": "error", "error": "插件协议 pipe 已关闭"})
-                        return
-                    buffer += chunk
-                    while b"\n" in buffer:
-                        line, buffer = buffer.split(b"\n", 1)
-                        text = line.decode("utf-8", errors="replace").strip()
-                        if not text:
-                            continue
-                        try:
-                            ack_queue.put(json.loads(text))
-                        except Exception as exc:
-                            ack_queue.put({
-                                "type": "error",
-                                "error": f"解析插件协议 ack 失败: {exc}",
-                            })
-            except Exception as exc:
-                ack_queue.put({"type": "error", "error": str(exc)})
+                status, value = result_queue.get(timeout=timeout_seconds)
+            except queue.Empty:
+                raise TimeoutError("等待插件协议 pipe 数据超时")
+
+            if status == "error":
+                raise RuntimeError(str(value))
+            if not value:
+                raise RuntimeError("插件协议 pipe 已关闭")
+            return value
 
         def _write_protocol_pipe_bytes_locked(self, data: bytes):
             if self._protocol_pipe_fd is None:
@@ -331,45 +336,49 @@ def _create_sdk_with_protected_verifier():
             return len(data)
 
         def _wait_protocol_pipe_ack_locked(self, seq: int, timeout_seconds: float):
-            if self._protocol_ack_queue is None:
-                raise RuntimeError("插件协议 ack 队列未初始化")
+            if self._protocol_pipe_fd is None:
+                raise RuntimeError("插件协议 pipe 未连接")
             deadline = time.monotonic() + timeout_seconds
             while True:
+                while b"\n" in self._protocol_read_buffer:
+                    line, self._protocol_read_buffer = self._protocol_read_buffer.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if not text:
+                        continue
+                    try:
+                        ack = json.loads(text)
+                    except Exception as exc:
+                        raise RuntimeError(f"解析插件协议 ack 失败: {exc}") from exc
+
+                    if ack.get("type") == "error":
+                        raise RuntimeError(str(ack.get("error") or "插件协议 ack 读取失败"))
+
+                    if ack.get("type") != "ack":
+                        continue
+
+                    try:
+                        ack_seq = int(ack.get("seq", -1))
+                    except (TypeError, ValueError):
+                        continue
+
+                    if ack_seq != seq:
+                        continue
+
+                    if ack.get("ok") is True:
+                        return
+
+                    raise RuntimeError(str(ack.get("error") or "插件协议 ack 失败"))
+
                 timeout = deadline - time.monotonic()
                 if timeout <= 0:
                     raise TimeoutError(f"等待插件协议 ack 超时: seq={seq}")
-                try:
-                    ack = self._protocol_ack_queue.get(timeout=timeout)
-                except queue.Empty:
-                    raise TimeoutError(f"等待插件协议 ack 超时: seq={seq}")
-
-                if ack.get("type") == "error":
-                    raise RuntimeError(str(ack.get("error") or "插件协议 ack 读取失败"))
-
-                if ack.get("type") != "ack":
-                    continue
-
-                if int(ack.get("seq", -1)) != seq:
-                    continue
-
-                if ack.get("ok") is True:
-                    return
-
-                raise RuntimeError(str(ack.get("error") or "插件协议 ack 失败"))
+                self._protocol_read_buffer += self._read_protocol_pipe_chunk_locked(timeout)
 
         def _connect_protocol_pipe_once_locked(self):
             start_id = int(self._protocol_start_id)
             fd = self._open_protocol_pipe_fd_locked()
-            ack_queue = queue.Queue()
             self._protocol_pipe_fd = fd
-            self._protocol_ack_queue = ack_queue
-            self._protocol_ack_thread = threading.Thread(
-                target=self._ack_reader_worker,
-                args=(fd, ack_queue),
-                name="xiaowo-protocol-ack-reader",
-                daemon=True,
-            )
-            self._protocol_ack_thread.start()
+            self._protocol_read_buffer = b""
 
             hello = {
                 "type": "hello",
