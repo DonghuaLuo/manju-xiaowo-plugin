@@ -1,5 +1,6 @@
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { PluginSDK } from "xiaowo-sdk";
 import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useTranslation } from "react-i18next";
 import {
@@ -14,6 +15,7 @@ import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import {
   getUploadFileName,
+  desktopFileRefFromPath,
   pickDesktopFile,
   type UploadFileInput,
 } from "@/utils/desktop-file";
@@ -56,6 +58,7 @@ export function WelcomeCanvas({
   const [sourceFiles, setSourceFiles] = useState<string[]>([]);
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const dropActiveRef = useRef(false);
   const sourceFilesVersion = useAppStore((s) => s.sourceFilesVersion);
   const displayProjectTitle = projectTitle?.trim() || projectName;
 
@@ -156,11 +159,37 @@ export function WelcomeCanvas({
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      dropActiveRef.current = false;
       setIsDragging(false);
-      voidCall(handlePickFile());
+      const file = e.dataTransfer.files[0];
+      if (file && ALLOWED_SOURCE_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))) {
+        voidCall(processFile(file));
+      }
     },
-    [handlePickFile],
+    [processFile],
   );
+
+  useEffect(() => {
+    const handleFileDrop = (paths: string[]) => {
+      if (!dropActiveRef.current) return;
+      dropActiveRef.current = false;
+      setIsDragging(false);
+      const file = paths[0] ? desktopFileRefFromPath(paths[0]) : null;
+      if (file && ALLOWED_SOURCE_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))) {
+        voidCall(processFile(file));
+      }
+    };
+    const handleCancelled = () => {
+      dropActiveRef.current = false;
+      setIsDragging(false);
+    };
+    PluginSDK.onFileDrop(handleFileDrop);
+    PluginSDK.onFileDropCancelled(handleCancelled);
+    return () => {
+      PluginSDK.offFileDrop(handleFileDrop);
+      PluginSDK.offFileDropCancelled(handleCancelled);
+    };
+  }, [processFile]);
 
   if (phase === "loading") {
     return (
@@ -218,9 +247,13 @@ export function WelcomeCanvas({
             type="button"
             onDragOver={(e) => {
               e.preventDefault();
+              dropActiveRef.current = true;
               setIsDragging(true);
             }}
-            onDragLeave={() => setIsDragging(false)}
+            onDragLeave={() => {
+              dropActiveRef.current = false;
+              setIsDragging(false);
+            }}
             onDrop={handleDrop}
             onClick={voidPromise(handlePickFile)}
             className="focus-ring relative w-full overflow-hidden rounded-2xl px-8 py-14 text-center transition-all"
@@ -414,9 +447,13 @@ export function WelcomeCanvas({
             type="button"
             onDragOver={(e) => {
               e.preventDefault();
+              dropActiveRef.current = true;
               setIsDragging(true);
             }}
-            onDragLeave={() => setIsDragging(false)}
+            onDragLeave={() => {
+              dropActiveRef.current = false;
+              setIsDragging(false);
+            }}
             onDrop={handleDrop}
             className="focus-ring w-full rounded-xl px-4 py-3 text-[11.5px] transition-all"
             style={{

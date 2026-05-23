@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { errMsg, voidCall, voidPromise } from "@/utils/async";
+import { errMsg, voidCall } from "@/utils/async";
 import { formatDate } from "@/utils/date-format";
 import { Link, useLocation } from "wouter";
 import {

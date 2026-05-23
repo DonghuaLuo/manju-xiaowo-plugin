@@ -63,6 +63,20 @@ export function inferContentType(name: string): string | undefined {
   return MIME_BY_EXTENSION[extensionOf(name)];
 }
 
+export function desktopFileRefFromPath(
+  path: string,
+  options: { preview?: boolean } = {},
+): DesktopFileRef {
+  const name = basename(path);
+  return {
+    kind: "desktop-file",
+    path,
+    name,
+    previewUrl: options.preview ? PluginSDK.convertFileSrc(path) : undefined,
+    contentType: inferContentType(name),
+  };
+}
+
 export async function pickDesktopFile(
   options: PickDesktopFileOptions = {},
 ): Promise<DesktopFileRef | null> {
@@ -74,14 +88,7 @@ export async function pickDesktopFile(
   });
   if (!selected || Array.isArray(selected)) return null;
 
-  const name = basename(selected);
-  return {
-    kind: "desktop-file",
-    path: selected,
-    name,
-    previewUrl: options.preview ? PluginSDK.convertFileSrc(selected) : undefined,
-    contentType: inferContentType(name),
-  };
+  return desktopFileRefFromPath(selected, { preview: options.preview });
 }
 
 export async function readDesktopFileAsDataUrl(

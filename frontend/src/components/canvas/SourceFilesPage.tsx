@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PluginSDK } from "xiaowo-sdk";
 import { useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
 import { BookOpen, FileText, Plus, Trash2, Upload, ArrowRight } from "lucide-react";
@@ -7,6 +8,7 @@ import { useAppStore } from "@/stores/app-store";
 import { errMsg, voidPromise } from "@/utils/async";
 import { ConflictModal, type ConflictResolution } from "./ConflictModal";
 import {
+  desktopFileRefFromPath,
   getUploadFileName,
   pickDesktopFile,
   type UploadFileInput,
@@ -47,6 +49,7 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
     resolve: (d: ConflictResolution) => void;
   } | null>(null);
   const uploadInFlightRef = useRef(false);
+  const dropActiveRef = useRef(false);
   const projectNameRef = useRef(projectName);
   projectNameRef.current = projectName;
   const sourceFilesVersion = useAppStore((s) => s.sourceFilesVersion);
@@ -210,12 +213,34 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      dropActiveRef.current = false;
       setIsDragging(false);
       if (uploadInFlightRef.current) return;
-      void handlePickSourceFile();
+      const file = e.dataTransfer.files[0];
+      if (file) void handleUpload(file);
     },
-    [handlePickSourceFile],
+    [handleUpload],
   );
+
+  useEffect(() => {
+    const handleFileDrop = (paths: string[]) => {
+      if (!dropActiveRef.current || uploadInFlightRef.current) return;
+      dropActiveRef.current = false;
+      setIsDragging(false);
+      const file = paths[0] ? desktopFileRefFromPath(paths[0]) : null;
+      if (file) void handleUpload(file);
+    };
+    const handleCancelled = () => {
+      dropActiveRef.current = false;
+      setIsDragging(false);
+    };
+    PluginSDK.onFileDrop(handleFileDrop);
+    PluginSDK.onFileDropCancelled(handleCancelled);
+    return () => {
+      PluginSDK.offFileDrop(handleFileDrop);
+      PluginSDK.offFileDropCancelled(handleCancelled);
+    };
+  }, [handleUpload]);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -291,10 +316,14 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
             onDragOver={(e) => {
               e.preventDefault();
               if (uploading) return;
+              dropActiveRef.current = true;
               setIsDragging(true);
             }}
             onDragLeave={() => {
-              if (!uploading) setIsDragging(false);
+              if (!uploading) {
+                dropActiveRef.current = false;
+                setIsDragging(false);
+              }
             }}
             onDrop={handleDrop}
             className="focus-ring group relative w-full overflow-hidden rounded-2xl px-8 py-16 text-center transition-colors"
@@ -369,10 +398,14 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
             onDragOver={(e) => {
               e.preventDefault();
               if (uploading) return;
+              dropActiveRef.current = true;
               setIsDragging(true);
             }}
             onDragLeave={() => {
-              if (!uploading) setIsDragging(false);
+              if (!uploading) {
+                dropActiveRef.current = false;
+                setIsDragging(false);
+              }
             }}
             onDrop={handleDrop}
             className="rounded-2xl"

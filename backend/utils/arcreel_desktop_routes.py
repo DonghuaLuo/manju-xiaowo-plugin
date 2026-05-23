@@ -13,6 +13,8 @@ from __future__ import annotations
 import inspect
 import json
 import mimetypes
+import base64
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,21 +34,29 @@ class _DesktopRoute:
     status_code: int | None
 
 
+class _DesktopGenerationWorkerProxy:
+    async def reload_limits(self) -> None:
+        from utils.arcreel_desktop_sync import request_worker_reload
+
+        request_worker_reload("config_changed")
+
+
 class _DesktopRequest:
     def __init__(self, *, locale: str, query: dict[str, list[str]]) -> None:
         self.headers = {"accept-language": locale} if locale else {}
         self.query_params = {key: values[-1] for key, values in query.items() if values}
-        self.app = SimpleNamespace(state=SimpleNamespace(generation_worker=None))
+        self.app = SimpleNamespace(state=SimpleNamespace(generation_worker=_DesktopGenerationWorkerProxy()))
 
     async def is_disconnected(self) -> bool:
         return False
 
 
 class _DesktopUploadFile:
-    def __init__(self, *, path: Path, filename: str, content_type: str) -> None:
+    def __init__(self, *, path: Path, filename: str, content_type: str, cleanup_path: bool = False) -> None:
         self.path = path
         self.filename = filename
         self.content_type = content_type
+        self.cleanup_path = cleanup_path
         self.file = path.open("rb")
         self.size = path.stat().st_size
 
@@ -58,6 +68,11 @@ class _DesktopUploadFile:
 
     def close_sync(self) -> None:
         self.file.close()
+        if self.cleanup_path:
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 _ROUTES: list[_DesktopRoute] | None = None
@@ -279,16 +294,30 @@ async def _open_upload_files(params: dict[str, Any]) -> tuple[list[_DesktopUploa
         if not isinstance(raw_file, dict):
             raise ValueError("Invalid local file descriptor")
         field_name = str(raw_file.get("fieldName") or "file")
-        file_path = Path(str(raw_file.get("path") or "")).expanduser()
-        if not file_path.is_file():
-            raise FileNotFoundError(f"Local file does not exist: {file_path}")
-        filename = str(raw_file.get("filename") or file_path.name)
+        filename = str(raw_file.get("filename") or "")
+        cleanup_path = False
+        if raw_file.get("base64") is not None:
+            suffix = Path(filename).suffix if filename else ""
+            with tempfile.NamedTemporaryFile(prefix="manju-upload-", suffix=suffix, delete=False) as tmp:
+                tmp.write(base64.b64decode(str(raw_file.get("base64") or "")))
+                file_path = Path(tmp.name)
+            cleanup_path = True
+        else:
+            file_path = Path(str(raw_file.get("path") or "")).expanduser()
+            if not file_path.is_file():
+                raise FileNotFoundError(f"Local file does not exist: {file_path}")
+        filename = filename or file_path.name
         content_type = (
             str(raw_file.get("contentType") or "")
             or mimetypes.guess_type(filename)[0]
             or "application/octet-stream"
         )
-        upload = _DesktopUploadFile(path=file_path, filename=filename, content_type=content_type)
+        upload = _DesktopUploadFile(
+            path=file_path,
+            filename=filename,
+            content_type=content_type,
+            cleanup_path=cleanup_path,
+        )
         opened.append(upload)
         by_field.setdefault(field_name, []).append(upload)
     return opened, by_field

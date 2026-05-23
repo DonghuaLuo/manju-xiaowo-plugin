@@ -138,7 +138,7 @@ async function bodyToDesktopBody(body: BodyInit | null | undefined, headers: Hea
     };
   }
 
-  return { kind: "text", text: String(body), mimeType };
+  throw new Error("Unsupported browser request body payload");
 }
 
 function statusFromErrorCode(code?: string): number {
@@ -195,7 +195,7 @@ function desktopResultToResponse(result: DesktopResult): Response {
 
 async function pluginFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const request = input instanceof Request ? input : null;
-  const url = request?.url ?? String(input);
+  const url = input instanceof Request ? input.url : input instanceof URL ? input.toString() : input;
 
   if (!isApiUrl(url)) {
     return originalFetch(input, init);
@@ -311,8 +311,9 @@ class PluginEventSource extends EventTarget {
       && "last_event_id" in payload.data
     ) {
       const snapshot = payload.data as { last_event_id?: unknown };
-      if (snapshot.last_event_id != null && snapshot.last_event_id !== "") {
-        this.lastEventId = String(snapshot.last_event_id);
+      const lastEventId = snapshot.last_event_id;
+      if ((typeof lastEventId === "string" || typeof lastEventId === "number") && lastEventId !== "") {
+        this.lastEventId = String(lastEventId);
       }
       return;
     }
@@ -457,7 +458,8 @@ function installMediaResourceAdapter(): void {
   patchSrcProperty(HTMLMediaElement.prototype);
   patchSrcProperty(HTMLSourceElement.prototype);
 
-  const originalSetAttribute = Element.prototype.setAttribute;
+  const originalSetAttribute: (this: Element, qualifiedName: string, value: string) => void =
+    Element.prototype.setAttribute;
   Element.prototype.setAttribute = function setAttribute(name: string, value: string): void {
     if (name.toLowerCase() === "src") {
       setApiAwareMediaSrc(this, String(value), (next) => originalSetAttribute.call(this, name, next));

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useId } from "react";
+import { PluginSDK } from "xiaowo-sdk";
 import { voidCall, voidPromise } from "@/utils/async";
 import { Bot, Send, Square, Plus, ChevronDown, Trash2, MessageSquare, PanelRightClose, Paperclip, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -20,8 +21,10 @@ import { composeAllTurns } from "./chat/utils";
 import { uid } from "@/utils/id";
 import { formatShortDateTime } from "@/utils/date-format";
 import {
+  desktopFileRefFromPath,
   pickDesktopFile,
   readDesktopFileAsDataUrl,
+  type DesktopFileRef,
 } from "@/utils/desktop-file";
 
 const MAX_IMAGES = 5;
@@ -189,6 +192,7 @@ export function AgentCopilot() {
   const isComposingRef = useRef(false);
   const imageGenRef = useRef(0);
   const slashMenuRef = useRef<SlashCommandMenuHandle>(null);
+  const dropActiveRef = useRef(false);
   const [localInput, setLocalInput] = useState("");
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -227,18 +231,8 @@ export function AgentCopilot() {
     }
   }, [t]);
 
-  const handlePickImage = useCallback(async () => {
+  const addDesktopImage = useCallback(async (file: DesktopFileRef) => {
     if (attachDisabled) return;
-
-    const file = await pickDesktopFile({
-      title: t("upload_attachment_aria"),
-      filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
-      ],
-      preview: true,
-    });
-    if (!file) return;
-
     setAttachError(null);
     try {
       const image = await readDesktopFileAsDataUrl(file, MAX_IMAGE_BYTES);
@@ -262,6 +256,19 @@ export function AgentCopilot() {
     }
   }, [attachDisabled, t]);
 
+  const handlePickImage = useCallback(async () => {
+    if (attachDisabled) return;
+
+    const file = await pickDesktopFile({
+      title: t("upload_attachment_aria"),
+      filters: [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
+      ],
+      preview: true,
+    });
+    if (file) await addDesktopImage(file);
+  }, [addDesktopImage, attachDisabled, t]);
+
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData.items);
     const imageItems = items.filter((item) => item.type.startsWith("image/"));
@@ -275,18 +282,45 @@ export function AgentCopilot() {
     const hasFiles = Array.from(e.dataTransfer.items).some((i) => i.kind === "file");
     if (!hasFiles) return;
     e.preventDefault();
+    dropActiveRef.current = true;
     setIsDragOver(true);
   }, []);
 
   const handleDragLeave = useCallback(() => {
+    dropActiveRef.current = false;
     setIsDragOver(false);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    dropActiveRef.current = false;
     setIsDragOver(false);
-    voidCall(handlePickImage());
-  }, [handlePickImage]);
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length > 0) addImages(files);
+  }, [addImages]);
+
+  useEffect(() => {
+    const handleFileDrop = (paths: string[]) => {
+      if (!dropActiveRef.current || attachDisabled) return;
+      dropActiveRef.current = false;
+      setIsDragOver(false);
+      voidCall((async () => {
+        for (const path of paths.slice(0, MAX_IMAGES)) {
+          await addDesktopImage(desktopFileRefFromPath(path, { preview: true }));
+        }
+      })());
+    };
+    const handleCancelled = () => {
+      dropActiveRef.current = false;
+      setIsDragOver(false);
+    };
+    PluginSDK.onFileDrop(handleFileDrop);
+    PluginSDK.onFileDropCancelled(handleCancelled);
+    return () => {
+      PluginSDK.offFileDrop(handleFileDrop);
+      PluginSDK.offFileDropCancelled(handleCancelled);
+    };
+  }, [addDesktopImage, attachDisabled]);
 
   const removeImage = useCallback((id: string) => {
     setAttachedImages((prev) => prev.filter((img) => img.id !== id));

@@ -14,6 +14,7 @@ import asyncio
 import atexit
 import base64
 import mimetypes
+import hashlib
 import json
 import os
 import subprocess
@@ -30,13 +31,17 @@ from uuid import uuid4
 
 
 _runtime_ready = False
+_runtime_lock = asyncio.Lock()
 _worker_process: subprocess.Popen | None = None
 _worker_log_handle: Any | None = None
 _worker_atexit_registered = False
 _project_event_snapshots: dict[str, tuple[dict[str, Any], str]] = {}
 _recent_webui_mutations: dict[str, float] = {}
 _project_event_service: Any | None = None
+_project_event_journal_offset: int | None = None
+_project_event_pending_batches: dict[str, list[dict[str, Any]]] = {}
 _assistant_stream_snapshots: dict[str, tuple[str, str | None]] = {}
+_assistant_stream_seen_messages: dict[str, set[str]] = {}
 _event_id_seq = 0
 
 
@@ -82,24 +87,30 @@ def _content_payload(content: bytes, content_type: str) -> dict[str, Any]:
 async def _ensure_runtime() -> None:
     global _runtime_ready
 
-    # Desktop plugin runs as a trusted local client. The old WebUI login/JWT
-    # flow is disabled before importing FastAPI dependencies.
-    _prepare_desktop_environment()
+    async with _runtime_lock:
+        # Desktop plugin runs as a trusted local client. The old WebUI login/JWT
+        # flow is disabled before importing FastAPI dependencies.
+        _prepare_desktop_environment()
 
-    from lib.db import init_db
-    from lib.httpx_shared import startup_http_client
+        from lib.db import init_db
+        from lib.httpx_shared import startup_http_client
 
-    if not _runtime_ready:
-        await init_db()
-        _runtime_ready = True
-    await startup_http_client()
+        if not _runtime_ready:
+            await init_db()
+            _runtime_ready = True
+        await startup_http_client()
 
-    # FastAPI lifespan is not used in the plugin IPC bridge, so initialize the
-    # assistant service explicitly for session snapshots and local requests.
-    with suppress(Exception):
-        from server.routers import assistant
+        # FastAPI lifespan is not used in the plugin IPC bridge, so initialize the
+        # assistant service explicitly for session snapshots and local requests.
+        with suppress(Exception):
+            from server.routers import assistant
 
-        await assistant.assistant_service.startup()
+            await assistant.assistant_service.startup()
+            session_manager = assistant.assistant_service.session_manager
+            patrol_task = getattr(session_manager, "_patrol_task", None)
+            if patrol_task is None or patrol_task.done():
+                session_manager.start_patrol()
+        _ensure_project_change_journal_listener()
 
 
 def _backend_root() -> Path:
@@ -169,21 +180,17 @@ def _ensure_worker_process() -> None:
         _worker_atexit_registered = True
 
 
-def _run_in_fresh_loop(coro):
-    async def _runner():
-        try:
-            return await coro
-        finally:
-            with suppress(Exception):
-                from lib.httpx_shared import shutdown_http_client
+def _ensure_project_change_journal_listener() -> None:
+    global _project_event_journal_offset
+    if getattr(_ensure_project_change_journal_listener, "_registered", False):
+        return
+    from lib.project_change_hints import register_project_change_batch_listener
+    from utils.arcreel_desktop_sync import append_project_event_batch, project_event_journal_size
 
-                await shutdown_http_client()
-            with suppress(Exception):
-                from lib.db import close_db
-
-                await close_db()
-
-    return asyncio.run(_runner())
+    if _project_event_journal_offset is None:
+        _project_event_journal_offset = project_event_journal_size()
+    register_project_change_batch_listener(append_project_event_batch)
+    setattr(_ensure_project_change_journal_listener, "_registered", True)
 
 
 def _project_name_from_resource(resource: str) -> str | None:
@@ -351,9 +358,9 @@ async def _dispatch_desktop_file_request(params: dict[str, Any]) -> dict[str, An
     return result
 
 
-def dispatch_desktop_resource_request(params: dict[str, Any]) -> dict[str, Any]:
+async def dispatch_desktop_resource_request(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_dispatch_desktop_resource_request(params))
+        return await _dispatch_desktop_resource_request(params)
     except ValueError as exc:
         return _desktop_validation_error_result(exc)
     except Exception as exc:  # noqa: BLE001
@@ -361,9 +368,9 @@ def dispatch_desktop_resource_request(params: dict[str, Any]) -> dict[str, Any]:
         return _desktop_error_result(exc)
 
 
-def dispatch_desktop_file_request(params: dict[str, Any]) -> dict[str, Any]:
+async def dispatch_desktop_file_request(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_dispatch_desktop_file_request(params))
+        return await _dispatch_desktop_file_request(params)
     except ValueError as exc:
         return _desktop_validation_error_result(exc)
     except Exception as exc:  # noqa: BLE001
@@ -476,9 +483,9 @@ async def _download_diagnostics_blob() -> dict[str, Any]:
     }
 
 
-def download_diagnostics_blob(params: dict[str, Any] | None = None) -> dict[str, Any]:
+async def download_diagnostics_blob(params: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_download_diagnostics_blob())
+        return await _download_diagnostics_blob()
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"ok": False, "detail": str(exc)}
@@ -507,9 +514,9 @@ async def _export_project_archive_blob(params: dict[str, Any]) -> dict[str, Any]
     return _zip_blob_result(path=Path(archive_path), filename=filename, diagnostics=diagnostics)
 
 
-def export_project_archive_blob(params: dict[str, Any]) -> dict[str, Any]:
+async def export_project_archive_blob(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_export_project_archive_blob(params))
+        return await _export_project_archive_blob(params)
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"ok": False, "detail": str(exc)}
@@ -550,9 +557,9 @@ async def _export_jianying_draft_blob(params: dict[str, Any]) -> dict[str, Any]:
     return _zip_blob_result(path=zip_path, filename=filename, cleanup_parent=True)
 
 
-def export_jianying_draft_blob(params: dict[str, Any]) -> dict[str, Any]:
+async def export_jianying_draft_blob(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_export_jianying_draft_blob(params))
+        return await _export_jianying_draft_blob(params)
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"ok": False, "detail": str(exc)}
@@ -566,11 +573,19 @@ async def _build_event_snapshot(params: dict[str, Any]) -> dict[str, Any]:
     if stream.startswith("tasks/stream"):
         query = _query_from_params(params)
         project_name = (query.get("project_name") or [None])[0]
+        raw_last_event_id = (query.get("last_event_id") or [None])[-1]
+        resume_requested = raw_last_event_id is not None
+        try:
+            cursor = max(0, int(raw_last_event_id or 0))
+        except (TypeError, ValueError):
+            cursor = 0
 
         from lib.generation_queue import get_generation_queue
 
         queue = get_generation_queue()
         stats = await queue.get_task_stats(project_name=project_name)
+        latest_event_id = await queue.get_latest_event_id(project_name=project_name)
+        snapshot_last_event_id = max(cursor, latest_event_id) if resume_requested else latest_event_id
         if int(stats.get("queued", 0)) > 0 or int(stats.get("running", 0)) > 0:
             _ensure_worker_process()
         events.append(
@@ -582,7 +597,7 @@ async def _build_event_snapshot(params: dict[str, Any]) -> dict[str, Any]:
                     "project_name": project_name,
                     "tasks": await queue.get_recent_tasks_snapshot(project_name=project_name, limit=1000),
                     "stats": stats,
-                    "last_event_id": await queue.get_latest_event_id(project_name=project_name),
+                    "last_event_id": snapshot_last_event_id,
                 },
             }
         )
@@ -608,9 +623,9 @@ async def _build_event_snapshot(params: dict[str, Any]) -> dict[str, Any]:
     return {"events": events}
 
 
-def build_event_snapshot(params: dict[str, Any]) -> dict[str, Any]:
+async def build_event_snapshot(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_build_event_snapshot(params))
+        return await _build_event_snapshot(params)
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"events": [], "error": str(exc)}
@@ -646,6 +661,51 @@ def _fingerprint_payload(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _stable_event_id(stream: str, event: str, data: Any, salt: str = "") -> str:
+    raw = json.dumps(
+        {"stream": stream, "event": event, "data": data, "salt": salt},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _assistant_message_key(message: Any) -> str:
+    if isinstance(message, dict):
+        for key in ("uuid", "id", "message_id"):
+            value = message.get(key)
+            if value:
+                return f"{key}:{value}"
+    return "fp:" + hashlib.sha256(
+        json.dumps(message, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _server_sent_event_payload(stream: str, event: Any, salt: str = "") -> dict[str, Any]:
+    event_name = str(getattr(event, "event", None) or "message")
+    data = getattr(event, "data", None)
+    if isinstance(data, str):
+        with suppress(json.JSONDecodeError):
+            data = json.loads(data)
+    event_id = getattr(event, "id", None)
+    return {
+        "stream": stream,
+        "event": event_name,
+        "id": str(event_id) if event_id else _stable_event_id(stream, event_name, data, salt),
+        "data": data,
+    }
+
+
+async def _assistant_buffer_messages(service: Any, session_id: str) -> list[dict[str, Any]]:
+    getter = getattr(service.session_manager, "get_message_buffer_snapshot", None)
+    if getter is not None:
+        messages = await getter(session_id)
+    else:
+        messages = service.session_manager.get_buffered_messages(session_id)
+    return [message for message in messages if isinstance(message, dict)]
+
+
 async def _build_assistant_stream_events(
     stream: str,
     project_name: str,
@@ -661,28 +721,77 @@ async def _build_assistant_stream_events(
     if meta is None or meta.project_name != project_name:
         return []
 
+    buffer_messages = await _assistant_buffer_messages(service, session_id)
     snapshot = await service.get_snapshot(session_id, meta=meta)
     status = str(snapshot.get("status") or meta.status or "")
     fingerprint = _fingerprint_payload(snapshot)
     previous_fingerprint, previous_status = _assistant_stream_snapshots.get(stream, ("", None))
     events: list[dict[str, Any]] = []
 
-    if force_snapshot or fingerprint != previous_fingerprint:
+    if force_snapshot:
         events.append(
             {
                 "stream": stream,
                 "event": "snapshot",
-                "id": _next_event_id(),
+                "id": _stable_event_id(stream, "snapshot", snapshot, "initial"),
                 "data": snapshot,
             }
         )
+        _assistant_stream_seen_messages[stream] = {
+            _assistant_message_key(message) for message in buffer_messages
+        }
+    else:
+        seen_messages = _assistant_stream_seen_messages.setdefault(stream, set())
+        old_messages: list[dict[str, Any]] = []
+        new_messages: list[dict[str, Any]] = []
+        for message in buffer_messages:
+            key = _assistant_message_key(message)
+            if key in seen_messages:
+                old_messages.append(message)
+            else:
+                new_messages.append(message)
 
-    if status in {"completed", "error", "interrupted"} and (force_snapshot or status != previous_status):
+        if new_messages:
+            projector = await service._build_projector(meta, session_id, old_messages)
+            for message in new_messages:
+                key = _assistant_message_key(message)
+                emitted, should_break = await service._dispatch_live_message(
+                    message,
+                    projector,
+                    session_id,
+                )
+                seen_messages.add(key)
+                for index, server_event in enumerate(emitted):
+                    events.append(
+                        _server_sent_event_payload(
+                            stream,
+                            server_event,
+                            salt=f"{key}:{index}",
+                        )
+                    )
+                if should_break:
+                    break
+        elif fingerprint != previous_fingerprint:
+            events.append(
+                {
+                    "stream": stream,
+                    "event": "snapshot",
+                    "id": _stable_event_id(stream, "snapshot", snapshot, fingerprint),
+                    "data": snapshot,
+                }
+            )
+
+    has_status_event = any(event.get("event") == "status" for event in events)
+    if (
+        not has_status_event
+        and status in {"completed", "error", "interrupted"}
+        and (force_snapshot or status != previous_status)
+    ):
         events.append(
             {
                 "stream": stream,
                 "event": "status",
-                "id": _next_event_id(),
+                "id": _stable_event_id(stream, "status", {"status": status, "session_id": session_id}, status),
                 "data": {
                     "status": status,
                     "session_id": session_id,
@@ -725,7 +834,31 @@ async def _build_project_event_snapshot(stream: str, project_name: str) -> dict[
     }
 
 
+def _consume_project_event_journal(project_name: str) -> list[dict[str, Any]]:
+    global _project_event_journal_offset
+    from utils.arcreel_desktop_sync import project_event_journal_size, read_project_event_batches
+
+    pending = _project_event_pending_batches.pop(project_name, [])
+    if _project_event_journal_offset is None:
+        _project_event_journal_offset = project_event_journal_size()
+    _project_event_journal_offset, batches = read_project_event_batches(_project_event_journal_offset)
+    for batch in batches:
+        batch_project_name = batch.get("project_name")
+        if not isinstance(batch_project_name, str) or not batch_project_name:
+            continue
+        if str(batch.get("source") or "") not in {"webui", "worker", "filesystem"}:
+            continue
+        if not isinstance(batch.get("changes"), list):
+            continue
+        if batch_project_name == project_name:
+            pending.append(batch)
+        else:
+            _project_event_pending_batches.setdefault(batch_project_name, []).append(batch)
+    return pending
+
+
 async def _poll_project_events(stream: str, project_name: str) -> list[dict[str, Any]]:
+    journal_batches = _consume_project_event_journal(project_name)
     previous = _project_event_snapshots.get(project_name)
     snapshot, fingerprint = await _rebuild_project_snapshot(project_name)
     if previous is None:
@@ -744,6 +877,32 @@ async def _poll_project_events(stream: str, project_name: str) -> list[dict[str,
         ]
 
     previous_snapshot, previous_fingerprint = previous
+    if journal_batches:
+        service = _get_project_event_service()
+        fallback_changes = [] if fingerprint == previous_fingerprint else service._diff_snapshots(previous_snapshot, snapshot)
+        _project_event_snapshots[project_name] = (snapshot, fingerprint)
+        events: list[dict[str, Any]] = []
+        for batch in journal_batches:
+            changes = batch.get("changes") or fallback_changes
+            if not changes:
+                continue
+            events.append(
+                {
+                    "stream": stream,
+                    "event": "changes",
+                    "id": _next_event_id(),
+                    "data": {
+                        "project_name": project_name,
+                        "batch_id": str(batch.get("id") or uuid4().hex),
+                        "fingerprint": fingerprint,
+                        "generated_at": str(batch.get("created_at") or _utc_now_iso()),
+                        "source": str(batch.get("source") or "filesystem"),
+                        "changes": changes,
+                    },
+                }
+            )
+        return events
+
     if fingerprint == previous_fingerprint:
         return []
 
@@ -840,9 +999,9 @@ async def _poll_event_streams(params: dict[str, Any]) -> dict[str, Any]:
     return {"events": []}
 
 
-def poll_event_streams(params: dict[str, Any]) -> dict[str, Any]:
+async def poll_event_streams(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _run_in_fresh_loop(_poll_event_streams(params))
+        return await _poll_event_streams(params)
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"events": [], "error": str(exc)}

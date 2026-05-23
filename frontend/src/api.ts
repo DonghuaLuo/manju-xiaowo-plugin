@@ -59,7 +59,6 @@ import i18n from "./i18n";
 import {
   getUploadFileName,
   isDesktopFileRef,
-  type DesktopFileRef,
   type UploadFileInput,
 } from "@/utils/desktop-file";
 
@@ -282,6 +281,15 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function statusFromDesktopError(code?: string): number {
   switch (code) {
     case "validation_error":
@@ -353,20 +361,23 @@ function desktopBinaryPayloadToBlob(result: DesktopBinaryPayload, fallbackFilena
   };
 }
 
-function localFileDescriptor(fieldName: string, file: DesktopFileRef) {
+async function localFileDescriptor(fieldName: string, file: UploadFileInput) {
+  if (isDesktopFileRef(file)) {
+    return {
+      fieldName,
+      path: file.path,
+      filename: file.name,
+      contentType: file.contentType,
+    };
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
   return {
     fieldName,
-    path: file.path,
     filename: file.name,
-    contentType: file.contentType,
+    contentType: file.type || undefined,
+    base64: bytesToBase64(bytes),
   };
-}
-
-function requireDesktopFileRef(file: UploadFileInput | undefined | null): DesktopFileRef {
-  if (!isDesktopFileRef(file)) {
-    throw new Error("请选择本地文件后再继续");
-  }
-  return file;
 }
 
 function apiResourceFromUrl(url: string): {
@@ -388,14 +399,14 @@ function apiResourceFromUrl(url: string): {
 async function requestWithLocalFiles(
   url: string,
   fields: Record<string, string | number | boolean | null | undefined>,
-  files: Array<{ fieldName: string; file: DesktopFileRef }>,
+  files: Array<{ fieldName: string; file: UploadFileInput }>,
 ): Promise<Response> {
   const result = await PluginSDK.callBackend<DesktopResourceResult>("arcreel_local_file_request", {
     operation: "create",
     ...apiResourceFromUrl(url),
     locale: i18n.language || "zh",
     fields,
-    files: files.map(({ fieldName, file }) => localFileDescriptor(fieldName, file)),
+    files: await Promise.all(files.map(({ fieldName, file }) => localFileDescriptor(fieldName, file))),
   });
   return desktopResultToResponse(result);
 }
@@ -577,7 +588,7 @@ class API {
     const response = await requestWithLocalFiles(
       `${API_BASE}/projects/import`,
       { conflict_policy: conflictPolicy },
-      [{ fieldName: "file", file: requireDesktopFileRef(file) }],
+      [{ fieldName: "file", file }],
     );
 
     if (!response.ok) {
@@ -819,7 +830,7 @@ class API {
     const response = await requestWithLocalFiles(
       `${API_BASE}${url}`,
       {},
-      [{ fieldName: "file", file: requireDesktopFileRef(file) }],
+      [{ fieldName: "file", file }],
     );
 
     if (response.status === 409) {
@@ -1395,7 +1406,7 @@ class API {
     const response = await requestWithLocalFiles(
       url,
       {},
-      [{ fieldName: "file", file: requireDesktopFileRef(file) }],
+      [{ fieldName: "file", file }],
     );
 
     await throwIfNotOk(response, "上传失败");
@@ -1629,7 +1640,7 @@ class API {
     const response = await requestWithLocalFiles(
       url,
       {},
-      [{ fieldName: "file", file: requireDesktopFileRef(file) }],
+      [{ fieldName: "file", file }],
     );
     await throwIfNotOk(response, "上传凭证失败");
     return response.json() as Promise<ProviderCredential>;
@@ -1860,7 +1871,7 @@ class API {
       url,
       fields,
       payload.image
-        ? [{ fieldName: "image", file: requireDesktopFileRef(payload.image) }]
+        ? [{ fieldName: "image", file: payload.image }]
         : [],
     );
     if (!response.ok) {
@@ -1884,7 +1895,7 @@ class API {
     const response = await requestWithLocalFiles(
       url,
       {},
-      [{ fieldName: "image", file: requireDesktopFileRef(image) }],
+      [{ fieldName: "image", file: image }],
     );
     if (!response.ok) {
       const error = (await response.json().catch(() => ({ detail: response.statusText }))) as {
