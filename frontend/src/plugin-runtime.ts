@@ -172,8 +172,9 @@ function contentToResponseBody(content: DesktopContent | undefined): {
     return { body: JSON.stringify(content.value ?? null), mimeType: "application/json;charset=utf-8", empty: false };
   }
   if (content.kind === "binary") {
+    const bytes = base64ToBytes(content.base64);
     return {
-      body: new Blob([base64ToBytes(content.base64).slice().buffer]),
+      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
       mimeType: content.mimeType || "application/octet-stream",
       empty: false,
     };
@@ -385,6 +386,17 @@ const apiMediaObjectUrls = new WeakMap<Element, string>();
 const apiMediaTokens = new WeakMap<Element, number>();
 const TRANSPARENT_IMAGE_SRC =
   "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+const API_IMAGE_CACHE_MAX_ENTRIES = 384;
+const API_IMAGE_CACHE_MAX_BYTES = 768 * 1024 * 1024;
+type ApiImageCacheEntry = {
+  objectUrl: string;
+  size: number;
+  lastUsed: number;
+};
+const apiImageCache = new Map<string, ApiImageCacheEntry>();
+const apiImageInflight = new Map<string, Promise<ApiImageCacheEntry>>();
+const apiImageCachedObjectUrls = new Set<string>();
+let apiImageCacheBytes = 0;
 let mediaAdaptersInstalled = false;
 
 function isApiResourceUrl(value: string): boolean {
@@ -395,10 +407,93 @@ function isApiResourceUrl(value: string): boolean {
   }
 }
 
+function apiMediaCacheKey(value: string): string | null {
+  try {
+    const url = new URL(value, window.location.href);
+    return isApiUrl(url.toString()) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCachedApiImage(cacheKey: string): ApiImageCacheEntry | null {
+  const entry = apiImageCache.get(cacheKey);
+  if (!entry) return null;
+  entry.lastUsed = Date.now();
+  return entry;
+}
+
+function trimApiImageCache(): void {
+  if (
+    apiImageCache.size <= API_IMAGE_CACHE_MAX_ENTRIES &&
+    apiImageCacheBytes <= API_IMAGE_CACHE_MAX_BYTES
+  ) {
+    return;
+  }
+
+  const entries = [...apiImageCache.entries()].sort(
+    (a, b) => a[1].lastUsed - b[1].lastUsed,
+  );
+
+  for (const [key, entry] of entries) {
+    if (
+      apiImageCache.size <= API_IMAGE_CACHE_MAX_ENTRIES &&
+      apiImageCacheBytes <= API_IMAGE_CACHE_MAX_BYTES
+    ) {
+      break;
+    }
+    apiImageCache.delete(key);
+    apiImageCachedObjectUrls.delete(entry.objectUrl);
+    apiImageCacheBytes = Math.max(0, apiImageCacheBytes - entry.size);
+    URL.revokeObjectURL(entry.objectUrl);
+  }
+}
+
+function cacheApiImage(cacheKey: string, blob: Blob): ApiImageCacheEntry {
+  const existing = getCachedApiImage(cacheKey);
+  if (existing) return existing;
+
+  const entry: ApiImageCacheEntry = {
+    objectUrl: URL.createObjectURL(blob),
+    size: blob.size,
+    lastUsed: Date.now(),
+  };
+  apiImageCache.set(cacheKey, entry);
+  apiImageCachedObjectUrls.add(entry.objectUrl);
+  apiImageCacheBytes += entry.size;
+  trimApiImageCache();
+  return entry;
+}
+
+function loadApiImage(cacheKey: string, value: string): Promise<ApiImageCacheEntry> {
+  const cached = getCachedApiImage(cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  const inflight = apiImageInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const request = pluginFetch(value)
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(response.statusText || "Resource request failed");
+      }
+      return response.blob();
+    })
+    .then((blob) => cacheApiImage(cacheKey, blob))
+    .finally(() => {
+      apiImageInflight.delete(cacheKey);
+    });
+
+  apiImageInflight.set(cacheKey, request);
+  return request;
+}
+
 function releaseApiMediaObjectUrl(element: Element): void {
   const previous = apiMediaObjectUrls.get(element);
   if (!previous) return;
-  URL.revokeObjectURL(previous);
+  if (!apiImageCachedObjectUrls.has(previous)) {
+    URL.revokeObjectURL(previous);
+  }
   apiMediaObjectUrls.delete(element);
 }
 
@@ -421,23 +516,47 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
 
   const previousObjectUrl = apiMediaObjectUrls.get(element);
   const currentSrc = element instanceof HTMLImageElement ? element.getAttribute("src") : null;
+  const imageCacheKey = element instanceof HTMLImageElement ? apiMediaCacheKey(value) : null;
+  const cachedImage = imageCacheKey ? getCachedApiImage(imageCacheKey) : null;
+  if (cachedImage) {
+    apiMediaObjectUrls.set(element, cachedImage.objectUrl);
+    applyNative(cachedImage.objectUrl);
+    if (
+      previousObjectUrl &&
+      previousObjectUrl !== cachedImage.objectUrl &&
+      !apiImageCachedObjectUrls.has(previousObjectUrl)
+    ) {
+      URL.revokeObjectURL(previousObjectUrl);
+    }
+    refreshParentMedia(element);
+    return;
+  }
+
   if (element instanceof HTMLImageElement && !previousObjectUrl && !currentSrc) {
     applyNative(TRANSPARENT_IMAGE_SRC);
   }
 
-  void pluginFetch(value)
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(response.statusText || "Resource request failed");
-      }
-      return response.blob();
-    })
-    .then((blob) => {
+  const mediaRequest = imageCacheKey
+    ? loadApiImage(imageCacheKey, value).then((entry) => entry.objectUrl)
+    : pluginFetch(value)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(response.statusText || "Resource request failed");
+        }
+        return response.blob();
+      })
+      .then((blob) => URL.createObjectURL(blob));
+
+  void mediaRequest
+    .then((objectUrl) => {
       if (apiMediaTokens.get(element) !== token) return;
-      const objectUrl = URL.createObjectURL(blob);
       apiMediaObjectUrls.set(element, objectUrl);
       applyNative(objectUrl);
-      if (previousObjectUrl && previousObjectUrl !== objectUrl) {
+      if (
+        previousObjectUrl &&
+        previousObjectUrl !== objectUrl &&
+        !apiImageCachedObjectUrls.has(previousObjectUrl)
+      ) {
         URL.revokeObjectURL(previousObjectUrl);
       }
       refreshParentMedia(element);

@@ -10,6 +10,10 @@ vi.mock("xiaowo-sdk", () => ({
   },
 }));
 
+const flushPromises = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
 describe("plugin runtime media adapter", () => {
   let originalFetch: typeof globalThis.fetch;
   let originalEventSource: typeof globalThis.EventSource;
@@ -35,7 +39,7 @@ describe("plugin runtime media adapter", () => {
         mimeType: "image/png",
       },
     });
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:ipc-media");
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:http://localhost/ipc-media");
     await import("./plugin-runtime");
   });
 
@@ -70,6 +74,57 @@ describe("plugin runtime media adapter", () => {
     expect(image.getAttribute("src")).toBe("blob:old-media");
   });
 
+  it("reuses cached API image blobs across remounted image elements", async () => {
+    const { installPluginRuntimeAdapters } = await import("./plugin-runtime");
+    installPluginRuntimeAdapters();
+
+    const first = document.createElement("img");
+    first.src = "/api/v1/files/蛇瞳/characters/苏婉.png?v=1";
+    await flushPromises();
+
+    const second = document.createElement("img");
+    second.src = "/api/v1/files/蛇瞳/characters/苏婉.png?v=1";
+
+    expect(first.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
+    expect(second.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
+    expect(callBackendMock).toHaveBeenCalledTimes(1);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one in-flight backend request for simultaneous API image loads", async () => {
+    let resolveBackend: (value: unknown) => void = () => {};
+    callBackendMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveBackend = resolve;
+      }),
+    );
+    const { installPluginRuntimeAdapters } = await import("./plugin-runtime");
+    installPluginRuntimeAdapters();
+
+    const first = document.createElement("img");
+    const second = document.createElement("img");
+    first.src = "/api/v1/files/蛇瞳/characters/奶奶.png?v=2";
+    second.src = "/api/v1/files/蛇瞳/characters/奶奶.png?v=2";
+
+    await flushPromises();
+
+    expect(callBackendMock).toHaveBeenCalledTimes(1);
+
+    resolveBackend({
+      success: true,
+      content: {
+        kind: "binary",
+        base64: btoa("image"),
+        mimeType: "image/png",
+      },
+    });
+    await flushPromises();
+
+    expect(first.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
+    expect(second.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores a stale blob conversion after the media src changes", async () => {
     let resolveBackend: (value: unknown) => void = () => {};
     callBackendMock.mockReturnValue(
@@ -91,8 +146,7 @@ describe("plugin runtime media adapter", () => {
         mimeType: "image/png",
       },
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPromises();
 
     expect(image.getAttribute("src")).toBe("");
   });

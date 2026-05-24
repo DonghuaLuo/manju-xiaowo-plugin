@@ -248,6 +248,187 @@ function normalizeExportDiagnostics(value: unknown): ExportDiagnostics {
 
 const API_BASE = "/api/v1";
 
+type LocalAssetRoots = {
+  projects_root: string;
+  global_assets_root?: string;
+};
+
+let localAssetRoots: LocalAssetRoots | null = null;
+let localAssetRootsPromise: Promise<LocalAssetRoots | null> | null = null;
+
+function hasTauriBridge(): boolean {
+  if (typeof window === "undefined") return false;
+  const tauriWindow = window as unknown as { __TAURI__?: { core?: unknown } };
+  return Boolean(tauriWindow.__TAURI__?.core);
+}
+
+function normalizeLocalPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function cleanRelativePath(path: string): string | null {
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.some((part) => part === "." || part === "..")) return null;
+  return parts.join("/");
+}
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function decodeRelativePath(path: string): string {
+  return path.split("/").map(decodePathSegment).join("/");
+}
+
+function isAbsoluteLocalPath(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\") || path.startsWith("//");
+}
+
+function appendCacheParam(url: string, key: string, value?: number | string | null): string {
+  if (value == null || value === "") return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}${key}=${encodeURIComponent(String(value))}`;
+}
+
+function joinLocalPath(root: string, ...segments: string[]): string | null {
+  const cleaned = segments.map(cleanRelativePath);
+  if (cleaned.some((segment) => segment == null)) return null;
+  return [normalizeLocalPath(root), ...(cleaned as string[])].filter(Boolean).join("/");
+}
+
+function convertLocalFileSrc(path: string, cacheKey = "v", cacheBust?: number | string | null): string {
+  return appendCacheParam(PluginSDK.convertFileSrc(path), cacheKey, cacheBust);
+}
+
+async function ensureLocalAssetRoots(): Promise<LocalAssetRoots | null> {
+  if (localAssetRoots) return localAssetRoots;
+  if (localAssetRootsPromise) return localAssetRootsPromise;
+  if (!hasTauriBridge()) return null;
+
+  localAssetRootsPromise = (async () => {
+    try {
+      const roots = await PluginSDK.callBackend<Partial<LocalAssetRoots>>("arcreel_asset_roots", {});
+      if (typeof roots.projects_root === "string" && roots.projects_root.trim()) {
+        localAssetRoots = {
+          projects_root: normalizeLocalPath(roots.projects_root),
+          ...(typeof roots.global_assets_root === "string" && roots.global_assets_root.trim()
+            ? { global_assets_root: normalizeLocalPath(roots.global_assets_root) }
+            : {}),
+        };
+        return localAssetRoots;
+      }
+    } catch {
+      // Fall back to the plugin directory exposed by the host below.
+    }
+
+    try {
+      const info = await PluginSDK.getInfo();
+      if (info.plugin_dir) {
+        localAssetRoots = {
+          projects_root: normalizeLocalPath(`${info.plugin_dir}/backend/projects`),
+          global_assets_root: normalizeLocalPath(`${info.plugin_dir}/backend/projects/_global_assets`),
+        };
+        return localAssetRoots;
+      }
+    } catch {
+      // Browser-only tests or early startup can keep the legacy API URL fallback.
+    }
+
+    return null;
+  })().finally(() => {
+    localAssetRootsPromise = null;
+  });
+
+  return localAssetRootsPromise;
+}
+
+function projectFileToLocalUrl(
+  projectName: string,
+  path: string,
+  cacheBust?: number | string | null,
+): string | null {
+  if (isAbsoluteLocalPath(path)) {
+    return convertLocalFileSrc(path, "v", cacheBust);
+  }
+  if (!localAssetRoots?.projects_root) return null;
+  const filePath = joinLocalPath(localAssetRoots.projects_root, projectName, path);
+  return filePath ? convertLocalFileSrc(filePath, "v", cacheBust) : null;
+}
+
+function globalAssetToLocalUrl(
+  path: string,
+  cacheBust?: number | string | null,
+): string | null {
+  if (isAbsoluteLocalPath(path)) {
+    return convertLocalFileSrc(path, "fp", cacheBust);
+  }
+  if (!localAssetRoots?.projects_root) return null;
+  const cleaned = cleanRelativePath(path);
+  if (!cleaned?.startsWith("_global_assets/")) return null;
+  const root = localAssetRoots.global_assets_root
+    ? normalizeLocalPath(localAssetRoots.global_assets_root).replace(/\/_global_assets$/, "")
+    : localAssetRoots.projects_root;
+  const filePath = joinLocalPath(root, cleaned);
+  return filePath ? convertLocalFileSrc(filePath, "fp", cacheBust) : null;
+}
+
+function resolveApiFileUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value, window.location.href);
+    const resource = parsed.pathname
+      .replace(/^\/api\/v1\/?/, "")
+      .replace(/^\/api\/?/, "")
+      .replace(/^\/+/, "");
+
+    if (resource.startsWith("files/")) {
+      const [, encodedProjectName, ...pathParts] = resource.split("/");
+      if (!encodedProjectName || pathParts.length === 0) return null;
+      return projectFileToLocalUrl(
+        decodePathSegment(encodedProjectName),
+        decodeRelativePath(pathParts.join("/")),
+        parsed.searchParams.get("v") ?? parsed.searchParams.get("fp"),
+      );
+    }
+
+    if (resource.startsWith("global-assets/")) {
+      const [, type, ...filenameParts] = resource.split("/");
+      if (!type || filenameParts.length === 0) return null;
+      return globalAssetToLocalUrl(
+        `_global_assets/${decodeRelativePath(type)}/${decodeRelativePath(filenameParts.join("/"))}`,
+        parsed.searchParams.get("fp") ?? parsed.searchParams.get("v"),
+      );
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveLocalMediaUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (isAbsoluteLocalPath(value)) return convertLocalFileSrc(value);
+  return resolveApiFileUrl(value) ?? value;
+}
+
+function normalizeProjectSummaryUrls(project: ProjectSummary): ProjectSummary {
+  return {
+    ...project,
+    thumbnail: resolveLocalMediaUrl(project.thumbnail),
+  };
+}
+
+function normalizeVersionUrls(version: VersionInfo): VersionInfo {
+  return {
+    ...version,
+    file_url: version.file_url ? resolveLocalMediaUrl(version.file_url) ?? version.file_url : version.file_url,
+  };
+}
+
 type DesktopResourceResult = {
   success?: boolean;
   error?: {
@@ -496,7 +677,12 @@ class API {
   // ==================== 项目管理 ====================
 
   static async listProjects(): Promise<{ projects: ProjectSummary[] }> {
-    return this.request("/projects");
+    await ensureLocalAssetRoots();
+    const result = await this.request<{ projects: ProjectSummary[] }>("/projects");
+    return {
+      ...result,
+      projects: result.projects.map(normalizeProjectSummaryUrls),
+    };
   }
 
   static async createProject(
@@ -515,6 +701,7 @@ class API {
     scripts: Record<string, EpisodeScript>;
     asset_fingerprints?: Record<string, number>;
   }> {
+    await ensureLocalAssetRoots();
     return this.request(`/projects/${encodeURIComponent(name)}`);
   }
 
@@ -891,8 +1078,10 @@ class API {
     path: string,
     cacheBust?: number | string | null
   ): string {
-    // Runtime media adapter converts this ArcReel resource shape to an IPC
-    // blob URL before <img>/<video>/<audio> can issue a network request.
+    const localUrl = projectFileToLocalUrl(projectName, path, cacheBust);
+    if (localUrl) return localUrl;
+    void ensureLocalAssetRoots();
+
     const base = `${API_BASE}/files/${encodeURIComponent(projectName)}/${path}`;
     if (cacheBust == null || cacheBust === "") {
       return base;
@@ -1359,9 +1548,19 @@ class API {
     current_version: number;
     versions: VersionInfo[];
   }> {
-    return this.request(
+    await ensureLocalAssetRoots();
+    const result = await this.request<{
+      resource_type: string;
+      resource_id: string;
+      current_version: number;
+      versions: VersionInfo[];
+    }>(
       `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`
     );
+    return {
+      ...result,
+      versions: result.versions.map(normalizeVersionUrls),
+    };
   }
 
   /**
@@ -1412,13 +1611,18 @@ class API {
 
     await throwIfNotOk(response, "上传失败");
 
-    return response.json() as Promise<{
+    await ensureLocalAssetRoots();
+    const result = await response.json() as {
       success: boolean;
       style_image: string;
       style_description: string;
       url: string;
       style_analysis_error?: string;
-    }>;
+    };
+    return {
+      ...result,
+      url: resolveLocalMediaUrl(result.url) ?? result.url,
+    };
   }
 
   // ==================== 助手会话 API ====================
@@ -1854,6 +2058,7 @@ class API {
     params: { type?: AssetType; q?: string; limit?: number; offset?: number } = {},
     options: RequestInit = {},
   ) {
+    await ensureLocalAssetRoots();
     const usp = new URLSearchParams();
     if (params.type) usp.set("type", params.type);
     if (params.q) usp.set("q", params.q);
@@ -1863,6 +2068,7 @@ class API {
   }
 
   static async getAsset(id: string) {
+    await ensureLocalAssetRoots();
     return this.request<{ asset: Asset }>(`/assets/${encodeURIComponent(id)}`);
   }
 
@@ -1947,6 +2153,10 @@ class API {
 
   static getGlobalAssetUrl(path: string | null, fp?: string | null): string | null {
     if (!path) return null;
+    const localUrl = globalAssetToLocalUrl(path, fp);
+    if (localUrl) return localUrl;
+    void ensureLocalAssetRoots();
+
     const parts = path.split("/");
     if (parts.length < 3 || parts[0] !== "_global_assets") return null;
     const type = parts[1];

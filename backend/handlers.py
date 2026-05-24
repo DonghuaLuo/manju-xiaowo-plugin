@@ -73,6 +73,18 @@ def handle_arcreel_read_local_file(params):
     return read_local_file_base64(params)
 
 
+@sdk.handler("arcreel_asset_roots")
+def handle_arcreel_asset_roots(params):
+    """返回 ArcReel 本地资产根目录，供前端直接用 convertFileSrc 加载媒体。"""
+    from lib.app_data_dir import app_data_dir
+
+    projects_root = app_data_dir()
+    return {
+        "projects_root": str(projects_root),
+        "global_assets_root": str(projects_root / "_global_assets"),
+    }
+
+
 @sdk.handler("arcreel_download_diagnostics")
 async def handle_arcreel_download_diagnostics(params):
     """桌面诊断包导出：返回 ZIP 数据，不走旧 Web 下载端点。"""
