@@ -31,6 +31,7 @@ export function TaskProgressBlock({ block }: TaskProgressBlockProps) {
     }
 
     const tokens = status === "task_progress" ? block.usage?.total_tokens : undefined;
+    const tokenLabel = typeof tokens === "number" && tokens > 0 ? ` (tokens: ${tokens})` : "";
     return (
       <div
         className="my-1 flex items-center gap-1.5 text-[11.5px]"
@@ -46,7 +47,7 @@ export function TaskProgressBlock({ block }: TaskProgressBlockProps) {
         />
         <span>
           {status === "task_started" ? `子任务开始: ${description}` : description}
-          {tokens != null && ` (tokens: ${tokens})`}
+          {tokenLabel}
         </span>
       </div>
     );

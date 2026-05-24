@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1288,9 +1289,9 @@ async def execute_grid_task(
 
     except Exception:
         grid.status = "failed"
-        import traceback
-
-        grid.error_message = traceback.format_exc()
+        error_traceback = traceback.format_exc()
+        print(error_traceback, flush=True)
+        grid.error_message = error_traceback
         grid_manager.save(grid)
         raise
 

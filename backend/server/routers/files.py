@@ -823,12 +823,18 @@ async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translat
         from lib.text_backends.prompts import STYLE_ANALYSIS_PROMPT
         from lib.text_generator import TextGenerator
 
-        generator = await TextGenerator.create(TextTaskType.STYLE_ANALYSIS, project_name)
-        result = await generator.generate(
-            TextGenerationRequest(prompt=STYLE_ANALYSIS_PROMPT, images=[ImageInput(path=output_path)]),
-            project_name=project_name,
-        )
-        style_description = result.text
+        style_description = ""
+        style_analysis_error: str | None = None
+        try:
+            generator = await TextGenerator.create(TextTaskType.STYLE_ANALYSIS, project_name)
+            result = await generator.generate(
+                TextGenerationRequest(prompt=STYLE_ANALYSIS_PROMPT, images=[ImageInput(path=output_path)]),
+                project_name=project_name,
+            )
+            style_description = result.text
+        except ValueError as exc:
+            style_analysis_error = str(exc)
+            logger.warning("风格参考图已保存，但风格分析跳过: %s", exc)
 
         def _sync_save():
             # 更新 project.json：整段 RMW 在单一 _project_lock 内完成，避免覆盖并发写入的其它字段
@@ -846,12 +852,15 @@ async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translat
 
         await asyncio.to_thread(_sync_save)
 
-        return {
+        response = {
             "success": True,
             "style_image": style_filename,
             "style_description": style_description,
             "url": f"/api/v1/files/{project_name}/{style_filename}",
         }
+        if style_analysis_error:
+            response["style_analysis_error"] = style_analysis_error
+        return response
 
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=_t("project_not_found", name=project_name))

@@ -16,6 +16,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import { errMsg } from "@/utils/async";
+import { summarizeUserFacingError } from "@/utils/error-summary";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
 import type { GridGeneration, ReferenceImage } from "@/types/grid";
@@ -228,6 +229,7 @@ export function GridPreviewPanel({
     grid?.grid_image_path
       ? API.getFileUrl(projectName, grid.grid_image_path, gridFp ?? refreshKey)
       : null;
+  const displayedGridError = summarizeUserFacingError(t, grid?.error_message);
 
   const refs = grid?.reference_images ?? [];
 
@@ -326,12 +328,12 @@ export function GridPreviewPanel({
                       {grid.model}
                     </span>
 
-                    {grid.error_message && (
+                    {displayedGridError && (
                       <span
                         className="truncate text-[10px] text-red-400/70"
-                        title={grid.error_message}
+                        title={displayedGridError}
                       >
-                        {grid.error_message}
+                        {displayedGridError}
                       </span>
                     )}
 

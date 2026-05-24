@@ -187,8 +187,10 @@ function desktopResultToResponse(result: DesktopResult): Response {
     ? result.content
     : result.content ?? { kind: "json", value: { detail: result.error?.message || "请求失败" } };
   const { body, mimeType, empty } = contentToResponseBody(fallbackContent);
-  return new Response(body, {
-    status: success ? (empty ? 204 : 200) : statusFromErrorCode(result.error?.code),
+  const status = success ? (empty ? 204 : 200) : statusFromErrorCode(result.error?.code);
+  const responseBody = status === 204 || status === 205 || status === 304 ? null : body;
+  return new Response(responseBody, {
+    status,
     headers: { "content-type": mimeType },
   });
 }
@@ -381,6 +383,8 @@ class PluginEventSource extends EventTarget {
 
 const apiMediaObjectUrls = new WeakMap<Element, string>();
 const apiMediaTokens = new WeakMap<Element, number>();
+const TRANSPARENT_IMAGE_SRC =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 let mediaAdaptersInstalled = false;
 
 function isApiResourceUrl(value: string): boolean {
@@ -405,6 +409,9 @@ function refreshParentMedia(element: Element): void {
 }
 
 function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next: string) => void): void {
+  const token = (apiMediaTokens.get(element) ?? 0) + 1;
+  apiMediaTokens.set(element, token);
+
   if (!isApiResourceUrl(value)) {
     releaseApiMediaObjectUrl(element);
     applyNative(value);
@@ -412,10 +419,11 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
     return;
   }
 
-  const token = (apiMediaTokens.get(element) ?? 0) + 1;
-  apiMediaTokens.set(element, token);
-  releaseApiMediaObjectUrl(element);
-  applyNative("");
+  const previousObjectUrl = apiMediaObjectUrls.get(element);
+  const currentSrc = element instanceof HTMLImageElement ? element.getAttribute("src") : null;
+  if (element instanceof HTMLImageElement && !previousObjectUrl && !currentSrc) {
+    applyNative(TRANSPARENT_IMAGE_SRC);
+  }
 
   void pluginFetch(value)
     .then((response) => {
@@ -429,10 +437,14 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
       const objectUrl = URL.createObjectURL(blob);
       apiMediaObjectUrls.set(element, objectUrl);
       applyNative(objectUrl);
+      if (previousObjectUrl && previousObjectUrl !== objectUrl) {
+        URL.revokeObjectURL(previousObjectUrl);
+      }
       refreshParentMedia(element);
     })
     .catch(() => {
       if (apiMediaTokens.get(element) !== token) return;
+      releaseApiMediaObjectUrl(element);
       applyNative("");
       refreshParentMedia(element);
     });

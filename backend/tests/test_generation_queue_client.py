@@ -1,5 +1,6 @@
 """Tests for generation_queue_client async functions."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -52,6 +53,33 @@ class TestGenerationQueueClient:
         assert task["status"] == "queued"
         assert task["dependency_group"] == "episode_01.json:group:1"
         assert task["dependency_index"] == 0
+
+    @patch("lib.generation_queue_client._maybe_start_desktop_worker_process", return_value=True)
+    async def test_enqueue_task_only_starts_desktop_worker(self, mock_start_worker, generation_queue):
+        async def acquire_lease_later() -> None:
+            await asyncio.sleep(0.05)
+            await generation_queue.acquire_or_renew_worker_lease(
+                name="default",
+                owner_id="worker-a",
+                ttl_seconds=30,
+            )
+
+        lease_task = asyncio.create_task(acquire_lease_later())
+        result = await enqueue_task_only(
+            project_name="demo",
+            task_type="storyboard",
+            media_type="image",
+            resource_id="S01",
+            payload={"prompt": "p"},
+            script_file="episode_01.json",
+            worker_startup_grace_seconds=1.0,
+        )
+        await lease_task
+
+        task = await generation_queue.get_task(result["task_id"])
+        assert task is not None
+        assert task["status"] == "queued"
+        mock_start_worker.assert_called_once()
 
     async def test_wait_for_task_timeout(self, generation_queue):
         task = await generation_queue.enqueue_task(

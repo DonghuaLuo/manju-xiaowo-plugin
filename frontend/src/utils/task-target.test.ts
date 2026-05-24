@@ -34,7 +34,7 @@ const projectData = {
 
 // 回显 key 与参数，便于断言文案选择逻辑。
 const t = ((key: string, params?: Record<string, unknown>) =>
-  `${key}|${params?.id ?? params?.unitId ?? ""}|${params?.reason ?? ""}`) as unknown as TFunction;
+  `${key}|${params?.id ?? params?.unitId ?? params?.violations ?? ""}|${params?.reason ?? params?.requestId ?? ""}`) as unknown as TFunction;
 
 describe("buildTaskFailureTarget", () => {
   it("maps character/scene/prop to asset routes", () => {
@@ -103,6 +103,21 @@ describe("describeTaskFailure", () => {
   it("uses the reference key with unitId for reference_video", () => {
     expect(describeTaskFailure(t, makeTask({ task_type: "reference_video", resource_id: "E1U1" }))).toBe(
       "reference_generation_task_failed|E1U1|boom",
+    );
+  });
+
+  it("summarizes moderation blocks for user-facing notifications", () => {
+    const text = describeTaskFailure(
+      t,
+      makeTask({
+        task_type: "grid",
+        resource_id: "g1",
+        error_message:
+          "Error code: 400 - {'error': {'code': 'moderation_blocked', 'message': 'include the request ID 82e29bca-bdf0-4679-a24b-49c27c1690f4. safety_violations=[violence].'}}",
+      }),
+    );
+    expect(text).toBe(
+      "grid_task_failed|g1|image_safety_blocked_summary|violence|82e29bca-bdf0-4679-a24b-49c27c1690f4",
     );
   });
 

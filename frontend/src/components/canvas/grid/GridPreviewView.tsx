@@ -67,7 +67,7 @@ export function GridPreviewView({
       const matched = grids.filter(
         (g) =>
           g.episode === episode &&
-          g.scene_ids.length === idSet.size &&
+          g.scene_ids.length > 0 &&
           g.scene_ids.every((id) => idSet.has(id)),
       );
       const byKey = new Map<string, (typeof matched)[number]>();
@@ -164,12 +164,21 @@ export function GridPreviewView({
           return (
             <div
               key={groupKey || idx}
+              data-workspace-focus-surface
               className="overflow-hidden rounded-md border"
               style={{
                 borderColor: "var(--color-hairline-soft)",
                 background: "oklch(0.20 0.011 265 / 0.35)",
               }}
             >
+              {ids.map((gridId) => (
+                <span
+                  key={gridId}
+                  id={`grid-${gridId}`}
+                  className="sr-only"
+                  aria-hidden="true"
+                />
+              ))}
               <div
                 className="flex items-center gap-2 px-4 py-2"
                 style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}

@@ -8,6 +8,7 @@ import { useEscapeClose } from "@/hooks/useEscapeClose";
 import { useAppStore } from "@/stores/app-store";
 import { useTasksStore } from "@/stores/tasks-store";
 import { API } from "@/api";
+import { summarizeUserFacingError } from "@/utils/error-summary";
 import type { TaskItem } from "@/types";
 import { GlassPopover } from "@/components/ui/GlassPopover";
 
@@ -119,6 +120,7 @@ function TaskRow({
 
   const isErrorExpanded = expandedErrorId === task.task_id;
   const hasError = task.status === "failed" && task.error_message;
+  const displayedError = summarizeUserFacingError(t, task.error_message);
 
   return (
     <motion.div
@@ -233,7 +235,7 @@ function TaskRow({
                 border: "1px solid oklch(0.45 0.18 25 / 0.30)",
               }}
             >
-              {task.error_message}
+              {displayedError ?? task.error_message}
             </div>
           </motion.div>
         )}

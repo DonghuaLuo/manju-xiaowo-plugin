@@ -17,6 +17,7 @@ import mimetypes
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -45,9 +46,23 @@ _assistant_stream_seen_messages: dict[str, set[str]] = {}
 _event_id_seq = 0
 
 
+def _assistant_startup_kwargs() -> dict[str, bool]:
+    """Return AssistantService startup flags for the desktop IPC runtime.
+
+    FastAPI's lifespan runs the full sandbox availability probe. The plugin IPC
+    bridge does not use lifespan, so it must still pass the same Windows fallback
+    signal; otherwise the SDK can disable sandbox internally while our own
+    allowed_tools list still treats Bash as sandboxed.
+    """
+    system = platform.system()
+    sandbox_enabled = system in {"Darwin", "Linux"}
+    return {"in_docker": False, "sandbox_enabled": sandbox_enabled}
+
+
 def _prepare_desktop_environment(env: MutableMapping[str, str] | None = None) -> None:
     target = os.environ if env is None else env
     target["AUTH_ENABLED"] = "false"
+    target["XIAOWO_ARCREEL_DESKTOP_RUNTIME"] = "1"
     if target.get("XIAOWO_ARCREEL_ALLOW_EXTERNAL_DATABASE") != "1":
         target.pop("DATABASE_URL", None)
 
@@ -105,7 +120,7 @@ async def _ensure_runtime() -> None:
         with suppress(Exception):
             from server.routers import assistant
 
-            await assistant.assistant_service.startup()
+            await assistant.assistant_service.startup(**_assistant_startup_kwargs())
             session_manager = assistant.assistant_service.session_manager
             patrol_task = getattr(session_manager, "_patrol_task", None)
             if patrol_task is None or patrol_task.done():
@@ -178,6 +193,12 @@ def _ensure_worker_process() -> None:
     if not _worker_atexit_registered:
         atexit.register(_stop_worker_process)
         _worker_atexit_registered = True
+
+
+def ensure_desktop_worker_process() -> bool:
+    """Ensure the desktop queue worker subprocess is running."""
+    _ensure_worker_process()
+    return _worker_process is not None and _worker_process.poll() is None
 
 
 def _ensure_project_change_journal_listener() -> None:
@@ -716,7 +737,7 @@ async def _build_assistant_stream_events(
     from server.routers.assistant import get_assistant_service
 
     service = get_assistant_service()
-    await service.startup()
+    await service.startup(**_assistant_startup_kwargs())
     meta = await service.get_session(session_id)
     if meta is None or meta.project_name != project_name:
         return []

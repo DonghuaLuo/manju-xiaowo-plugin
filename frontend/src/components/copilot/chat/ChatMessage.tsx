@@ -75,7 +75,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       >
         {blocks.map((block, index) => (
           <ContentBlockRenderer
-            key={block.id ?? index}
+            key={getBlockKey(block, index)}
             block={block}
             index={index}
           />
@@ -106,4 +106,12 @@ function normalizeContent(content: ContentBlock[] | string | undefined): Content
   }
 
   return [];
+}
+
+function getBlockKey(block: ContentBlock, index: number): string {
+  const stableId = block.id ?? block.tool_use_id;
+  if (stableId) {
+    return `${block.type}:${stableId}:${index}`;
+  }
+  return `${block.type || "block"}:${index}`;
 }

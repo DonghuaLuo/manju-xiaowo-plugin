@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
 import type { ProjectData, TaskItem, WorkspaceNotificationTarget } from "@/types";
+import { summarizeUserFacingError } from "@/utils/error-summary";
 
 /**
  * 由失败任务构建可点击回跳的通知 target，以及人类可读的失败文案。
@@ -86,7 +87,7 @@ export function buildTaskFailureTarget(
  * 失败任务的通知文案。未知 task_type 返回 null（调用方据此跳过推送）。
  */
 export function describeTaskFailure(t: TFunction, task: TaskItem): string | null {
-  const reason = task.error_message ?? t("reference_status_failed");
+  const reason = summarizeUserFacingError(t, task.error_message) ?? t("reference_status_failed");
   const config = FAILURE_TEXT_KEYS[task.task_type];
   if (!config) return null;
   return t(config.key, { [config.idParam]: task.resource_id, reason });

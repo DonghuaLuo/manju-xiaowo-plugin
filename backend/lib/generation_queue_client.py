@@ -8,6 +8,8 @@ Skill scripts that run outside the event loop should use asyncio.run().
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +21,9 @@ from lib.generation_queue import (
     get_generation_queue,
     read_queue_poll_interval,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerOfflineError(RuntimeError):
@@ -39,6 +44,8 @@ class TaskWaitTimeoutError(TimeoutError):
 
 DEFAULT_TASK_WAIT_TIMEOUT_SEC: float | None = 3600.0
 DEFAULT_WORKER_OFFLINE_GRACE_SEC: float = max(20.0, float(TASK_WORKER_LEASE_TTL_SEC) * 2.0)
+DEFAULT_WORKER_STARTUP_GRACE_SEC: float = 10.0
+DESKTOP_RUNTIME_ENV = "XIAOWO_ARCREEL_DESKTOP_RUNTIME"
 
 
 def read_task_wait_timeout() -> float | None:
@@ -58,6 +65,44 @@ def read_worker_offline_grace() -> float:
 async def is_worker_online(lease_name: str = "default") -> bool:
     queue = get_generation_queue()
     return await queue.is_worker_online(name=lease_name)
+
+
+def _maybe_start_desktop_worker_process() -> bool:
+    if os.environ.get(DESKTOP_RUNTIME_ENV) != "1":
+        return False
+    try:
+        from utils.arcreel_ipc_bridge import ensure_desktop_worker_process
+
+        return bool(ensure_desktop_worker_process())
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to start ArcReel desktop generation worker", exc_info=True)
+        return False
+
+
+async def ensure_worker_online_or_start(
+    *,
+    lease_name: str = "default",
+    worker_startup_grace_seconds: float | None = None,
+) -> None:
+    queue = get_generation_queue()
+    if await queue.is_worker_online(name=lease_name):
+        return
+
+    started = _maybe_start_desktop_worker_process()
+    if started:
+        grace = (
+            DEFAULT_WORKER_STARTUP_GRACE_SEC
+            if worker_startup_grace_seconds is None
+            else max(0.1, float(worker_startup_grace_seconds))
+        )
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if await queue.is_worker_online(name=lease_name):
+                return
+            await asyncio.sleep(0.2)
+
+    if not await queue.is_worker_online(name=lease_name):
+        raise WorkerOfflineError("queue worker is offline")
 
 
 async def wait_for_task(
@@ -170,11 +215,13 @@ async def enqueue_task_only(
     dependency_group: str | None = None,
     dependency_index: int | None = None,
     user_id: str = DEFAULT_USER_ID,
+    worker_startup_grace_seconds: float | None = None,
 ) -> dict[str, Any]:
     queue = get_generation_queue()
-
-    if not await queue.is_worker_online(name=lease_name):
-        raise WorkerOfflineError("queue worker is offline")
+    await ensure_worker_online_or_start(
+        lease_name=lease_name,
+        worker_startup_grace_seconds=worker_startup_grace_seconds,
+    )
 
     enqueue_result = await queue.enqueue_task(
         project_name=project_name,

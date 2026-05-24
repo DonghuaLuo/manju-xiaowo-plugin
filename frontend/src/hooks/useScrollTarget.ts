@@ -85,16 +85,19 @@ export function useScrollTarget(
         return;
       }
 
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const focusEl =
+        (el.closest("[data-workspace-focus-surface]") as HTMLElement | null) ?? el;
+
+      focusEl.scrollIntoView({ behavior: "smooth", block: "center" });
 
       if (currentTarget.highlight) {
-        el.classList.remove("workspace-focus-flash");
-        void el.getBoundingClientRect();
-        el.classList.add("workspace-focus-flash");
-        highlightedElementRef.current = el;
+        focusEl.classList.remove("workspace-focus-flash");
+        void focusEl.getBoundingClientRect();
+        focusEl.classList.add("workspace-focus-flash");
+        highlightedElementRef.current = focusEl;
         highlightTimerRef.current = setTimeout(() => {
-          el.classList.remove("workspace-focus-flash");
-          if (highlightedElementRef.current === el) {
+          focusEl.classList.remove("workspace-focus-flash");
+          if (highlightedElementRef.current === focusEl) {
             highlightedElementRef.current = null;
           }
           highlightTimerRef.current = null;

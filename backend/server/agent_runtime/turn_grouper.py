@@ -229,6 +229,69 @@ def _attach_text_block(block: dict[str, Any], turn_content: list[dict[str, Any]]
     turn_content.append(block)
 
 
+def _merge_duplicate_tool_use_block(
+    existing_block: dict[str, Any],
+    incoming_block: dict[str, Any],
+) -> None:
+    """Merge a replayed tool_use block into the first visible occurrence.
+
+    Claude SDK history/live streams can replay the same tool call with the same
+    id while a turn is being rebuilt.  The UI treats the id as the tool call
+    identity, so repeated copies must update the original block instead of
+    becoming separate siblings.
+    """
+    for key, value in incoming_block.items():
+        if key in ("type", "id"):
+            continue
+
+        if key == "input":
+            if isinstance(value, dict) and (value or not isinstance(existing_block.get("input"), dict)):
+                existing_block[key] = value
+            continue
+
+        if key in ("result", "skill_content"):
+            current = existing_block.get(key)
+            if value not in (None, "") or current in (None, ""):
+                existing_block[key] = value
+            continue
+
+        if key == "is_error":
+            if value is not None:
+                existing_block[key] = value
+            continue
+
+        current = existing_block.get(key)
+        if current in (None, "", [], {}):
+            existing_block[key] = value
+
+
+def _append_assistant_blocks(
+    turn_content: list[dict[str, Any]],
+    new_blocks: list[dict[str, Any]],
+) -> None:
+    """Append assistant blocks while deduplicating replayed tool_use ids."""
+    for block in new_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        if block.get("type") == "tool_use":
+            tool_id = block.get("id")
+            if tool_id:
+                for existing_block in turn_content:
+                    if (
+                        isinstance(existing_block, dict)
+                        and existing_block.get("type") == "tool_use"
+                        and existing_block.get("id") == tool_id
+                    ):
+                        _merge_duplicate_tool_use_block(existing_block, block)
+                        break
+                else:
+                    turn_content.append(block)
+                continue
+
+        turn_content.append(block)
+
+
 def _filter_system_blocks(
     content: Any,
     suppress_plain_text: bool = False,
@@ -475,13 +538,15 @@ def group_messages_into_turns(raw_messages: list[dict[str, Any]]) -> list[dict[s
             _track_tool_uses(new_blocks, tool_use_map)
 
             if current_turn and current_turn.get("type") == "assistant":
-                current_turn.get("content", []).extend(new_blocks)
+                _append_assistant_blocks(current_turn.get("content", []), new_blocks)
             else:
                 if current_turn:
                     turns.append(current_turn)
+                turn_content: list[dict[str, Any]] = []
+                _append_assistant_blocks(turn_content, new_blocks)
                 current_turn = {
                     "type": "assistant",
-                    "content": new_blocks,
+                    "content": turn_content,
                     "uuid": msg.get("uuid"),
                     "timestamp": msg.get("timestamp"),
                 }

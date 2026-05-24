@@ -18,9 +18,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, get_args, get_origin
+from typing import Any, get_args, get_origin, get_type_hints
 from urllib.parse import unquote
 
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 
@@ -258,6 +259,13 @@ def _make_base_model(annotation: Any, value: Any) -> BaseModel:
     return model_type.model_validate(value)
 
 
+def _endpoint_type_hints(endpoint: Any) -> dict[str, Any]:
+    try:
+        return get_type_hints(endpoint, include_extras=True)
+    except Exception:
+        return {}
+
+
 def _default_from_fastapi_param(default: Any) -> Any:
     if default is inspect._empty:
         return inspect._empty
@@ -334,6 +342,7 @@ async def _invoke_route(
     files_by_field: dict[str, list[_DesktopUploadFile]] | None = None,
 ) -> Any:
     signature = inspect.signature(route.endpoint)
+    type_hints = _endpoint_type_hints(route.endpoint)
     kwargs: dict[str, Any] = {}
     user = _desktop_user()
     translator = _translator(locale)
@@ -342,7 +351,7 @@ async def _invoke_route(
 
     try:
         for name, param in signature.parameters.items():
-            annotation = _unwrap_annotated(param.annotation)
+            annotation = _unwrap_annotated(type_hints.get(name, param.annotation))
             default = _default_from_fastapi_param(param.default)
 
             if name in path_params:
@@ -393,6 +402,11 @@ async def _invoke_route(
             if name == "content" and isinstance(body, str):
                 kwargs[name] = body
                 continue
+            if body is not None and param.default is not inspect._empty:
+                default_kind = type(param.default).__name__
+                if default_kind == "Body":
+                    kwargs[name] = _coerce_scalar(body, annotation)
+                    continue
             if fields and name in fields:
                 value = fields[name]
                 if isinstance(value, list):
@@ -451,7 +465,7 @@ def _success_result(value: Any) -> dict[str, Any]:
     if isinstance(value, (dict, list, str, int, float, bool)):
         if isinstance(value, str):
             return {"success": True, "content": {"kind": "text", "text": value, "mimeType": "text/plain;charset=UTF-8"}}
-        return {"success": True, "content": {"kind": "json", "value": value}}
+        return {"success": True, "content": {"kind": "json", "value": jsonable_encoder(value)}}
 
     status_code = getattr(value, "status_code", 200)
     media_type = str(getattr(value, "media_type", "") or "")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,6 +55,30 @@ async def test_provider_env_overrides_includes_anthropic_and_empties(
     assert env["GEMINI_API_KEY"] == ""
     assert env["VIDU_API_KEY"] == ""
     assert env["GOOGLE_APPLICATION_CREDENTIALS"] == ""
+    path_key = next((key for key in env if key.lower() == "path"), "PATH")
+    assert str(Path(sys.executable).parent) in env[path_key].split(";")
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_with_current_python_on_path_prefers_plugin_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_runtime = tmp_path / "manju-env"
+    scripts_dir = fake_runtime / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    fake_python = fake_runtime / "python.exe"
+    fake_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "executable", str(fake_python))
+    monkeypatch.setenv("PATH", r"D:\program files\python310;C:\Windows")
+
+    env = SessionManager._with_current_python_on_path({"ANTHROPIC_API_KEY": "sk"})
+    path_key = next((key for key in env if key.lower() == "path"), "PATH")
+    path_parts = env[path_key].split(";")
+
+    assert path_parts[:2] == [str(fake_runtime), str(scripts_dir)]
+    assert r"D:\program files\python310" in path_parts
 
 
 def test_default_allowed_tools_includes_bash() -> None:
@@ -320,10 +345,13 @@ async def test_build_options_bash_in_allowed_tools_by_sandbox(
         ("ffprobe in.mp4", "PermissionResultAllow"),
         ("cat /etc/passwd", "PermissionResultDeny"),
         ("ls -la", "PermissionResultDeny"),
+        ("python .claude/skills/manage-project/scripts/peek_split_point.py --proj=x; python -c \"print(1)\"", "PermissionResultDeny"),
+        ("ffmpeg -i in.mp4 out.mp4 && python -c \"print(1)\"", "PermissionResultDeny"),
+        ("python ../outside.py", "PermissionResultDeny"),
     ],
 )
 async def test_windows_bash_whitelist_matches_main_behavior(tmp_path: Path, command: str, expected: str) -> None:
-    """sandbox 关闭时白名单 prefix 放行，其余拒；deny 文案派生自 _WINDOWS_BASH_PREFIX_WHITELIST。"""
+    """sandbox 关闭时白名单单命令放行，其余拒；deny 文案派生自 _WINDOWS_BASH_PREFIX_WHITELIST。"""
     sm = _make_session_manager(tmp_path, sandbox_enabled=False)
     callback = await sm._build_can_use_tool_callback("test_sid", [None])
     result = await callback("Bash", {"command": command}, None)

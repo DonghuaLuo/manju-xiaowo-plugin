@@ -77,13 +77,6 @@ def build_grid_prompt(
     total = rows * cols
     n_scenes = len(scenes)
 
-    # Number of content cells: first frame + (n_scenes - 1) transitions + last first frame
-    # Cell 0: first scene opening
-    # Cells 1..n_scenes-2: transitions between consecutive scenes
-    # Cell n_scenes-1: last scene opening
-    # Remaining cells: placeholders
-    n_content = n_scenes  # 1 first + (n-2) transitions + 1 last = n
-
     effective_grid_ar = grid_aspect_ratio or aspect_ratio
     panel_ar = _compute_panel_aspect(effective_grid_ar, rows, cols)
 
@@ -102,6 +95,7 @@ def build_grid_prompt(
     lines.append(f"- 每个画格比例：{panel_ar}，所有画格大小完全相同")
     lines.append("- 画格之间无边框、无间隙、无留白，紧密排列")
     lines.append("- 不得合并画格、不得遗漏画格、不得错位排列")
+    lines.append("- 每个画格都必须是完整画面，不得出现空白、灰色占位格或纯色占位格")
     lines.append("- 所有画格保持一致的角色外观、光线和色彩风格")
     lines.append("")
 
@@ -109,7 +103,11 @@ def build_grid_prompt(
     lines.append("【帧链节奏】")
     lines.append("本宫格采用首尾帧链式结构：")
     lines.append("- 格0 是第一个场景的开场画面")
-    lines.append(f"- 格1~格{n_content - 1} 是相邻场景的过渡帧（前一场景的结束 = 后一场景的开始）")
+    if n_scenes > 1:
+        lines.append(f"- 格1~格{n_scenes - 1} 是相邻场景的过渡帧（前一场景的结束 = 后一场景的开始）")
+    if total > n_scenes:
+        start = max(1, n_scenes)
+        lines.append(f"- 格{start}~格{total - 1} 是已有场景的补充镜头，用不同构图填满画格，不得留空")
     lines.append("- 相邻格之间应体现画面的自然过渡和动作延续")
     lines.append("")
 
@@ -148,8 +146,16 @@ def build_grid_prompt(
             lines.append(f"  {prev_action}，过渡到 {next_image_desc}")
 
         else:
-            # Placeholder
-            lines.append(f"格{cell_idx}（{position}）— 空占位：纯灰色背景，无任何内容")
+            # Supplemental cells keep sparse groups visually complete without
+            # assigning extra storyboard assets during the split step.
+            scene = scenes[(cell_idx - n_scenes) % n_scenes]
+            scene_id = scene.get(id_field, "")
+            image_desc = _extract_image_desc(scene)
+            action = _extract_action(scene)
+            lines.append(f"格{cell_idx}（{position}）— {scene_id}补充镜头：")
+            lines.append(f"  延续同一场景，使用不同景别或细节构图生成完整画面：{image_desc}")
+            if action:
+                lines.append(f"  动作延续：{action}")
 
     lines.append("")
 
@@ -166,6 +172,7 @@ def build_grid_prompt(
     lines.append("- 白色边框、黑色边框、粗边框、装饰性边框")
     lines.append("- 分隔线、间隙、间距、留白、padding、margin")
     lines.append("- 白色背景、纯色背景条")
+    lines.append("- 空白画格、灰色占位格、纯色占位格")
     lines.append("- 合并的画格、缺失的画格、错位的画格")
     lines.append("- 连续全景图（非分格）、单张大图")
     lines.append("- 模糊、低画质、噪点")

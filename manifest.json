@@ -32,7 +32,7 @@
   },
   "dev": {
     "frontend": {
-      "entry": "http://localhost:5173"
+      "entry": "http://localhost:5174"
     },
     "backend": {
       "runtime": "D:\\ProgramData\\miniconda3\\envs\\manju\\python.exe",

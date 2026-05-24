@@ -172,7 +172,8 @@ def generate_grid_tool(ctx: ToolContext):
                 details.append(f"  ✗ {grid_id}（{group_ids[0]}..{group_ids[-1]}）入队失败: {err}")
 
             if not pending:
-                msg = "\n".join([*details, "没有需要生成的宫格组"])
+                final_line = "没有宫格任务成功入队" if enqueue_failures else "没有需要生成的宫格组"
+                msg = "\n".join([*details, final_line])
                 return {
                     "content": [{"type": "text", "text": msg}],
                     "is_error": bool(enqueue_failures),

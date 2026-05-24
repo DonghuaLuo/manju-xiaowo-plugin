@@ -11,13 +11,14 @@ import logging
 import math
 import os
 import shlex
+import sys
 import tempfile
 import time
 from collections import deque
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -340,6 +341,23 @@ class SessionManager:
         "ffmpeg",
         "ffprobe",
     )
+    _WINDOWS_BASH_CONTROL_TOKENS: frozenset[str] = frozenset(
+        {
+            ";",
+            "&",
+            "&&",
+            "|",
+            "||",
+            "<",
+            ">",
+            ">>",
+            "<<",
+            "2>",
+            "2>>",
+            "&>",
+        }
+    )
+    _WINDOWS_BASH_SUBSTITUTION_MARKERS: tuple[str, ...] = ("\n", "\r", "`", "$(")
 
     # Sandbox 启用后 Bash 进入 allowed_tools；具体命令由 SDK Sandbox 自动放行
     # (autoAllowBashIfSandboxed=True)。文件访问控制走 settings.json deny rules
@@ -582,6 +600,18 @@ class SessionManager:
         parts.append(
             "- Bash 调用 skill 脚本时必须使用相对路径（如 `python .claude/skills/.../script.py`），不要转换为绝对路径。"
         )
+        parts.append(
+            "- Bash 中的 `python` 已由插件注入为当前 manju 后端运行时；运行 `.claude/skills/` 脚本时直接使用 `python ...`，不要使用 `uv run`、`py` 或系统 Python。"
+        )
+        parts.append(
+            "- 调用 `.claude/skills/` 脚本必须使用相对路径（如 `python .claude/skills/manage-project/scripts/add_assets.py ...`），不要使用项目绝对路径。"
+        )
+        parts.append(
+            "- 运行 `add_assets.py` 前先确保 `project.json` 已具备必填基础字段（至少 title/style/content_mode/aspect_ratio）；缺字段时先修复 project.json，再写入资产。"
+        )
+        parts.append(
+            "- `add_assets.py` 不是验证命令，禁止用空 JSON（如 `--characters '{}' --scenes '{}' --props '{}'`）调用它做验证；需要验证时读取 project.json 或运行专门的校验逻辑。"
+        )
         parts.append("- Bash 命令必须写在单行，禁止使用 `\\` 换行，JSON 参数使用紧凑格式。")
 
         self._append_overview_section(parts, config.get("overview", {}))
@@ -649,6 +679,31 @@ class SessionManager:
         result = dict(anthropic_env)
         for key in OTHER_PROVIDER_ENV_KEYS:
             result[key] = ""
+        return self._with_current_python_on_path(result)
+
+    @staticmethod
+    def _with_current_python_on_path(env: dict[str, str]) -> dict[str, str]:
+        """Make Bash skill scripts resolve ``python`` to this plugin runtime."""
+        result = dict(env)
+        python_exe = Path(sys.executable)
+        python_dir = python_exe.parent
+        if not python_dir.exists():
+            return result
+
+        path_key = next((key for key in os.environ if key.lower() == "path"), "PATH")
+        current_path = result.get(path_key) or os.environ.get(path_key, "")
+        prepend: list[str] = []
+        for candidate in (python_dir, python_dir / "Scripts"):
+            if candidate.exists():
+                value = str(candidate)
+                if value not in prepend:
+                    prepend.append(value)
+
+        if prepend:
+            result[path_key] = os.pathsep.join([*prepend, current_path]) if current_path else os.pathsep.join(prepend)
+
+        result.setdefault("PYTHONUTF8", "1")
+        result.setdefault("PYTHONIOENCODING", "utf-8")
         return result
 
     async def _build_options(
@@ -2316,6 +2371,58 @@ class SessionManager:
         merged_input["answers"] = answers
         return PermissionResultAllow(updated_input=merged_input)
 
+    @classmethod
+    def _parse_windows_bash_command(cls, command: str) -> list[str]:
+        """Parse a Windows fallback Bash command for allowlist checks.
+
+        ``punctuation_chars=True`` keeps shell control operators as standalone
+        tokens, so quoted JSON arguments can contain punctuation while command
+        chaining/redirection remains detectable.
+        """
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+
+    @classmethod
+    def _is_windows_bash_command_allowed(cls, command: str) -> tuple[bool, str | None]:
+        """Return whether an unsandboxed Windows Bash command is permitted.
+
+        This is stricter than a raw prefix check: the command must be a single
+        command invocation, not a shell pipeline/chained script, and Python
+        entrypoints must point at project-local ArcReel skill scripts.
+        """
+        if any(marker in command for marker in cls._WINDOWS_BASH_SUBSTITUTION_MARKERS):
+            return False, "命令包含换行或命令替换语法"
+
+        try:
+            tokens = cls._parse_windows_bash_command(command)
+        except ValueError as exc:
+            return False, f"命令解析失败: {exc}"
+
+        if not tokens:
+            return False, "命令为空"
+
+        if any(token in cls._WINDOWS_BASH_CONTROL_TOKENS for token in tokens):
+            return False, "命令包含 shell 链接、管道或重定向操作符"
+
+        executable = Path(tokens[0]).name.lower()
+        if executable in {"python", "python3", "py"}:
+            if len(tokens) < 2:
+                return False, "python 命令缺少脚本路径"
+            script = tokens[1].replace("\\", "/")
+            script_path = PurePosixPath(script)
+            if script_path.is_absolute() or ".." in script_path.parts:
+                return False, "脚本路径必须是 .claude/skills 下的相对路径"
+            if script.startswith(".claude/skills/") and script.endswith(".py"):
+                return True, None
+            return False, "python 仅允许执行 .claude/skills 下的 .py 脚本"
+
+        if executable in {"ffmpeg", "ffprobe"}:
+            return True, None
+
+        return False, f"命令不在 Windows Bash 白名单内: {tokens[0]}"
+
     async def _build_can_use_tool_callback(
         self,
         session_id: str,
@@ -2364,11 +2471,12 @@ class SessionManager:
             # 落到这里走 _WINDOWS_BASH_PREFIX_WHITELIST 代码白名单。
             if not self._sandbox_enabled and tool_name == "Bash":
                 cmd = str((input_data or {}).get("command") or "").strip()
-                if cmd.startswith(self._WINDOWS_BASH_PREFIX_WHITELIST):
+                allowed, deny_reason = self._is_windows_bash_command_allowed(cmd)
+                if allowed:
                     return PermissionResultAllow(updated_input=input_data)
                 if PermissionResultDeny is not None:
                     return PermissionResultDeny(
-                        message=self._format_bash_whitelist_deny_message(cmd),
+                        message=self._format_bash_whitelist_deny_message(cmd, deny_reason),
                     )
             # BashOutput / KillBash 是 Bash 管理类工具，回退模式直接放行。
             if not self._sandbox_enabled and tool_name in ("BashOutput", "KillBash"):
@@ -2392,15 +2500,17 @@ class SessionManager:
         return _can_use_tool
 
     @classmethod
-    def _format_bash_whitelist_deny_message(cls, command: str) -> str:
+    def _format_bash_whitelist_deny_message(cls, command: str, reason: str | None = None) -> str:
         """Windows 回退 Bash 白名单拒绝文案。从 _WINDOWS_BASH_PREFIX_WHITELIST
         派生 allowed 列表，避免常量与文案双份漂移。"""
         allowed_lines = "\n".join(f"  - {prefix}" for prefix in cls._WINDOWS_BASH_PREFIX_WHITELIST)
+        reason_line = f"拒绝原因: {reason}\n" if reason else ""
         return (
             f"未授权的 Bash 命令: {command[:200]}\n"
+            f"{reason_line}"
             "当前 Bash 白名单仅允许以下前缀:\n"
             f"{allowed_lines}\n"
-            "其他 Bash 命令在 Windows 回退模式下不可用。"
+            "并且必须是单条命令，禁止 shell 链接、管道、重定向或命令替换。"
         )
 
     def _message_to_dict(self, message: Any) -> dict[str, Any]:

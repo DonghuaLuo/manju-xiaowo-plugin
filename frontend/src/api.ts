@@ -1401,6 +1401,7 @@ class API {
     style_image: string;
     style_description: string;
     url: string;
+    style_analysis_error?: string;
   }> {
     const url = `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-image`;
     const response = await requestWithLocalFiles(
@@ -1411,7 +1412,13 @@ class API {
 
     await throwIfNotOk(response, "上传失败");
 
-    return response.json() as Promise<{ success: boolean; style_image: string; style_description: string; url: string }>;
+    return response.json() as Promise<{
+      success: boolean;
+      style_image: string;
+      style_description: string;
+      url: string;
+      style_analysis_error?: string;
+    }>;
   }
 
   // ==================== 助手会话 API ====================

@@ -8,6 +8,7 @@ import { GridPreviewView } from "./GridPreviewView";
 import { useAppStore } from "@/stores/app-store";
 import { useCostStore } from "@/stores/cost-store";
 import { useTasksStore } from "@/stores/tasks-store";
+import { useScrollTarget } from "@/hooks/useScrollTarget";
 import type {
   EpisodeScript,
   NarrationEpisodeScript,
@@ -69,6 +70,12 @@ export function GridImageToVideoCanvas({
   const showTabs = Boolean(hasDraft);
   const defaultTab: GridTab = hasScript ? "units" : "preprocessing";
   const [activeTab, setActiveTab] = useState<GridTab>(defaultTab);
+  const prepareGridScrollTarget = useCallback(() => {
+    setActiveTab("grid_preview");
+    return true;
+  }, []);
+
+  useScrollTarget("grid", { prepareTarget: prepareGridScrollTarget });
 
   useEffect(() => {
     // 剧本加载完成后切到 units 标签页，由 hasScript 状态变化驱动

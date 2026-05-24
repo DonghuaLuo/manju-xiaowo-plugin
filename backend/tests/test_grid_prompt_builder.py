@@ -97,10 +97,12 @@ class TestBuildGridPrompt:
         assert "整体图片比例" in prompt
         assert "每个画格比例" in prompt
 
-    def test_includes_placeholders(self):
+    def test_sparse_grid_uses_supplemental_shots_instead_of_blank_placeholders(self):
         scenes = [self._scene(f"S{i}", f"s{i}", f"a{i}") for i in range(1, 6)]
         prompt = build_grid_prompt(scenes=scenes, id_field="scene_id", rows=3, cols=2, style="anime")
-        assert "空占位" in prompt
+        assert "补充镜头" in prompt
+        assert "空占位" not in prompt
+        assert "纯灰色背景" not in prompt
 
     def test_reference_mapping(self):
         scenes = [self._scene(f"S{i}", f"s{i}", f"a{i}") for i in range(1, 5)]
@@ -159,6 +161,14 @@ class TestBuildGridPrompt:
         scenes = [self._scene(f"S{i}", f"s{i}", f"a{i}") for i in range(1, 5)]
         prompt = build_grid_prompt(scenes=scenes, id_field="scene_id", rows=2, cols=2, style="realistic")
         assert "空占位" not in prompt
+
+    def test_single_scene_grid_still_fills_all_cells(self):
+        scenes = [self._scene("S1", "single scene", "single action")]
+        prompt = build_grid_prompt(scenes=scenes, id_field="scene_id", rows=2, cols=2, style="realistic")
+        assert "格1~格0" not in prompt
+        assert "补充镜头" in prompt
+        assert "空占位" not in prompt
+        assert "纯灰色背景" not in prompt
 
     def test_grid_aspect_ratio_in_layout(self):
         scenes = [self._scene(f"S{i}", f"s{i}", f"a{i}") for i in range(1, 5)]

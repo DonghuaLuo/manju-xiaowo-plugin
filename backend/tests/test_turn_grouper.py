@@ -75,6 +75,83 @@ class TestTurnGrouper:
         assert assistant_turn["content"][1]["result"] == "hello"
         assert assistant_turn["content"][2]["type"] == "text"
 
+    def test_duplicate_assistant_tool_use_ids_are_merged(self):
+        raw_messages = [
+            {"type": "user", "content": "run command"},
+            {
+                "type": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_duplicate",
+                        "name": "Bash",
+                        "input": {"command": "old"},
+                    }
+                ],
+            },
+            {
+                "type": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_duplicate",
+                        "name": "Bash",
+                        "input": {"command": "new"},
+                        "result": "done",
+                        "is_error": False,
+                    }
+                ],
+            },
+            {
+                "type": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_duplicate",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+        ]
+
+        turns = group_messages_into_turns(raw_messages)
+        assistant_blocks = turns[1]["content"]
+        tool_blocks = [block for block in assistant_blocks if block.get("type") == "tool_use"]
+
+        assert len(tool_blocks) == 1
+        assert tool_blocks[0]["id"] == "call_duplicate"
+        assert tool_blocks[0]["input"] == {"command": "new"}
+        assert tool_blocks[0]["result"] == "done"
+        assert tool_blocks[0]["is_error"] is False
+
+    def test_duplicate_tool_use_ids_inside_single_assistant_message_are_merged(self):
+        raw_messages = [
+            {"type": "user", "content": "run command"},
+            {
+                "type": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "call_same_message", "name": "Read", "input": {}},
+                    {
+                        "type": "tool_use",
+                        "id": "call_same_message",
+                        "name": "Read",
+                        "input": {"file_path": "/tmp/a.txt"},
+                    },
+                ],
+            },
+        ]
+
+        turns = group_messages_into_turns(raw_messages)
+        tool_blocks = [
+            block
+            for block in turns[1]["content"]
+            if block.get("type") == "tool_use" and block.get("id") == "call_same_message"
+        ]
+
+        assert len(tool_blocks) == 1
+        assert tool_blocks[0]["input"] == {"file_path": "/tmp/a.txt"}
+
     def test_tool_result_without_type_is_attached(self):
         raw_messages = [
             {"type": "user", "content": "run tool"},
