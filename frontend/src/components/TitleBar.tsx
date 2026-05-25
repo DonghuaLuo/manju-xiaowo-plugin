@@ -39,6 +39,9 @@ type PluginInfoPayload = {
     title?: string
     version?: string
     open_source?: PluginInfoPayload["open_source"]
+    frontend?: {
+      theme?: string
+    }
   }
 }
 
@@ -111,6 +114,7 @@ export function TitleBar() {
   const [showLicenseDialog, setShowLicenseDialog] = useState(false)
   const [shortcutName, setShortcutName] = useState("")
   const [isDark, setIsDark] = useState(false)
+  const showThemeToggle = false
   const [hasOpenSource, setHasOpenSource] = useState(false)
   const [openSourceInfo, setOpenSourceInfo] = useState<OpenSourceInfo>(
     fallbackOpenSourceInfo
@@ -134,8 +138,8 @@ export function TitleBar() {
           setOpenSourceInfo(normalizeOpenSourceInfo(openSource))
         }
       }
+      setIsDark(document.documentElement.classList.contains("dark"))
     })
-    setIsDark(document.documentElement.classList.contains("dark"))
   }, [])
 
   useEffect(() => {
@@ -265,35 +269,36 @@ export function TitleBar() {
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          {/* 主题切换按钮 */}
-          <button
-            onClick={handleToggleTheme}
-            className="flex h-10 w-10 cursor-pointer items-center justify-center text-gray-500 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-            title={isDark ? "切换浅色主题" : "切换深色主题"}
-          >
-            {isDark ? (
-              <svg
-                className="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            ) : (
-              <svg
-                className="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-              </svg>
-            )}
-          </button>
+          {showThemeToggle && (
+            <button
+              onClick={handleToggleTheme}
+              className="flex h-10 w-10 cursor-pointer items-center justify-center text-gray-500 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              title={isDark ? "切换浅色主题" : "切换深色主题"}
+            >
+              {isDark ? (
+                <svg
+                  className="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              ) : (
+                <svg
+                  className="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              )}
+            </button>
+          )}
           {/* 创建桌面快捷方式按钮 */}
           <button
             onClick={() => setShowShortcutDialog(true)}

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Router } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import { memoryLocation } from "wouter/memory-location";
 import { API } from "@/api";
 import { useAssetsStore } from "@/stores/assets-store";
@@ -22,6 +23,15 @@ function renderPage(initialPath = "/app/assets") {
   };
 }
 
+function renderHashPage(search = "", hash = "#/app/assets") {
+  window.history.replaceState(null, "", `${window.location.pathname}${search}${hash}`);
+  return render(
+    <Router hook={useHashLocation}>
+      <AssetLibraryPage />
+    </Router>,
+  );
+}
+
 describe("AssetLibraryPage tablist (issue #488)", () => {
   beforeEach(() => {
     useAssetsStore.setState(useAssetsStore.getInitialState(), true);
@@ -30,6 +40,7 @@ describe("AssetLibraryPage tablist (issue #488)", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    window.history.replaceState(null, "", `${window.location.pathname}#/`);
   });
 
   it("renders nav with role=tablist + aria-orientation + aria-label", () => {
@@ -136,5 +147,26 @@ describe("AssetLibraryPage tablist (issue #488)", () => {
     expect(tabs[0]).toHaveAttribute("aria-selected", "false");
     expect(tabs[1]).toHaveAttribute("aria-selected", "true");
     expect(tabs[2]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("preserves the asset library route when changing tabs", () => {
+    const { location } = renderPage("/app/assets");
+
+    fireEvent.click(screen.getByRole("tab", { name: /场景/ }));
+
+    expect(location.history?.at(-1)).toBe("/app/assets?tab=scene");
+  });
+
+  it("clears hash-router search without leaving the asset library route", async () => {
+    renderHashPage("?tab=scene", "#/app/assets");
+    expect(screen.getByRole("tab", { name: /场景/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: /人物/ }));
+
+    await waitFor(() => {
+      expect(window.location.search).toBe("");
+      expect(window.location.hash).toBe("#/app/assets");
+      expect(screen.getByRole("tab", { name: /人物/ })).toHaveAttribute("aria-selected", "true");
+    });
   });
 });

@@ -49,9 +49,45 @@ const EMPTY_KEY: Record<AssetType, string> = {
 
 const HEADER_GLOW_STYLE = ambientGlowStyle({ at: "30% 0%", intensity: 0.08 });
 
+type Navigate = ReturnType<typeof useLocation>[1];
+
+function replaceHashRouteAndClearSearch(pathname: string) {
+  if (
+    typeof window === "undefined" ||
+    !window.location.hash ||
+    !window.location.search
+  ) {
+    return false;
+  }
+
+  const oldURL = window.location.href;
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = `/${pathname.replace(/^#?\/?/, "")}`;
+  const newURL = url.href;
+  window.history.replaceState(window.history.state, "", newURL);
+  window.dispatchEvent(
+    typeof HashChangeEvent === "undefined"
+      ? new Event("hashchange")
+      : new HashChangeEvent("hashchange", { oldURL, newURL }),
+  );
+  return true;
+}
+
+function navigateAssetLibraryQuery(navigate: Navigate, pathname: string, query: string) {
+  if (query) {
+    navigate(`${pathname}?${query}`, { replace: true });
+    return;
+  }
+
+  if (!replaceHashRouteAndClearSearch(pathname)) {
+    navigate(pathname, { replace: true });
+  }
+}
+
 export function AssetLibraryPage() {
   const { t } = useTranslation("assets");
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const search = useSearch();
 
   const activeTab = useMemo((): AssetType => {
@@ -60,7 +96,7 @@ export function AssetLibraryPage() {
   }, [search]);
 
   const writeQuery = useCallback((patch: { tab?: AssetType; q?: string }) => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(search);
     if (patch.tab !== undefined) {
       if (patch.tab === "character") params.delete("tab");
       else params.set("tab", patch.tab);
@@ -70,8 +106,8 @@ export function AssetLibraryPage() {
       else params.delete("q");
     }
     const qs = params.toString();
-    navigate(qs ? `${window.location.pathname}?${qs}` : window.location.pathname, { replace: true });
-  }, [navigate]);
+    navigateAssetLibraryQuery(navigate, location, qs);
+  }, [location, navigate, search]);
 
   const setActiveTab = useCallback((next: AssetType) => writeQuery({ tab: next }), [writeQuery]);
 

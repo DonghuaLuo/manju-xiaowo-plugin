@@ -34,7 +34,7 @@ interface GlobalHeaderProps {
  */
 export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const { t } = useTranslation();
-  const [, setLocation] = useLocation();
+  const [workspaceLocation, setLocation] = useLocation();
   const { currentProjectData, currentProjectName } = useProjectsStore();
   const { stats } = useTasksStore();
   const { taskHudOpen, setTaskHudOpen, triggerScrollTo, markWorkspaceNotificationRead } =
@@ -57,6 +57,11 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const currentPhase = currentProjectData?.status?.current_phase;
   const runningCount = stats.running + stats.queued;
   const unreadNotificationCount = workspaceNotifications.filter((item) => !item.read).length;
+  const workspaceReturnPath = currentProjectName
+    ? `/app/projects/${encodeURIComponent(currentProjectName)}${
+        workspaceLocation === "/" ? "" : workspaceLocation
+      }`
+    : "/app/projects";
 
   const completedTaskCount = stats.succeeded + stats.failed;
   useEffect(() => {
@@ -427,7 +432,7 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           <button
             type="button"
             onClick={() => {
-              rememberAssetLibraryReturnTo(window.location.pathname);
+              rememberAssetLibraryReturnTo(workspaceReturnPath);
               setLocation("~/app/assets");
             }}
             className="grid h-[30px] w-[30px] place-items-center rounded-md transition-colors focus-ring"

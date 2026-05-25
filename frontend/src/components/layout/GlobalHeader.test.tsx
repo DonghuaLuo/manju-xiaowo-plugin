@@ -62,12 +62,12 @@ vi.mock("./ExportScopeDialog", () => ({
     ) : null,
 }));
 
-function renderHeader() {
-  const { hook } = memoryLocation({ path: "/characters" });
+function renderHeader(path = "/characters") {
+  const location = memoryLocation({ path, record: true });
   return render(
-    <Router hook={hook}>
+    <Router hook={location.hook}>
       <GlobalHeader />
-    </Router>,
+    </Router>
   );
 }
 
@@ -214,6 +214,33 @@ describe("GlobalHeader", () => {
     renderHeader();
 
     expect(screen.getByRole("button", { name: "资产库" })).toBeInTheDocument();
+  });
+
+  it("records the absolute workspace route before opening the asset library", async () => {
+    vi.spyOn(API, "getUsageStats").mockResolvedValue({
+      total_cost: 0,
+      image_count: 0,
+      video_count: 0,
+      failed_count: 0,
+      total_count: 0,
+    });
+    useProjectsStore.setState({
+      currentProjectName: "demo",
+      currentProjectData: {
+        title: "导出项目",
+        content_mode: "narration",
+        style: "Anime",
+        episodes: [],
+        characters: {},
+        scenes: {},
+        props: {},
+      },
+    });
+
+    renderHeader("/characters");
+    screen.getByRole("button", { name: "资产库" }).click();
+
+    expect(sessionStorage.getItem("assetLibrary:returnTo")).toBe("/app/projects/demo/characters");
   });
 
   it("shows an error toast when exporting fails", async () => {

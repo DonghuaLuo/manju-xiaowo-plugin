@@ -37,7 +37,6 @@ import { WARM_TONE } from "@/utils/severity-tone";
 import { CreateProjectModal } from "./CreateProjectModal";
 import { rememberAssetLibraryReturnTo } from "./AssetLibraryPage";
 import { ICON_BTN_FILLED_CLS, posterGridStyle } from "@/components/ui/darkroom-tokens";
-import { BRAND } from "@/branding";
 import { pickDesktopFile, type UploadFileInput } from "@/utils/desktop-file";
 import {
   PHASE_ORDER,
@@ -792,7 +791,7 @@ function TopBar({
   const { t } = useTranslation(["common", "dashboard", "assets"]);
   return (
     <div
-      className="sticky top-0 z-30"
+      className="sticky top-0 z-30 shrink-0"
       style={{
         background:
           "linear-gradient(180deg, oklch(0.20 0.011 265 / 0.55), oklch(0.15 0.010 265 / 0.45))",
@@ -804,21 +803,7 @@ function TopBar({
       }}
     >
       <div className="mx-auto flex max-w-[1320px] items-center gap-4 px-6 py-3">
-        <div className="flex items-center gap-2.5">
-          <img
-            src="/android-chrome-192x192.png"
-            alt={BRAND.name}
-            className="h-8 w-8 rounded-lg"
-          />
-          <span
-            className="font-sans text-[17px] font-medium tracking-[-0.012em] text-text"
-            aria-hidden
-          >
-            {BRAND.name}
-          </span>
-        </div>
-
-        <label className="ml-2 flex w-[min(420px,100%)] items-center gap-2 rounded-lg border border-hairline-soft bg-bg/55 px-3 py-1.5 transition-colors focus-within:border-accent/60">
+        <label className="flex w-[min(420px,100%)] items-center gap-2 rounded-lg border border-hairline-soft bg-bg/55 px-3 py-1.5 transition-colors focus-within:border-accent/60">
             <Search className="h-3.5 w-3.5 text-text-3" />
             <input
               ref={searchInputRef}
@@ -971,8 +956,8 @@ function HeroStrip({ totals, t }: HeroStripProps) {
   ];
 
   return (
-    <div className="mx-auto flex max-w-[1320px] items-stretch justify-between gap-6 px-6 pb-5 pt-6">
-      <div className="min-w-0 flex-1">
+    <div className="mx-auto flex w-full max-w-[1320px] shrink-0 flex-col items-stretch justify-between gap-5 px-6 pb-5 pt-6 md:flex-row md:gap-6">
+      <div className="min-w-0 flex-1 text-left">
         <h1
           className="font-editorial m-0"
           style={{
@@ -1000,12 +985,12 @@ function HeroStrip({ totals, t }: HeroStripProps) {
           {summaryLine}
         </p>
       </div>
-      <div className="flex flex-col items-end justify-between gap-2.5">
-        <div className="mt-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-2">
+      <div className="flex shrink-0 flex-col items-start justify-between gap-2.5 md:items-end">
+        <div className="mt-1.5 text-left font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-2 md:text-right">
           {t("dashboard:lobby_hero_eyebrow")} — {dateLine}
         </div>
         <div
-          className="flex items-stretch overflow-hidden rounded-[10px] border border-hairline-soft"
+          className="flex max-w-full items-stretch overflow-hidden rounded-[10px] border border-hairline-soft"
           style={{ background: "oklch(0.16 0.010 265 / 0.4)" }}
         >
           {stats.map((s, i) => (
@@ -1061,7 +1046,7 @@ function FilterPills({ active, onChange, counts, phaseLabels, t }: FilterPillsPr
 
   return (
     <div
-      className="sticky z-20 border-b border-hairline backdrop-blur-md"
+      className="sticky z-20 shrink-0 border-b border-hairline backdrop-blur-md"
       style={{
         top: "var(--lobby-topbar-h, 57px)",
         background:
@@ -1112,7 +1097,7 @@ function FilterPills({ active, onChange, counts, phaseLabels, t }: FilterPillsPr
 
 export function ProjectsPage() {
   const { t, i18n } = useTranslation(["common", "dashboard", "assets"]);
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const {
     projects,
     projectsLoading,
@@ -1346,11 +1331,11 @@ export function ProjectsPage() {
 
   return (
     <div
-      className="relative min-h-screen text-text"
+      className="relative flex h-full min-h-0 flex-col text-text"
       style={
         {
-          // FilterPills 的 sticky top 读这个变量；TopBar = logo h-8 (32) + py-3 (24) + 1px border
-          "--lobby-topbar-h": "57px",
+          // FilterPills 的 sticky top 读这个变量；TopBar = controls h ~30 + py-3 (24) + 1px border
+          "--lobby-topbar-h": "55px",
           background:
             "radial-gradient(1100px 540px at 8% -10%, oklch(0.32 0.05 295 / 0.28), transparent 55%), radial-gradient(900px 500px at 100% 110%, oklch(0.26 0.04 260 / 0.25), transparent 55%), linear-gradient(180deg, var(--color-bg-grad-a), var(--color-bg-grad-b))",
         } as CSSProperties
@@ -1363,7 +1348,7 @@ export function ProjectsPage() {
         onCreate={() => setShowCreateModal(true)}
         onSettings={() => navigate("/app/settings")}
         onAssets={() => {
-          rememberAssetLibraryReturnTo(window.location.pathname);
+          rememberAssetLibraryReturnTo(location);
           navigate("/app/assets");
         }}
         importing={importingProject}
@@ -1382,7 +1367,7 @@ export function ProjectsPage() {
         />
       ) : null}
 
-      <main className="mx-auto max-w-[1320px] px-6 pt-6 pb-16">
+      <main className="mx-auto min-h-0 w-full max-w-[1320px] flex-1 overflow-y-auto px-6 pt-6 pb-16">
         {projectsLoading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-6 w-6 motion-safe:animate-spin text-accent" />

@@ -85,8 +85,7 @@ export function useScrollTarget(
         return;
       }
 
-      const focusEl =
-        (el.closest("[data-workspace-focus-surface]") as HTMLElement | null) ?? el;
+      const focusEl = el.closest<HTMLElement>("[data-workspace-focus-surface]") ?? el;
 
       focusEl.scrollIntoView({ behavior: "smooth", block: "center" });
 

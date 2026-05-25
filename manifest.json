@@ -9,6 +9,7 @@
   "dev_mode": true,
   "frontend": {
     "entry": "frontend/dist/index.html",
+    "theme": "dark",
     "width": 1400,
     "height": 960,
     "resizable": true,

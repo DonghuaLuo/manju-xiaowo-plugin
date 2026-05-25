@@ -7,14 +7,12 @@ import {
   Bot,
   ChevronLeft,
   Film,
-  Info,
   Languages,
   Plug,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { AgentConfigTab } from "./AgentConfigTab";
-import { AboutSection } from "./settings/AboutSection";
 import { MediaModelSection } from "./settings/MediaModelSection";
 import { ProviderSection } from "./ProviderSection";
 import { UsageStatsSection } from "./settings/UsageStatsSection";
@@ -31,7 +29,7 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-type SettingsSection = "agent" | "providers" | "media" | "usage" | "about";
+type SettingsSection = "agent" | "providers" | "media" | "usage";
 
 interface SectionDef {
   id: SettingsSection;
@@ -63,10 +61,6 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: "usage", labelKey: "dashboard:usage", Icon: BarChart3 },
     ],
   },
-  {
-    kicker: "System",
-    items: [{ id: "about", labelKey: "dashboard:about", Icon: Info }],
-  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -83,7 +77,6 @@ export function SystemConfigPage() {
     if (section === "agent") return "agent";
     if (section === "media") return "media";
     if (section === "usage") return "usage";
-    if (section === "about") return "about";
     return "providers";
   }, [search]);
 
@@ -296,7 +289,6 @@ export function SystemConfigPage() {
               {activeSection === "agent" && <AgentConfigTab visible />}
               {activeSection === "media" && <MediaModelSection />}
               {activeSection === "usage" && <UsageStatsSection />}
-              {activeSection === "about" && <AboutSection />}
             </div>
           )}
         </main>

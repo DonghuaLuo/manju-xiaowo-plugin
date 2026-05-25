@@ -23,7 +23,6 @@ import type {
   ProjectChangeBatchPayload,
   ProjectEventSnapshotPayload,
   GetSystemConfigResponse,
-  GetSystemVersionResponse,
   SystemConfigPatch,
   ProviderInfo,
   ProviderConfigDetail,
@@ -653,15 +652,6 @@ class API {
 
   static async getSystemConfig(): Promise<GetSystemConfigResponse> {
     return this.request("/system/config");
-  }
-
-  static async getSystemVersion(): Promise<GetSystemVersionResponse> {
-    return this.request("/system/version");
-  }
-
-  static async downloadDiagnostics(): Promise<{ blob: Blob; filename: string }> {
-    const result = await PluginSDK.callBackend<DesktopBinaryPayload>("arcreel_download_diagnostics", {});
-    return desktopBinaryPayloadToBlob(result, "arcreel-diagnostics.zip");
   }
 
   static async updateSystemConfig(
