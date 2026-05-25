@@ -64,6 +64,16 @@ function extractTurnText(turn: Turn): string {
   );
 }
 
+function turnContentSignature(turn: Turn | null): string | null {
+  if (!turn?.content?.length) return null;
+  try {
+    return JSON.stringify(turn.content);
+  } catch {
+    const text = extractTurnText(turn);
+    return text ? JSON.stringify([{ type: "text", text }]) : null;
+  }
+}
+
 function parseTurnTimestamp(turn: Turn | null): number | null {
   if (!turn?.timestamp) return null;
   const parsed = Date.parse(turn.timestamp);
@@ -75,6 +85,33 @@ function findLatestUserTurn(turns: Turn[]): Turn | null {
     if (turns[i].type === "user") return turns[i];
   }
   return null;
+}
+
+function findLatestOptimisticUserTurn(turns: Turn[]): Turn | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn.type === "user" && turn.uuid?.startsWith(OPTIMISTIC_PREFIX)) {
+      return turn;
+    }
+  }
+  return null;
+}
+
+function userTurnAcknowledgesOptimistic(userTurn: Turn | null, optimisticTurn: Turn | null): boolean {
+  if (!userTurn || !optimisticTurn) return false;
+  const userSig = turnContentSignature(userTurn);
+  const optimisticSig = turnContentSignature(optimisticTurn);
+  if (!userSig || !optimisticSig || userSig !== optimisticSig) return false;
+
+  const userTs = parseTurnTimestamp(userTurn);
+  const optimisticTs = parseTurnTimestamp(optimisticTurn);
+  return !(userTs !== null && optimisticTs !== null && userTs < optimisticTs);
+}
+
+function snapshotAcknowledgesCurrentOptimisticTurn(snapshotTurns: Turn[], currentTurns: Turn[]): boolean {
+  const optimisticTurn = findLatestOptimisticUserTurn(currentTurns);
+  if (!optimisticTurn) return false;
+  return userTurnAcknowledgesOptimistic(findLatestUserTurn(snapshotTurns), optimisticTurn);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,26 +194,11 @@ export function useAssistantSession(projectName: string | null) {
 
     // 保留末尾的 optimistic turn：仅当 snapshot 尚未包含当前轮 user 时。
     // 使用内容匹配而非 UUID（optimistic UUID 永远不会匹配后端真实 UUID）。
-    const lastTurn = currentTurns.at(-1);
+    const lastTurn = findLatestOptimisticUserTurn(currentTurns);
     let shouldPreserveOptimistic = false;
 
-    if (lastTurn?.uuid?.startsWith(OPTIMISTIC_PREFIX)) {
-      const optText = extractTurnText(lastTurn);
-
-      if (optText) {
-        const latestUserTurn = findLatestUserTurn(snapshotTurns);
-        if (!latestUserTurn || extractTurnText(latestUserTurn) !== optText) {
-          shouldPreserveOptimistic = true;
-        } else {
-          const latestUserTs = parseTurnTimestamp(latestUserTurn);
-          const optimisticTs = parseTurnTimestamp(lastTurn);
-          shouldPreserveOptimistic = Boolean(
-            latestUserTs !== null &&
-            optimisticTs !== null &&
-            latestUserTs < optimisticTs,
-          );
-        }
-      }
+    if (lastTurn) {
+      shouldPreserveOptimistic = !snapshotAcknowledgesCurrentOptimisticTurn(snapshotTurns, currentTurns);
     }
 
     if (shouldPreserveOptimistic && lastTurn) {
@@ -229,11 +251,22 @@ export function useAssistantSession(projectName: string | null) {
         if (!isActiveStream()) return;
         const data = parseSsePayload(event);
         const isSending = store.getState().sending;
+        const snapshotTurns = (data.turns as Turn[]) ?? [];
+        const acknowledgesCurrentSend = snapshotAcknowledgesCurrentOptimisticTurn(
+          snapshotTurns,
+          store.getState().turns,
+        );
 
         // 正在发送消息时，后端可能尚未将 session 切为 "running"，
         // 此时 SSE 连接到旧 "completed" session 会立即收到旧 snapshot + status 后断开。
-        // 忽略这种 stale snapshot 的 turns 和 status，保留前端的 optimistic 状态。
-        if (isSending && typeof data.status === "string" && data.status !== "running") {
+        // 但如果 snapshot 已经包含当前轮 user turn，说明它不是旧快照；
+        // 可能是一次很快完成的真实响应，必须应用，否则 UI 会一直停在运行态。
+        if (
+          isSending &&
+          typeof data.status === "string" &&
+          data.status !== "running" &&
+          !acknowledgesCurrentSend
+        ) {
           return;
         }
 
