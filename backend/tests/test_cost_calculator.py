@@ -196,18 +196,6 @@ class TestArkCost:
         assert currency == "CNY"
         assert amount == pytest.approx(2.10)
 
-    def test_seedance_1_0_lite_i2v_cost(self):
-        calculator = CostCalculator()
-        amount, currency = calculator.calculate_ark_video_cost(
-            usage_tokens=1_000_000,
-            service_tier="default",
-            generate_audio=True,
-            model="doubao-seedance-1-0-lite-i2v-250428",
-        )
-        assert currency == "CNY"
-        assert amount == pytest.approx(10.00)
-
-
 class TestGrokCost:
     def test_default_model_per_second(self):
         calculator = CostCalculator()

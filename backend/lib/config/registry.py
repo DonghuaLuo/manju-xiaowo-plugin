@@ -249,14 +249,6 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 resolutions=["480p", "720p", "1080p"],
                 max_reference_images=0,
             ),
-            "doubao-seedance-1-0-lite-i2v-250428": ModelInfo(
-                display_name="Seedance 1.0 Lite I2V",
-                media_type="video",
-                capabilities=["text_to_video", "image_to_video", "seed_control", "flex_tier"],
-                supported_durations=list(range(2, 13)),
-                resolutions=["480p", "720p", "1080p"],
-                max_reference_images=4,
-            ),
         },
         default_base_url=ARK_BASE_URL,
     ),
@@ -522,3 +514,20 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         },
     ),
 }
+
+
+RETIRED_PROVIDER_MODELS: dict[str, frozenset[str]] = {
+    "ark": frozenset(
+        {
+            "doubao-seedance-1-0-lite-i2v",
+            "doubao-seedance-1-0-lite-i2v-250219",
+            "doubao-seedance-1-0-lite-i2v-250428",
+            "doubao-seedance-1-0-lite-t2v-250219",
+            "doubao-seedance-1-0-lite-t2v-250428",
+        }
+    ),
+}
+
+
+def is_retired_provider_model(provider_id: str, model_id: str) -> bool:
+    return model_id in RETIRED_PROVIDER_MODELS.get(provider_id, frozenset())

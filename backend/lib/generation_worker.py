@@ -521,4 +521,9 @@ class GenerationWorker:
             logger.info("任务完成 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
         except Exception as exc:
             logger.exception("任务失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
-            await self.queue.mark_task_failed(task_id, str(exc))
+            from lib.friendly_errors import summarize_generation_error
+
+            await self.queue.mark_task_failed(
+                task_id,
+                summarize_generation_error(exc, provider_id=provider_id, task=task),
+            )

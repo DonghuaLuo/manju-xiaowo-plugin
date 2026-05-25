@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lib.app_data_dir import app_data_dir
-from lib.config.registry import PROVIDER_REGISTRY
+from lib.config.registry import PROVIDER_REGISTRY, is_retired_provider_model
 from lib.config.service import (
     _DEFAULT_IMAGE_BACKEND,
     _DEFAULT_TEXT_BACKEND,
@@ -209,7 +209,10 @@ class ConfigResolver:
     async def _resolve_default_video_backend(self, svc: ConfigService, session: AsyncSession) -> tuple[str, str]:
         raw = await svc.get_setting("default_video_backend", "")
         if raw and "/" in raw:
-            return ConfigService._parse_backend(raw, _DEFAULT_VIDEO_BACKEND)
+            provider_id, model_id = ConfigService._parse_backend(raw, _DEFAULT_VIDEO_BACKEND)
+            if not is_retired_provider_model(provider_id, model_id):
+                return provider_id, model_id
+            logger.warning("忽略已下线视频模型配置: %s/%s", provider_id, model_id)
         return await self._auto_resolve_backend(svc, session, "video")
 
     async def _resolve_video_backend(
@@ -234,7 +237,10 @@ class ConfigResolver:
         if project is not None:
             project_val = project.get("video_backend")
             if project_val and isinstance(project_val, str) and "/" in project_val:
-                return ConfigService._parse_backend(project_val, _DEFAULT_VIDEO_BACKEND)
+                provider_id, model_id = ConfigService._parse_backend(project_val, _DEFAULT_VIDEO_BACKEND)
+                if not is_retired_provider_model(provider_id, model_id):
+                    return provider_id, model_id
+                logger.warning("忽略项目中的已下线视频模型配置: %s/%s", provider_id, model_id)
         return await self._resolve_default_video_backend(svc, session)
 
     async def _resolve_video_capabilities(

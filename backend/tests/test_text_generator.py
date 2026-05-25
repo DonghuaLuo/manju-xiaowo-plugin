@@ -80,6 +80,39 @@ class TestTextGenerator:
         assert item["cost_amount"] == 0.0
         assert "API 超时" in item["error_message"]
 
+    async def test_generate_raises_friendly_quota_error(self, tracker):
+        backend = _make_backend(provider="openai", model="gpt-image-1")
+        backend.generate = AsyncMock(side_effect=RuntimeError("Error code: insufficient_quota - billing quota exceeded"))
+        gen = TextGenerator(backend, tracker)
+
+        with pytest.raises(RuntimeError, match="用量、余额或配额已达上限"):
+            await gen.generate(
+                TextGenerationRequest(prompt="测试"),
+                project_name="demo",
+            )
+
+        calls = await tracker.get_calls(project_name="demo")
+        item = calls["items"][0]
+        assert "用量、余额或配额已达上限" in item["error_message"]
+        assert "供应商：openai" in item["error_message"]
+        assert "模型：gpt-image-1" in item["error_message"]
+
+    async def test_generate_keeps_model_not_found_error(self, tracker):
+        raw = "InvalidEndpointOrModel.NotFound: 模型不存在，或当前账号没有访问权限"
+        backend = _make_backend(provider="ark", model="doubao-seedance-1-0-lite-i2v-250428")
+        backend.generate = AsyncMock(side_effect=RuntimeError(raw))
+        gen = TextGenerator(backend, tracker)
+
+        with pytest.raises(RuntimeError, match="InvalidEndpointOrModel"):
+            await gen.generate(
+                TextGenerationRequest(prompt="测试"),
+                project_name="demo",
+            )
+
+        calls = await tracker.get_calls(project_name="demo")
+        item = calls["items"][0]
+        assert item["error_message"] == raw
+
     async def test_generate_without_project_name(self, tracker):
         backend = _make_backend()
         gen = TextGenerator(backend, tracker)

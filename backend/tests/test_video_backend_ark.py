@@ -399,7 +399,6 @@ class TestArkModelCapabilities:
         for model in (
             "doubao-seedance-1-0-pro-250528",
             "doubao-seedance-1-0-pro-fast-251015",
-            "doubao-seedance-1-0-lite-i2v-250428",
         ):
             with patch("lib.video_backends.ark.create_ark_client", return_value=MagicMock()):
                 b = ArkVideoBackend(api_key="test", model=model)
@@ -412,7 +411,6 @@ class TestArkModelCapabilities:
         expected = {
             "doubao-seedance-1-0-pro-250528": (True, False, 0),
             "doubao-seedance-1-0-pro-fast-251015": (False, False, 0),
-            "doubao-seedance-1-0-lite-i2v-250428": (True, True, 4),
         }
         for model, (last_frame, reference_images, max_reference_images) in expected.items():
             with patch("lib.video_backends.ark.create_ark_client", return_value=MagicMock()):

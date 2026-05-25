@@ -54,7 +54,6 @@ class ArkVideoBackend:
         "doubao-seedance-2.0-fast": _SEEDANCE_2_BASE_CAPABILITIES,
         "doubao-seedance-1-0-pro-250528": _SEEDANCE_1_BASE_CAPABILITIES,
         "doubao-seedance-1-0-pro-fast-251015": _SEEDANCE_1_BASE_CAPABILITIES,
-        "doubao-seedance-1-0-lite-i2v-250428": _SEEDANCE_1_BASE_CAPABILITIES,
     }
 
     _DEFAULT_CAPABILITIES: set[VideoCapability] = {
@@ -97,8 +96,6 @@ class ArkVideoBackend:
             return VideoCapabilities(first_frame=True, last_frame=False, reference_images=False, max_reference_images=0)
         if "seedance-1-0-pro" in model_lower:
             return VideoCapabilities(first_frame=True, last_frame=True, reference_images=False, max_reference_images=0)
-        if "seedance-1-0-lite-i2v" in model_lower:
-            return VideoCapabilities(first_frame=True, last_frame=True, reference_images=True, max_reference_images=4)
         return VideoCapabilities()
 
     def _effective_generate_audio(self, request: VideoGenerationRequest) -> bool:

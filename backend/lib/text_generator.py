@@ -69,9 +69,19 @@ class TextGenerator:
             )
             return result
         except Exception as e:
+            logger.exception("文本生成失败 (provider=%s, model=%s)", self.backend.name, self.backend.model)
+            from lib.friendly_errors import summarize_generation_error
+
+            friendly_error = summarize_generation_error(
+                e,
+                provider_id=self.backend.name,
+                task={"payload": {"model": self.backend.model}},
+            )
             await self.usage_tracker.finish_call(
                 call_id,
                 status="failed",
-                error_message=str(e)[:500],
+                error_message=friendly_error[:500],
             )
+            if friendly_error != str(e):
+                raise RuntimeError(friendly_error) from e
             raise

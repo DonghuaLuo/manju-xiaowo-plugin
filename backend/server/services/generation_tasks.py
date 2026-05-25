@@ -1287,11 +1287,17 @@ async def execute_grid_task(
         grid.status = "completed"
         grid_manager.save(grid)
 
-    except Exception:
+    except Exception as exc:
         grid.status = "failed"
         error_traceback = traceback.format_exc()
         print(error_traceback, flush=True)
-        grid.error_message = error_traceback
+        from lib.friendly_errors import summarize_generation_error
+
+        grid.error_message = summarize_generation_error(
+            exc,
+            provider_id=grid.provider or None,
+            task={"payload": payload},
+        )
         grid_manager.save(grid)
         raise
 

@@ -146,6 +146,20 @@ class TestDefaultBackends:
         result = await resolver._resolve_default_video_backend(fake_svc, None)
         assert result == ("ark", "doubao-seedance-1-5-pro")
 
+    async def test_retired_default_video_backend_falls_back_to_auto_resolve(self):
+        """DB 里保存了已下线模型时，不再继续返回该模型。"""
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(
+            settings={"default_video_backend": "ark/doubao-seedance-1-0-lite-i2v-250428"},
+        )
+        factory, engine = await _make_session()
+        try:
+            async with factory() as session:
+                result = await resolver._resolve_default_video_backend(fake_svc, session)
+        finally:
+            await engine.dispose()
+        assert result != ("ark", "doubao-seedance-1-0-lite-i2v-250428")
+
     async def test_video_backend_auto_resolve(self):
         """DB 无值时走 auto-resolve，选第一个 ready 供应商的默认 video 模型。"""
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -419,6 +433,18 @@ class TestVideoBackendThreeLevelPriority:
             result = await resolver._resolve_video_backend(fake_svc, None, "demo")
         assert result == ("grok", "grok-imagine-video")
 
+    async def test_retired_project_override_falls_back_to_system_setting(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(
+            settings={"default_video_backend": "grok/grok-imagine-video"},
+        )
+        with patch("lib.config.resolver.get_project_manager") as mock_pm:
+            mock_pm.return_value.load_project.return_value = {
+                "video_backend": "ark/doubao-seedance-1-0-lite-i2v-250428",
+            }
+            result = await resolver._resolve_video_backend(fake_svc, None, "demo")
+        assert result == ("grok", "grok-imagine-video")
+
     async def test_no_project_name_uses_system_setting(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(
@@ -471,25 +497,6 @@ class TestVideoCapabilities:
         assert caps["max_duration"] == 8
         # normalize("gemini-aistudio") -> "gemini"，查 PROVIDER_MAX_REFS["gemini"]
         assert caps["max_reference_images"] == 3
-
-    async def test_registry_model_level_max_reference_images_overrides_provider_default(self):
-        resolver = ConfigResolver.__new__(ConfigResolver)
-        fake_svc = _FakeConfigService(settings={})
-        factory, engine = await _make_session()
-        try:
-            async with factory() as session:
-                with patch("lib.config.resolver.get_project_manager") as mock_pm:
-                    mock_pm.return_value.load_project.return_value = {
-                        "video_backend": "ark/doubao-seedance-1-0-lite-i2v-250428",
-                    }
-                    caps = await resolver._resolve_video_capabilities(fake_svc, session, "demo")
-        finally:
-            await engine.dispose()
-        assert caps["provider_id"] == "ark"
-        assert caps["model"] == "doubao-seedance-1-0-lite-i2v-250428"
-        assert caps["supported_durations"] == list(range(2, 13))
-        assert caps["max_duration"] == 12
-        assert caps["max_reference_images"] == 4
 
     async def test_registry_model_level_zero_reference_images_is_preserved(self):
         resolver = ConfigResolver.__new__(ConfigResolver)

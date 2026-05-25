@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from lib.friendly_errors import summarize_generation_error
 from lib.generation_worker import (
     DEFAULT_PROVIDER,
     GenerationWorker,
@@ -272,6 +273,39 @@ class TestGenerationWorker:
         assert queue.failed and queue.failed[0][0] == "t2"
 
     @pytest.mark.asyncio
+    async def test_process_task_persists_friendly_quota_error(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _raise(_task):
+            raise RuntimeError(
+                "Ark 视频生成失败: ContentGenerationError(message='Your account [2100778485] has reached the "
+                "set inference limit for the [doubao-seedance-1-0-pro] model, and the model service has been "
+                "paused. To continue using this model, please visit the Model Activation page to adjust or close "
+                'the "Safe Experience Mode". Request id: 02177967014802800000000000000000000ffffac15d1c830f90a\', '
+                "code='SetLimitExceeded')"
+            )
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _raise)
+        await worker._process_task(
+            {
+                "task_id": "t-quota",
+                "task_type": "video",
+                "media_type": "video",
+                "payload": {"video_provider": "ark"},
+            }
+        )
+
+        assert queue.failed and queue.failed[0][0] == "t-quota"
+        message = queue.failed[0][1]
+        assert "模型已达到后台设置的推理上限" in message
+        assert "Safe Experience Mode" in message
+        assert "供应商：ark" in message
+        assert "模型：doubao-seedance-1-0-pro" in message
+        assert "错误码：SetLimitExceeded" in message
+        assert "请求 ID：02177967014802800000000000000000000ffffac15d1c830f90a" in message
+
+    @pytest.mark.asyncio
     async def test_start_stop_run_loop_releases_lease(self):
         queue = _FakeQueue()
         worker = GenerationWorker(queue=queue)
@@ -382,3 +416,30 @@ class TestGenerationWorker:
             ],
             return_exceptions=True,
         )
+
+
+class TestFriendlyGenerationErrors:
+    def test_summarizes_generic_quota_errors(self):
+        message = summarize_generation_error(
+            "Error code: insufficient_quota - billing quota exceeded",
+            provider_id="openai",
+            task={"payload": {"model": "gpt-image-1"}},
+        )
+        assert "用量、余额或配额已达上限" in message
+        assert "供应商：openai" in message
+        assert "模型：gpt-image-1" in message
+
+    def test_summarizes_rate_limit_errors(self):
+        message = summarize_generation_error(
+            "429 Too Many Requests: rate limit exceeded",
+            provider_id="gemini-aistudio",
+        )
+        assert "请求频率或并发已超限" in message
+        assert "供应商：gemini-aistudio" in message
+
+    def test_keeps_model_not_found_errors_unchanged(self):
+        raw = "InvalidEndpointOrModel.NotFound: 模型不存在，或当前账号没有访问权限"
+        assert summarize_generation_error(raw, provider_id="ark") == raw
+
+    def test_passes_unknown_errors_through(self):
+        assert summarize_generation_error("boom") == "boom"

@@ -96,8 +96,10 @@ class TestProviderRegistry:
             "doubao-seedance-2-0-fast-260128",
             "doubao-seedance-1-0-pro-250528",
             "doubao-seedance-1-0-pro-fast-251015",
-            "doubao-seedance-1-0-lite-i2v-250428",
         }.issubset(video_models)
+        assert "doubao-seedance-1-0-lite-i2v-250428" not in video_models
+        assert "doubao-seedance-1-0-lite-i2v-250219" not in video_models
+        assert "doubao-seedance-1-0-lite-i2v" not in video_models
         assert "doubao-seedance-1-0-lite-t2v-250428" not in video_models
         # 2.0 系列应声明 video_extend 但不声明 flex_tier
         for mid in ("doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"):

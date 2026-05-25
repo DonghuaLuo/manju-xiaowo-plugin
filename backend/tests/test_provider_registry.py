@@ -50,24 +50,23 @@ def test_ark_agent_plan_model_id_format_differs_from_ark() -> None:
     assert not (ark_ids & agent_plan_ids), "ark vs ark-agent-plan 模型 ID 命名不同，不应重叠"
 
 
-def test_ark_seedance_1_0_supported_presets_present() -> None:
+def test_ark_seedance_1_0_supported_presets_exclude_retired_lite() -> None:
     ark_models = PROVIDER_REGISTRY["ark"].models
     assert "doubao-seedance-1-0-pro-250528" in ark_models
     assert "doubao-seedance-1-0-pro-fast-251015" in ark_models
-    assert "doubao-seedance-1-0-lite-i2v-250428" in ark_models
+    assert "doubao-seedance-1-0-lite-i2v-250428" not in ark_models
+    assert "doubao-seedance-1-0-lite-i2v-250219" not in ark_models
+    assert "doubao-seedance-1-0-lite-i2v" not in ark_models
     assert "doubao-seedance-1-0-lite-t2v-250428" not in ark_models
 
     pro = ark_models["doubao-seedance-1-0-pro-250528"]
     pro_fast = ark_models["doubao-seedance-1-0-pro-fast-251015"]
-    lite_i2v = ark_models["doubao-seedance-1-0-lite-i2v-250428"]
 
     assert "generate_audio" not in pro.capabilities
     assert "generate_audio" not in pro_fast.capabilities
-    assert "generate_audio" not in lite_i2v.capabilities
     assert pro.supported_durations == list(range(2, 13))
     assert pro.max_reference_images == 0
     assert pro_fast.max_reference_images == 0
-    assert lite_i2v.max_reference_images == 4
 
 
 def test_ark_agent_plan_backend_registered() -> None:
