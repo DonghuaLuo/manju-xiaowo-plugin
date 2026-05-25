@@ -14,6 +14,7 @@ class ModelInfo:
     supported_durations: list[int] = field(default_factory=list)
     duration_resolution_constraints: dict[str, list[int]] = field(default_factory=dict)
     resolutions: list[str] = field(default_factory=list)
+    max_reference_images: int | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,30 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "seed_control", "video_extend"],
                 supported_durations=list(range(4, 16)),
                 resolutions=["480p", "720p", "1080p"],
+            ),
+            "doubao-seedance-1-0-pro-250528": ModelInfo(
+                display_name="Seedance 1.0 Pro",
+                media_type="video",
+                capabilities=["text_to_video", "image_to_video", "seed_control", "flex_tier"],
+                supported_durations=list(range(2, 13)),
+                resolutions=["480p", "720p", "1080p"],
+                max_reference_images=0,
+            ),
+            "doubao-seedance-1-0-pro-fast-251015": ModelInfo(
+                display_name="Seedance 1.0 Pro Fast",
+                media_type="video",
+                capabilities=["text_to_video", "image_to_video", "seed_control", "flex_tier"],
+                supported_durations=list(range(2, 13)),
+                resolutions=["480p", "720p", "1080p"],
+                max_reference_images=0,
+            ),
+            "doubao-seedance-1-0-lite-i2v-250428": ModelInfo(
+                display_name="Seedance 1.0 Lite I2V",
+                media_type="video",
+                capabilities=["text_to_video", "image_to_video", "seed_control", "flex_tier"],
+                supported_durations=list(range(2, 13)),
+                resolutions=["480p", "720p", "1080p"],
+                max_reference_images=4,
             ),
         },
         default_base_url=ARK_BASE_URL,

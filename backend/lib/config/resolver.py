@@ -300,7 +300,15 @@ class ConfigResolver:
 
         max_duration = max(supported_durations)
         normalized_provider = normalize_provider_id(provider_id)
-        max_reference_images = PROVIDER_MAX_REFS.get(normalized_provider, DEFAULT_MAX_REFS)
+        model_max_reference_images: int | None = None
+        if source == "registry":
+            model_max_reference_images = model_info.max_reference_images
+
+        max_reference_images = (
+            model_max_reference_images
+            if model_max_reference_images is not None
+            else PROVIDER_MAX_REFS.get(normalized_provider, DEFAULT_MAX_REFS)
+        )
 
         default_duration: int | None = None
         content_mode: str | None = None

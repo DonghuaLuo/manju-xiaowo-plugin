@@ -66,6 +66,17 @@ def _make_mock_svc(ready_providers: list[str] | None = None) -> ConfigService:
 
 
 class TestBuildOptionsCustomModels:
+    async def test_ready_ark_includes_supported_seedance_1_0_presets(self, session):
+        db_session, _ = session
+        mock_svc = _make_mock_svc(["ark"])
+        options = await _build_options(mock_svc, db_session)
+
+        video_backends = set(options["video_backends"])
+        assert "ark/doubao-seedance-1-0-pro-250528" in video_backends
+        assert "ark/doubao-seedance-1-0-pro-fast-251015" in video_backends
+        assert "ark/doubao-seedance-1-0-lite-i2v-250428" in video_backends
+        assert "ark/doubao-seedance-1-0-lite-t2v-250428" not in video_backends
+
     async def test_includes_enabled_text_model(self, session):
         db_session, factory = session
         repo = CustomProviderRepository(db_session)

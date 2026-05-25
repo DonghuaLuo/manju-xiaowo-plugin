@@ -40,11 +40,21 @@ class ArkVideoBackend:
         VideoCapability.SEED_CONTROL,
     }
 
+    _SEEDANCE_1_BASE_CAPABILITIES: set[VideoCapability] = {
+        VideoCapability.TEXT_TO_VIDEO,
+        VideoCapability.IMAGE_TO_VIDEO,
+        VideoCapability.SEED_CONTROL,
+        VideoCapability.FLEX_TIER,
+    }
+
     _MODEL_CAPABILITIES: dict[str, set[VideoCapability]] = {
         "doubao-seedance-2-0-260128": _SEEDANCE_2_BASE_CAPABILITIES,
         "doubao-seedance-2-0-fast-260128": _SEEDANCE_2_BASE_CAPABILITIES,
         "doubao-seedance-2.0": _SEEDANCE_2_BASE_CAPABILITIES,
         "doubao-seedance-2.0-fast": _SEEDANCE_2_BASE_CAPABILITIES,
+        "doubao-seedance-1-0-pro-250528": _SEEDANCE_1_BASE_CAPABILITIES,
+        "doubao-seedance-1-0-pro-fast-251015": _SEEDANCE_1_BASE_CAPABILITIES,
+        "doubao-seedance-1-0-lite-i2v-250428": _SEEDANCE_1_BASE_CAPABILITIES,
     }
 
     _DEFAULT_CAPABILITIES: set[VideoCapability] = {
@@ -83,7 +93,16 @@ class ArkVideoBackend:
         model_lower = self._model.lower()
         if "seedance-2" in model_lower or "seedance2" in model_lower:
             return VideoCapabilities(last_frame=True, reference_images=True, max_reference_images=9)
+        if "seedance-1-0-pro-fast" in model_lower:
+            return VideoCapabilities(first_frame=True, last_frame=False, reference_images=False, max_reference_images=0)
+        if "seedance-1-0-pro" in model_lower:
+            return VideoCapabilities(first_frame=True, last_frame=True, reference_images=False, max_reference_images=0)
+        if "seedance-1-0-lite-i2v" in model_lower:
+            return VideoCapabilities(first_frame=True, last_frame=True, reference_images=True, max_reference_images=4)
         return VideoCapabilities()
+
+    def _effective_generate_audio(self, request: VideoGenerationRequest) -> bool:
+        return bool(request.generate_audio and VideoCapability.GENERATE_AUDIO in self._capabilities)
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         """生成视频。任务创建和轮询阶段分离重试，避免瞬态错误导致重建任务。"""
@@ -143,9 +162,13 @@ class ArkVideoBackend:
             "content": content,
             "ratio": request.aspect_ratio,
             "duration": request.duration_seconds,
-            "generate_audio": request.generate_audio,
             "watermark": False,
         }
+        effective_generate_audio = self._effective_generate_audio(request)
+        if VideoCapability.GENERATE_AUDIO in self._capabilities:
+            create_params["generate_audio"] = effective_generate_audio
+        else:
+            logger.info("Ark 模型 %s 不支持 generate_audio，已跳过音频参数", self._model)
         if request.resolution is not None:
             create_params["resolution"] = request.resolution
         # seedance-2.0 等模型不接受 service_tier，仅在声明 FLEX_TIER 能力时传入
@@ -221,5 +244,5 @@ class ArkVideoBackend:
             seed=seed,
             usage_tokens=usage_tokens,
             task_id=task_id,
-            generate_audio=request.generate_audio,
+            generate_audio=self._effective_generate_audio(request),
         )

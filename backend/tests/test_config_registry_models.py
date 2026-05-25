@@ -90,9 +90,15 @@ class TestProviderRegistry:
     def test_ark_video_models_include_seedance_2(self):
         meta = PROVIDER_REGISTRY["ark"]
         video_models = {mid: m for mid, m in meta.models.items() if m.media_type == "video"}
-        assert len(video_models) == 3
-        assert "doubao-seedance-2-0-260128" in video_models
-        assert "doubao-seedance-2-0-fast-260128" in video_models
+        assert {
+            "doubao-seedance-1-5-pro-251215",
+            "doubao-seedance-2-0-260128",
+            "doubao-seedance-2-0-fast-260128",
+            "doubao-seedance-1-0-pro-250528",
+            "doubao-seedance-1-0-pro-fast-251015",
+            "doubao-seedance-1-0-lite-i2v-250428",
+        }.issubset(video_models)
+        assert "doubao-seedance-1-0-lite-t2v-250428" not in video_models
         # 2.0 系列应声明 video_extend 但不声明 flex_tier
         for mid in ("doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"):
             caps = video_models[mid].capabilities

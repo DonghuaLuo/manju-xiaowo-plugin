@@ -395,6 +395,34 @@ class TestArkModelCapabilities:
         assert VideoCapability.FLEX_TIER in caps
         assert VideoCapability.VIDEO_EXTEND not in caps
 
+    def test_seedance_1_0_models_disable_audio_and_keep_flex_tier(self):
+        for model in (
+            "doubao-seedance-1-0-pro-250528",
+            "doubao-seedance-1-0-pro-fast-251015",
+            "doubao-seedance-1-0-lite-i2v-250428",
+        ):
+            with patch("lib.video_backends.ark.create_ark_client", return_value=MagicMock()):
+                b = ArkVideoBackend(api_key="test", model=model)
+            caps = b.capabilities
+            assert VideoCapability.FLEX_TIER in caps
+            assert VideoCapability.GENERATE_AUDIO not in caps
+            assert VideoCapability.VIDEO_EXTEND not in caps
+
+    def test_seedance_1_0_video_capabilities(self):
+        expected = {
+            "doubao-seedance-1-0-pro-250528": (True, False, 0),
+            "doubao-seedance-1-0-pro-fast-251015": (False, False, 0),
+            "doubao-seedance-1-0-lite-i2v-250428": (True, True, 4),
+        }
+        for model, (last_frame, reference_images, max_reference_images) in expected.items():
+            with patch("lib.video_backends.ark.create_ark_client", return_value=MagicMock()):
+                b = ArkVideoBackend(api_key="test", model=model)
+            caps = b.video_capabilities
+            assert caps.first_frame is True
+            assert caps.last_frame is last_frame
+            assert caps.reference_images is reference_images
+            assert caps.max_reference_images == max_reference_images
+
     def test_unknown_model_gets_default_capabilities(self):
         with patch("lib.video_backends.ark.create_ark_client", return_value=MagicMock()):
             b = ArkVideoBackend(api_key="test", model="some-future-model")
@@ -474,6 +502,41 @@ class TestArkServiceTierParam:
 
         create_kwargs = backend._client.content_generation.tasks.create.call_args.kwargs
         assert create_kwargs.get("service_tier") == "default"
+
+    async def test_seedance_1_0_does_not_send_generate_audio(self, tmp_path):
+        output = tmp_path / "out.mp4"
+        mock_client = MagicMock()
+        mock_client.content_generation = MagicMock()
+        mock_client.content_generation.tasks = MagicMock()
+
+        with patch("lib.video_backends.ark.create_ark_client", return_value=mock_client):
+            backend = ArkVideoBackend(api_key="test", model="doubao-seedance-1-0-pro-250528")
+        backend._client = mock_client
+
+        create_result = MagicMock()
+        create_result.id = "cgt-seedance10"
+        backend._client.content_generation.tasks.create = MagicMock(return_value=create_result)
+
+        get_result = MagicMock()
+        get_result.status = "succeeded"
+        get_result.content = MagicMock()
+        get_result.content.video_url = "https://cdn.example.com/v.mp4"
+        get_result.seed = None
+        get_result.usage = None
+        backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
+
+        patcher = _mock_httpx_stream()
+        try:
+            request = VideoGenerationRequest(prompt="test", output_path=output, generate_audio=True)
+            with patch("lib.video_backends.base.asyncio.sleep", new_callable=AsyncMock):
+                result = await backend.generate(request)
+        finally:
+            patcher.stop()
+
+        create_kwargs = backend._client.content_generation.tasks.create.call_args.kwargs
+        assert "generate_audio" not in create_kwargs
+        assert create_kwargs.get("service_tier") == "default"
+        assert result.generate_audio is False
 
 
 class TestArkVideoBackendBaseUrl:

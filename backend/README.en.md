@@ -158,7 +158,7 @@ ArcReel supports multiple built-in and custom providers through unified `ImageBa
 | Provider | Available Models | Capabilities | Duration (s) | Billing |
 |----------|-----------------|--------------|--------------|---------|
 | **Gemini** (Google) | Veo 3.1, Veo 3.1 Fast, Veo 3.1 Lite | Text-to-video, Image-to-video, Video extension, Negative prompts | 4 / 6 / 8 | Per-resolution × duration lookup (USD) |
-| **Volcengine Ark** | Seedance 2.0, Seedance 2.0 Fast, Seedance 1.5 Pro | Text-to-video, Image-to-video, Video extension, Audio generation, Seed control, Offline inference | 4–15 | Per-token usage (CNY) |
+| **Volcengine Ark** | Seedance 2.0, Seedance 2.0 Fast, Seedance 1.5 Pro, Seedance 1.0 Pro, Seedance 1.0 Pro Fast, Seedance 1.0 Lite I2V | Text-to-video, image-to-video, video extension, audio generation, seed control, offline inference (varies by model) | 2–15 (varies by model) | Per-token usage (CNY) |
 | **Grok** (xAI) | Grok Imagine Video | Text-to-video, Image-to-video | 1–15 | Per-second (USD) |
 | **OpenAI** | Sora 2, Sora 2 Pro | Text-to-video, Image-to-video | 4 / 8 / 12 | Per-second (USD) |
 | **Vidu** (Shengshu) | Vidu Q3 Turbo, Vidu Q3 Pro, Vidu Q3 (Reference), Vidu 2.0 | Text-to-video, Image-to-video, Reference-to-video, Audio generation, Seed control | 1–16 (Reference-to-video 3–16; 2.0: 4 / 8) | Credits-based (CNY) |
@@ -253,7 +253,7 @@ flowchart TB
 | **Backend** | FastAPI, Python 3.12+, uvicorn, Pydantic 2 |
 | **AI Agents** | Claude Agent SDK (Skill + Subagent multi-agent architecture) |
 | **Image Generation** | Gemini (`google-genai`), Volcengine Ark (`volcengine-python-sdk[ark]`), Grok (`xai-sdk`), OpenAI (`openai`), Vidu (`httpx`) |
-| **Video Generation** | Gemini Veo 3.1 (`google-genai`), Volcengine Ark Seedance 2.0/1.5 (`volcengine-python-sdk[ark]`), Grok (`xai-sdk`), OpenAI Sora 2 (`openai`), Vidu Q3 (`httpx`) |
+| **Video Generation** | Gemini Veo 3.1 (`google-genai`), Volcengine Ark Seedance 2.0/1.5/1.0 (`volcengine-python-sdk[ark]`), Grok (`xai-sdk`), OpenAI Sora 2 (`openai`), Vidu Q3 (`httpx`) |
 | **Text Generation** | Gemini (`google-genai`), Volcengine Ark (`volcengine-python-sdk[ark]`), Grok (`xai-sdk`), OpenAI (`openai`), Instructor (structured output fallback) |
 | **Media Processing** | FFmpeg, Pillow |
 | **ORM & Database** | SQLAlchemy 2.0 (async), Alembic, aiosqlite, asyncpg — SQLite (default) / PostgreSQL (production) |

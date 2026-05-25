@@ -472,6 +472,40 @@ class TestVideoCapabilities:
         # normalize("gemini-aistudio") -> "gemini"，查 PROVIDER_MAX_REFS["gemini"]
         assert caps["max_reference_images"] == 3
 
+    async def test_registry_model_level_max_reference_images_overrides_provider_default(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(settings={})
+        factory, engine = await _make_session()
+        try:
+            async with factory() as session:
+                with patch("lib.config.resolver.get_project_manager") as mock_pm:
+                    mock_pm.return_value.load_project.return_value = {
+                        "video_backend": "ark/doubao-seedance-1-0-lite-i2v-250428",
+                    }
+                    caps = await resolver._resolve_video_capabilities(fake_svc, session, "demo")
+        finally:
+            await engine.dispose()
+        assert caps["provider_id"] == "ark"
+        assert caps["model"] == "doubao-seedance-1-0-lite-i2v-250428"
+        assert caps["supported_durations"] == list(range(2, 13))
+        assert caps["max_duration"] == 12
+        assert caps["max_reference_images"] == 4
+
+    async def test_registry_model_level_zero_reference_images_is_preserved(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(settings={})
+        factory, engine = await _make_session()
+        try:
+            async with factory() as session:
+                with patch("lib.config.resolver.get_project_manager") as mock_pm:
+                    mock_pm.return_value.load_project.return_value = {
+                        "video_backend": "ark/doubao-seedance-1-0-pro-250528",
+                    }
+                    caps = await resolver._resolve_video_capabilities(fake_svc, session, "demo")
+        finally:
+            await engine.dispose()
+        assert caps["max_reference_images"] == 0
+
     async def test_reads_project_default_duration_and_modes(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
         fake_svc = _FakeConfigService(settings={})

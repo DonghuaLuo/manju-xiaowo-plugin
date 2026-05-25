@@ -6,6 +6,7 @@ from lib.config.registry import PROVIDER_REGISTRY, ModelInfo
 def test_model_info_has_resolutions_default_empty_list():
     info = ModelInfo(display_name="X", media_type="text", capabilities=[])
     assert info.resolutions == []
+    assert info.max_reference_images is None
 
 
 def test_all_image_video_models_have_resolutions_populated():
