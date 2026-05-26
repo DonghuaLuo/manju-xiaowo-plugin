@@ -134,8 +134,6 @@ MESSAGES = {
     "ref_unit_ids_mismatch": "unit_ids 与现有单元不匹配",
     "ref_script_missing": "该集绑定的剧本文件不存在",
     "ref_script_rebound": "该集剧本绑定已变更，请重试",
-    "about_update_check_failed": "检查更新失败，请稍后重试",
-    "about_version_read_failed": "读取应用版本失败",
     # Image Capability
     "image_endpoint_mismatch_no_i2i": "模型 {model} 仅支持文生图（不支持 /v1/images/edits）；请去掉参考图或换一个支持图生图的模型",
     "image_endpoint_mismatch_no_t2i": "模型 {model} 仅支持图生图（必须传参考图）；请提供参考图或换一个支持文生图的模型",

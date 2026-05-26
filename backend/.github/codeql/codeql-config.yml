@@ -1,4 +1,0 @@
-name: "ArcReel CodeQL Config"
-
-paths-ignore:
-  - alembic/versions

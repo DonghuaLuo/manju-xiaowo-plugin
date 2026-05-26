@@ -134,8 +134,6 @@ MESSAGES = {
     "ref_unit_ids_mismatch": "unit_ids do not match existing units",
     "ref_script_missing": "The script file bound to this episode does not exist",
     "ref_script_rebound": "This episode's script binding changed, please retry",
-    "about_update_check_failed": "Failed to check for updates, please try again later",
-    "about_version_read_failed": "Failed to read app version",
     # Image Capability
     "image_endpoint_mismatch_no_i2i": "Model {model} only supports text-to-image (no /v1/images/edits); remove reference images or pick a model that supports image edits",
     "image_endpoint_mismatch_no_t2i": "Model {model} only supports image-to-image (reference images required); supply reference images or pick a model that supports text-to-image",

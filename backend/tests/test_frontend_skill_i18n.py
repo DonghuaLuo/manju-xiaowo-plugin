@@ -20,9 +20,10 @@ import pytest
 
 from lib.profile_manifest import VALID_CONTENT_MODES
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_ROOT = REPO_ROOT / "agent_runtime_profile" / ".claude" / "skills"
-DASHBOARD_TS = "frontend/src/i18n/{locale}/dashboard.ts"
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
+SKILLS_ROOT = BACKEND_ROOT / "agent_runtime_profile" / ".claude" / "skills"
+DASHBOARD_TS = "src/i18n/{locale}/dashboard.ts"
 LOCALES = ("zh", "en", "vi")
 
 _SKILL_KEY_RE = re.compile(r"""['"](skill_name_[a-z0-9_]+)['"]\s*:""")
@@ -84,7 +85,7 @@ def _user_invocable_skill_ids() -> set[str]:
 
 
 def _load_skill_name_keys(locale: str) -> set[str]:
-    path = REPO_ROOT / DASHBOARD_TS.format(locale=locale)
+    path = FRONTEND_ROOT / DASHBOARD_TS.format(locale=locale)
     text = path.read_text(encoding="utf-8")
     return set(_SKILL_KEY_RE.findall(text))
 

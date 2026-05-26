@@ -1,7 +1,4 @@
-"""参考视频 prompt 解析器：prompt ↔ Shot[]/references 双向转换。
-
-Spec: docs/superpowers/specs/2026-04-15-reference-to-video-mode-design.md §4.3
-"""
+"""参考视频 prompt 解析器：prompt ↔ Shot[]/references 双向转换。"""
 
 from __future__ import annotations
 

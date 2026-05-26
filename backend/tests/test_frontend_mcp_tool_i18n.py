@@ -17,8 +17,9 @@ import pytest
 
 from server.agent_runtime.sdk_tools import ARCREEL_MCP_TOOL_IDS
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DASHBOARD_TS = "frontend/src/i18n/{locale}/dashboard.ts"
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
+DASHBOARD_TS = "src/i18n/{locale}/dashboard.ts"
 LOCALES = ("zh", "en", "vi")
 
 # Match either single- or double-quoted keys: 'tool_name_foo' or "tool_name_foo".
@@ -26,7 +27,7 @@ _KEY_RE = re.compile(r"""['"](tool_name_[a-z0-9_]+)['"]\s*:""")
 
 
 def _load_tool_name_keys(locale: str) -> set[str]:
-    path = REPO_ROOT / DASHBOARD_TS.format(locale=locale)
+    path = FRONTEND_ROOT / DASHBOARD_TS.format(locale=locale)
     text = path.read_text(encoding="utf-8")
     return set(_KEY_RE.findall(text))
 

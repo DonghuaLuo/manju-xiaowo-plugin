@@ -1,7 +1,7 @@
 /**
  * ImageModelDualSelect — 渐进式图片模型选择器（T2I + I2I）。
  *
- * 设计意图（spec: docs/superpowers/specs/2026-05-02-openai-image-endpoint-split-design.md）：
+ * 设计意图：
  * - 默认渲染单一下拉，列出所有 image backend 选项。
  * - 选中模型 caps ⊇ {T2I, I2I}（双能力 / 通配） → 仍 1 个下拉，valueT2I 与 valueI2I 同值写入。
  * - 选中模型 caps 仅 T2I → 当前下拉作为 T2I 槽；下方动态露出第 2 个 I2I 下拉，仅列 caps∋I2I 的模型。
