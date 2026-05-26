@@ -1,10 +1,13 @@
-import { Sparkles, ImageIcon, Film } from "lucide-react";
+import { useState } from "react";
+import { PluginSDK } from "xiaowo-sdk";
+import { Sparkles, ImageIcon, Film, Maximize2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { ImageFlipReveal } from "@/components/ui/ImageFlipReveal";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
+import { VideoLightbox } from "@/components/ui/VideoLightbox";
 import { formatCost } from "@/utils/cost-format";
 import type { CostBreakdown } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
@@ -52,7 +55,8 @@ export function MediaCard({
   onGenerate,
   onRestore,
 }: MediaCardProps) {
-  const { t } = useTranslation("dashboard");
+  const { t } = useTranslation(["dashboard", "common"]);
+  const [videoLightboxOpen, setVideoLightboxOpen] = useState(false);
 
   const assetFp = useProjectsStore((s) =>
     assetPath ? s.getAssetFingerprint(assetPath) : null,
@@ -78,6 +82,16 @@ export function MediaCard({
         : t("media_generate_video");
   const resourceType: "storyboards" | "videos" =
     kind === "storyboard" ? "storyboards" : "videos";
+  const previewTitle = `${segmentId} ${title}`;
+
+  const openVideoLightbox = async () => {
+    try {
+      await PluginSDK.maximize();
+    } catch (error) {
+      console.warn("Failed to maximize plugin window before video preview", error);
+    }
+    setVideoLightboxOpen(true);
+  };
 
   return (
     <div>
@@ -103,7 +117,7 @@ export function MediaCard({
       {assetUrl ? (
         kind === "storyboard" ? (
           <PreviewableImageFrame src={assetUrl} alt={`${segmentId} ${title}`}>
-            <AspectFrame ratio={aspectRatio}>
+            <AspectFrame ratio={aspectRatio} className="relative">
               <ImageFlipReveal
                 src={assetUrl}
                 alt={`${segmentId} ${title}`}
@@ -121,18 +135,29 @@ export function MediaCard({
                 "0 16px 40px -16px oklch(0 0 0 / 0.7), 0 0 0 1px var(--color-hairline)",
             }}
           >
-            <AspectFrame ratio={aspectRatio}>
+            <AspectFrame ratio={aspectRatio} className="relative">
               {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 生成式预览视频暂无字幕源 */}
               <video
                 src={assetUrl}
                 poster={posterUrl ?? undefined}
                 controls
+                controlsList="nofullscreen nodownload noremoteplayback"
+                disablePictureInPicture
                 playsInline
                 // object-contain：卡片内容器比例一致时铺满，全屏到 16:9 屏幕时
                 // 9:16 视频会带左右黑边，避免被裁剪。
                 className="h-full w-full object-contain"
                 preload="metadata"
               />
+              <button
+                type="button"
+                onClick={() => void openVideoLightbox()}
+                aria-label={t("common:titlebar.maximize")}
+                title={t("common:titlebar.maximize")}
+                className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/90 shadow-lg shadow-black/25 backdrop-blur transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
             </AspectFrame>
           </div>
         )
@@ -179,6 +204,14 @@ export function MediaCard({
             </span>
           )}
         </button>
+      )}
+      {videoLightboxOpen && assetUrl && kind === "video" && (
+        <VideoLightbox
+          src={assetUrl}
+          poster={posterUrl}
+          title={previewTitle}
+          onClose={() => setVideoLightboxOpen(false)}
+        />
       )}
     </div>
   );

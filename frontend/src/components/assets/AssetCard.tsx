@@ -1,7 +1,8 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Edit2, Trash2, User as UserIcon, Landmark, Package } from "lucide-react";
 import { API } from "@/api";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { formatDate } from "@/utils/date-format";
 import type { Asset } from "@/types/asset";
 import { AssetThumb } from "./AssetThumb";
@@ -20,6 +21,7 @@ export const AssetCard = memo(AssetCardImpl);
 
 function AssetCardImpl({ asset, onEdit, onDelete }: Props) {
   const { t, i18n } = useTranslation("assets");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const Icon = TYPE_ICON[asset.type];
   const imageUrl = API.getGlobalAssetUrl(asset.image_path, asset.updated_at);
   const formattedDate = asset.updated_at
@@ -29,12 +31,28 @@ function AssetCardImpl({ asset, onEdit, onDelete }: Props) {
   return (
     <div className="group relative overflow-hidden rounded-[10px] border border-hairline-soft bg-bg-grad-a/55 transition-[transform,border-color] motion-safe:hover:-translate-y-0.5 hover:border-hairline">
       <div className="relative">
-        <AssetThumb
-          imageUrl={imageUrl}
-          alt={asset.name}
-          fallback={<Icon className="h-10 w-10 text-text-4" />}
-          variant="display"
-        />
+        {imageUrl ? (
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            aria-label={`${asset.name} 全屏预览`}
+            className="block w-full cursor-zoom-in text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <AssetThumb
+              imageUrl={imageUrl}
+              alt={asset.name}
+              fallback={<Icon className="h-10 w-10 text-text-4" />}
+              variant="display"
+            />
+          </button>
+        ) : (
+          <AssetThumb
+            imageUrl={imageUrl}
+            alt={asset.name}
+            fallback={<Icon className="h-10 w-10 text-text-4" />}
+            variant="display"
+          />
+        )}
         <span className="pointer-events-none absolute right-2 top-2 rounded border border-hairline bg-bg-grad-b/70 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-text-3 backdrop-blur-sm">
           {t(`type.${asset.type}`)}
         </span>
@@ -74,6 +92,13 @@ function AssetCardImpl({ asset, onEdit, onDelete }: Props) {
           </div>
         </div>
       </div>
+      {previewOpen && imageUrl && (
+        <ImageLightbox
+          src={imageUrl}
+          alt={asset.name}
+          onClose={() => setPreviewOpen(false)}
+        />
+      )}
     </div>
   );
 }

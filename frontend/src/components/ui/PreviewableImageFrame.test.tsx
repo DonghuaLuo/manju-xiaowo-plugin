@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PreviewableImageFrame } from "./PreviewableImageFrame";
 
 describe("PreviewableImageFrame", () => {
@@ -10,9 +10,9 @@ describe("PreviewableImageFrame", () => {
       </PreviewableImageFrame>,
     );
 
-    const trigger = screen.getByRole("button", { name: "示例图 全屏预览" });
+    const image = screen.getByRole("img", { name: "示例图" });
 
-    fireEvent.click(trigger);
+    fireEvent.click(image);
     expect(
       screen.getByRole("dialog", { name: "示例图 全屏预览" }),
     ).toBeInTheDocument();
@@ -22,7 +22,7 @@ describe("PreviewableImageFrame", () => {
       screen.queryByRole("dialog", { name: "示例图 全屏预览" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(trigger);
+    fireEvent.click(image);
     // backdrop button (click-to-close) is the sibling of the close button
     const backdropBtn = screen.getByRole("button", { name: "关闭全屏预览" });
     fireEvent.click(backdropBtn);
@@ -31,4 +31,30 @@ describe("PreviewableImageFrame", () => {
       screen.queryByRole("dialog", { name: "示例图 全屏预览" }),
     ).not.toBeInTheDocument();
   }, 10_000);
+
+  it("keeps the hover icon visual-only and ignores nested action buttons", () => {
+    const nestedAction = vi.fn();
+
+    render(
+      <PreviewableImageFrame src="/demo.png" alt="示例图">
+        <div>
+          <img src="/demo.png" alt="示例图" />
+          <button type="button" onClick={nestedAction}>
+            change
+          </button>
+        </div>
+      </PreviewableImageFrame>,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "示例图 全屏预览" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "change" }));
+
+    expect(nestedAction).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("dialog", { name: "示例图 全屏预览" }),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -1,10 +1,18 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Library, Search, Check } from "lucide-react";
 import { API } from "@/api";
 import type { Asset, AssetType } from "@/types/asset";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { GlassModal } from "@/components/ui/GlassModal";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
@@ -25,6 +33,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
   const [q, setQ] = useState("");
   const debouncedQ = useDebouncedValue(q, 250);
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map());
+  const [previewAsset, setPreviewAsset] = useState<{ src: string; alt: string } | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const titleId = useId();
@@ -91,6 +100,16 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
       else next.set(a.id, a);
       return next;
     });
+  };
+
+  const handleCardKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    asset: Asset,
+    disabled: boolean,
+  ) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggle(asset, disabled);
   };
 
   const titleKey = `picker_title_${type}` as const;
@@ -179,13 +198,18 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
             const dup = existingNames.has(a.name);
             const sel = selected.has(a.id);
             return (
-              <button
+              <div
                 key={a.id}
-                type="button"
-                disabled={dup}
-                aria-pressed={sel}
+                role="button"
+                tabIndex={dup ? -1 : 0}
+                aria-disabled={dup || undefined}
+                aria-pressed={dup ? undefined : sel}
                 onClick={() => toggle(a, dup)}
-                className="focus-ring relative rounded-lg p-2 text-left transition-colors disabled:cursor-not-allowed"
+                onKeyDown={(event) => handleCardKeyDown(event, a, dup)}
+                className={
+                  "focus-ring relative rounded-lg p-2 text-left transition-colors " +
+                  (dup ? "cursor-not-allowed " : "cursor-pointer ")
+                }
                 style={{
                   border: dup
                     ? "1px solid var(--color-hairline-soft)"
@@ -215,7 +239,22 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                   }
                 }}
               >
-                <AssetThumb imageUrl={url} alt={a.name} fallback="—" variant="picker" />
+                {url && !dup ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setPreviewAsset({ src: url, alt: a.name });
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    aria-label={`${a.name} 全屏预览`}
+                    className="block w-full cursor-zoom-in rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    <AssetThumb imageUrl={url} alt={a.name} fallback="—" variant="picker" />
+                  </button>
+                ) : (
+                  <AssetThumb imageUrl={url} alt={a.name} fallback="—" variant="picker" />
+                )}
                 <div
                   className="mt-1.5 truncate text-[12px] font-semibold"
                   style={{ color: "var(--color-text)" }}
@@ -258,7 +297,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                     {t("already_in_project")}
                   </span>
                 )}
-              </button>
+              </div>
             );
           })}
           {hasMore && (
@@ -307,6 +346,13 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
             )}
           </PrimaryButton>
         </div>
+        {previewAsset && (
+          <ImageLightbox
+            src={previewAsset.src}
+            alt={previewAsset.alt}
+            onClose={() => setPreviewAsset(null)}
+          />
+        )}
     </GlassModal>
   );
 }

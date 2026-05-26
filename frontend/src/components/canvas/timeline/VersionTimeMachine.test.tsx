@@ -142,5 +142,10 @@ describe("VersionTimeMachine", () => {
     const previewImage = await screen.findByAltText("版本 v1 预览");
     expect(previewImage).toHaveClass("object-contain");
     expect(previewImage.parentElement).toHaveClass("h-80");
+
+    fireEvent.click(previewImage);
+    expect(
+      screen.getByRole("dialog", { name: "版本 v1 预览 全屏预览" }),
+    ).toBeInTheDocument();
   });
 });

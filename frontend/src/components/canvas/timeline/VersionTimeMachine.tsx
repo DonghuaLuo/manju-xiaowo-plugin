@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, History } from "lucide-react";
 import { API, type VersionInfo } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { errMsg } from "@/utils/async";
 
 interface VersionTimeMachineProps {
@@ -62,6 +63,7 @@ export function VersionTimeMachine({
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
 
   // Reset version list when the underlying resource changes so it's re-fetched
   // on next open. Do NOT close the panel — if it's open and a new generation
@@ -75,6 +77,7 @@ export function VersionTimeMachine({
     setLoadedOnce(false);
     setSelectedVersion(null);
     setRestoringVersion(null);
+    setPreviewImage(null);
   }, [resourceFp, projectName, resourceId, resourceType]);
 
   // Fetch versions once when panel first opens
@@ -119,7 +122,10 @@ export function VersionTimeMachine({
   }
 
   // Close the panel
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    setOpen(false);
+    setPreviewImage(null);
+  }, []);
 
   // Compute ideal top position given the trigger rect and panel height
   const computeTop = useCallback(
@@ -328,7 +334,17 @@ export function VersionTimeMachine({
                           preload="none"
                         />
                       ) : (
-                        <div
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewImage({
+                              src: selectedInfo.file_url!,
+                              alt: t("version_preview_alt", {
+                                version: selectedInfo.version,
+                              }),
+                            })
+                          }
+                          aria-label={`${t("version_preview_alt", { version: selectedInfo.version })} 全屏预览`}
                           className={`mb-2 flex w-full items-center justify-center rounded-lg border border-gray-800 bg-gray-900/70 p-2 ${getImagePreviewHeightClass(resourceType)}`}
                         >
                           <img
@@ -336,7 +352,7 @@ export function VersionTimeMachine({
                             alt={t("version_preview_alt", { version: selectedInfo.version })}
                             className="max-h-full w-full object-contain"
                           />
-                        </div>
+                        </button>
                       ))}
 
                     {/* Prompt text */}
@@ -353,6 +369,13 @@ export function VersionTimeMachine({
           </div>,
           document.body,
         )}
+      {previewImage && (
+        <ImageLightbox
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,10 @@
-import { useEffect } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent,
+  type WheelEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { UI_LAYERS } from "@/utils/ui-layers";
@@ -10,7 +16,37 @@ export interface ImageLightboxProps {
   onClose: () => void;
 }
 
+interface ImageViewport {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+interface DragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+}
+
+const MIN_SCALE = 1;
+const MAX_SCALE = 6;
+const WHEEL_ZOOM_FACTOR = 1.12;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
+  const dragRef = useRef<DragState | null>(null);
+  const [viewport, setViewport] = useState<ImageViewport>({
+    scale: 1,
+    x: 0,
+    y: 0,
+  });
+  const [dragging, setDragging] = useState(false);
+
   useEscapeClose(onClose);
 
   useEffect(() => {
@@ -24,6 +60,68 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
   if (typeof document === "undefined") {
     return null;
   }
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.deltaY < 0 ? 1 : -1;
+
+    setViewport((current) => {
+      const nextScale = clamp(
+        current.scale * (direction > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR),
+        MIN_SCALE,
+        MAX_SCALE,
+      );
+
+      if (nextScale === MIN_SCALE) {
+        return { scale: MIN_SCALE, x: 0, y: 0 };
+      }
+
+      return {
+        ...current,
+        scale: nextScale,
+      };
+    });
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewport.x,
+      originY: viewport.y,
+    };
+    setDragging(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setViewport((current) => ({
+      ...current,
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    }));
+  };
+
+  const stopDragging = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
 
   return createPortal(
     <div className={`fixed inset-0 bg-slate-950/94 backdrop-blur-sm ${UI_LAYERS.modal}`}>
@@ -46,17 +144,30 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
         </button>
       </div>
 
-      <div className="flex h-full w-full items-center justify-center p-5 sm:p-8 lg:p-12">
+      <div className="flex h-full w-full items-center justify-center overflow-hidden p-5 sm:p-8 lg:p-12">
         <div
           role="dialog"
           aria-modal="true"
           aria-label={`${alt} 全屏预览`}
-          className="relative z-10 max-h-full max-w-full"
+          className={
+            "relative z-10 max-h-full max-w-full touch-none select-none " +
+            (dragging ? "cursor-grabbing" : "cursor-grab")
+          }
+          onWheel={handleWheel}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={stopDragging}
+          onPointerCancel={stopDragging}
         >
           <img
             src={src}
             alt={alt}
             className="max-h-[calc(100vh-3rem)] max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-black/35 object-contain shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:max-h-[calc(100vh-5rem)] sm:max-w-[calc(100vw-4rem)]"
+            draggable={false}
+            style={{
+              transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
+              transformOrigin: "center center",
+            }}
           />
         </div>
       </div>

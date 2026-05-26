@@ -1,4 +1,9 @@
-import { useState, type ReactNode } from "react";
+import {
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { ZoomIn } from "lucide-react";
 import { ImageLightbox } from "./ImageLightbox";
 
@@ -9,6 +14,18 @@ interface PreviewableImageFrameProps {
   buttonClassName?: string;
 }
 
+const INTERACTIVE_CHILD_SELECTOR =
+  "button,a,input,textarea,select,[role='button'],[role='link'],[tabindex]:not([tabindex='-1'])";
+
+function isNestedInteractiveTarget(
+  target: EventTarget | null,
+  container: HTMLElement,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const interactive = target.closest(INTERACTIVE_CHILD_SELECTOR);
+  return Boolean(interactive && interactive !== container && container.contains(interactive));
+}
+
 export function PreviewableImageFrame({
   src,
   alt,
@@ -16,26 +33,50 @@ export function PreviewableImageFrame({
   buttonClassName,
 }: PreviewableImageFrameProps) {
   const [open, setOpen] = useState(false);
+  const previewLabel = `${alt} 全屏预览`;
+
+  const openPreview = () => {
+    if (src) setOpen(true);
+  };
+
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!src || isNestedInteractiveTarget(event.target, event.currentTarget)) return;
+    openPreview();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!src || event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openPreview();
+  };
 
   return (
     <>
-      <div className="group relative">
+      <div
+        role={src ? "button" : undefined}
+        tabIndex={src ? 0 : undefined}
+        aria-label={src ? previewLabel : undefined}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        className={
+          "group relative " +
+          (src
+            ? "cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/24 "
+            : "")
+        }
+      >
         {children}
         {src && (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              setOpen(true);
-            }}
-            aria-label={`${alt} 全屏预览`}
+          <span
+            aria-hidden="true"
             className={
-              "absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-slate-950/40 text-white/84 opacity-100 shadow-[0_8px_18px_rgba(15,23,42,0.24)] backdrop-blur-md transition-all hover:-translate-y-0.5 hover:bg-slate-950/58 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/24 sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 " +
+              "pointer-events-none absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-slate-950/40 text-white/84 opacity-100 shadow-[0_8px_18px_rgba(15,23,42,0.24)] backdrop-blur-md transition-all sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 " +
               (buttonClassName ?? "")
             }
           >
             <ZoomIn className="h-3 w-3" />
-          </button>
+          </span>
         )}
       </div>
 

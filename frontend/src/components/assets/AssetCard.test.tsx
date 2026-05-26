@@ -35,4 +35,20 @@ describe("AssetCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /delete/ }));
     expect(onDelete).toHaveBeenCalledWith(asset);
   });
+
+  it("opens a fullscreen preview when the asset image is clicked", () => {
+    const withImage = {
+      ...asset,
+      image_path: "_global_assets/scenes/temple.png",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+
+    render(<AssetCard asset={withImage} onEdit={() => {}} onDelete={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "庙宇 全屏预览" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "庙宇 全屏预览" }),
+    ).toBeInTheDocument();
+  });
 });

@@ -19,6 +19,7 @@ import { errMsg } from "@/utils/async";
 import { summarizeUserFacingError } from "@/utils/error-summary";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import type { GridGeneration, ReferenceImage } from "@/types/grid";
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,7 @@ export function GridPreviewPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const { t } = useTranslation("dashboard");
 
   const hasGrids = gridIds.length > 0;
@@ -366,11 +368,18 @@ export function GridPreviewPanel({
                   {/* Composite image + metadata */}
                   {imageUrl ? (
                     <div className="overflow-hidden rounded-md border border-gray-800/50 bg-gray-900/40">
-                      <img
-                        src={imageUrl}
-                        alt={t("grid_composite_image_alt")}
-                        className="block max-h-64 w-full object-contain bg-black/20"
-                      />
+                      <button
+                        type="button"
+                        onClick={() => setPreviewImageUrl(imageUrl)}
+                        aria-label={`${t("grid_composite_image_alt")} 全屏预览`}
+                        className="block w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+                      >
+                        <img
+                          src={imageUrl}
+                          alt={t("grid_composite_image_alt")}
+                          className="block max-h-64 w-full object-contain bg-black/20"
+                        />
+                      </button>
                       <div className="flex items-center gap-2 border-t border-gray-800/50 px-2.5 py-1.5">
                         <span className="font-mono text-[10px] text-gray-500">
                           {t("grid_cell_info", { count: grid.cell_count, size: grid.grid_size })}
@@ -409,6 +418,13 @@ export function GridPreviewPanel({
           </motion.div>
         )}
       </AnimatePresence>
+      {previewImageUrl && (
+        <ImageLightbox
+          src={previewImageUrl}
+          alt={t("grid_composite_image_alt")}
+          onClose={() => setPreviewImageUrl(null)}
+        />
+      )}
     </div>
   );
 }

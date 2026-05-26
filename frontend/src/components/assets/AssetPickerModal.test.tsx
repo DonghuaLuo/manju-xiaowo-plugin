@@ -56,7 +56,41 @@ describe("AssetPickerModal", () => {
         onClose={() => {}} onImport={vi.fn()} />
     );
     await waitFor(() => screen.getByText("王小明"));
-    const card = screen.getByText("王小明").closest("button") as HTMLButtonElement;
-    expect(card).toBeDisabled();
+    const card = screen.getByRole("button", { name: /王小明/ });
+    expect(card).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("previews only assets that are not already in the project", async () => {
+    vi.spyOn(API, "listAssets").mockResolvedValue({
+      items: [
+        {
+          ...fixtures[0],
+          image_path: "_global_assets/characters/wang.png",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          ...fixtures[1],
+          image_path: "_global_assets/characters/shimei.png",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+
+    render(
+      <AssetPickerModal type="character" existingNames={new Set(["王小明"])}
+        onClose={() => {}} onImport={vi.fn()} />
+    );
+
+    await waitFor(() => screen.getByText("小师妹"));
+
+    expect(
+      screen.queryByRole("button", { name: "王小明 全屏预览" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "小师妹 全屏预览" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "小师妹 全屏预览" }),
+    ).toBeInTheDocument();
   });
 });
