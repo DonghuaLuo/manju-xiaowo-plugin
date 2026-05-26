@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
+import { getProjectDisplayName } from "@/utils/project-display";
 import {
   getUploadFileName,
   desktopFileRefFromPath,
@@ -60,7 +61,7 @@ export function WelcomeCanvas({
   const [error, setError] = useState<string | null>(null);
   const dropActiveRef = useRef(false);
   const sourceFilesVersion = useAppStore((s) => s.sourceFilesVersion);
-  const displayProjectTitle = projectTitle?.trim() || projectName;
+  const displayProjectTitle = getProjectDisplayName(projectTitle, t("untitled_project"));
 
   // 拉取已有源文件，决定初始 phase
   useEffect(() => {

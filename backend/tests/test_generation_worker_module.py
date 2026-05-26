@@ -9,18 +9,20 @@ from lib.generation_worker import (
     ProviderPool,
     _build_default_pools,
     _extract_provider,
-    _normalize_provider_id,
-    _project_level_provider,
     _read_int_env,
 )
 
 
 class _FakeQueue:
-    def __init__(self):
+    def __init__(self, *, succeeded_rows: int = 1, failed_rows: int = 1):
         self.released = False
         self.succeeded = []
         self.failed = []
+        self.cancelled = []
         self._lease_calls = 0
+        self._succeeded_rows = succeeded_rows
+        self._failed_rows = failed_rows
+        self._orphans: list[dict] = []
 
     async def acquire_or_renew_worker_lease(self, name, owner_id, ttl_seconds):
         self._lease_calls += 1
@@ -32,14 +34,23 @@ class _FakeQueue:
     async def requeue_running_tasks(self):
         return 0
 
-    async def claim_next_task(self, media_type):
+    async def list_orphan_tasks_on_start(self):
+        return self._orphans
+
+    async def claim_next_task(self, media_type, **_kwargs):
         return None
 
     async def mark_task_succeeded(self, task_id, result):
         self.succeeded.append((task_id, result))
+        return self._succeeded_rows
 
     async def mark_task_failed(self, task_id, error):
         self.failed.append((task_id, error))
+        return self._failed_rows
+
+    async def mark_task_cancelled(self, task_id, *, cancelled_by="user"):
+        self.cancelled.append((task_id, cancelled_by))
+        return 1
 
 
 class TestReadIntEnv:
@@ -69,7 +80,6 @@ class TestProviderPool:
 
     async def test_no_room_when_full(self):
         pool = ProviderPool(provider_id="test", image_max=1, video_max=1)
-        # Simulate inflight tasks with a dummy future
         loop = asyncio.get_running_loop()
         dummy = loop.create_future()
         dummy.set_result(None)
@@ -96,140 +106,161 @@ class TestProviderPool:
         pending.cancel()
 
 
+def _patch_pm(monkeypatch, project: dict | None, *, project_path=None, script: dict | None = None):
+    class PM:
+        def load_project(self, name):
+            return project or {}
+
+        def get_project_path(self, name):
+            return project_path
+
+        def load_script(self, name, script_file):
+            return script or {}
+
+    monkeypatch.setattr(
+        "lib.config.resolver.get_project_manager",
+        lambda: PM(),
+    )
+
+
 class TestExtractProvider:
-    async def test_video_provider_in_payload(self):
-        task = {"payload": {"video_provider": "ark"}}
+    async def test_video_payload_provider(self):
+        task = {"payload": {"video_provider": "ark"}, "task_type": "video"}
         assert await _extract_provider(task) == "ark"
 
-    async def test_image_provider_in_payload(self):
-        task = {"payload": {"image_provider": "gemini-vertex"}}
+    async def test_image_payload_provider(self):
+        task = {"payload": {"image_provider": "gemini-vertex"}, "task_type": "storyboard"}
         assert await _extract_provider(task) == "gemini-vertex"
 
-    async def test_default_when_no_provider(self):
+    async def test_default_when_unresolvable(self, monkeypatch):
+        async def _raise(self, project, payload, *, capability):
+            raise RuntimeError("resolver unavailable")
+
+        monkeypatch.setattr(
+            "lib.config.resolver.ConfigResolver.resolve_image_backend",
+            _raise,
+        )
         task = {"payload": {}}
         assert await _extract_provider(task) == DEFAULT_PROVIDER
 
-    async def test_default_when_no_payload(self):
-        task = {}
+    async def test_project_level_video_backend(self, monkeypatch):
+        _patch_pm(monkeypatch, {"video_backend": "ark/seedance-1-0-pro"})
+        task = {"payload": {}, "project_name": "demo", "task_type": "video"}
+        assert await _extract_provider(task) == "ark"
+
+    async def test_project_level_image_t2i(self, monkeypatch):
+        _patch_pm(monkeypatch, {"image_provider_t2i": "gemini-vertex/imagen-3"})
+        task = {"payload": {}, "project_name": "demo", "task_type": "storyboard"}
+        assert await _extract_provider(task) == "gemini-vertex"
+
+    async def test_character_reference_routes_to_i2i_provider(self, monkeypatch, tmp_path):
+        ref_path = tmp_path / "refs" / "alice.png"
+        ref_path.parent.mkdir()
+        ref_path.write_bytes(b"image")
+        _patch_pm(
+            monkeypatch,
+            {
+                "image_provider_t2i": "ark/gen-1",
+                "image_provider_i2i": "openai/edit-1",
+                "characters": {"Alice": {"reference_image": "refs/alice.png"}},
+            },
+            project_path=tmp_path,
+        )
+        task = {
+            "payload": {"prompt": "角色描述"},
+            "project_name": "demo",
+            "task_type": "character",
+            "media_type": "image",
+            "resource_id": "Alice",
+        }
+        assert await _extract_provider(task) == "openai"
+
+    async def test_storyboard_sheet_reference_routes_to_i2i_provider(self, monkeypatch, tmp_path):
+        sheet_path = tmp_path / "characters" / "Alice.png"
+        sheet_path.parent.mkdir()
+        sheet_path.write_bytes(b"image")
+        _patch_pm(
+            monkeypatch,
+            {
+                "image_provider_t2i": "ark/gen-1",
+                "image_provider_i2i": "openai/edit-1",
+                "characters": {"Alice": {"character_sheet": "characters/Alice.png"}},
+            },
+            project_path=tmp_path,
+            script={
+                "content_mode": "narration",
+                "segments": [
+                    {
+                        "segment_id": "E1S01",
+                        "characters_in_segment": ["Alice"],
+                        "scenes": [],
+                        "props": [],
+                    }
+                ],
+            },
+        )
+        task = {
+            "payload": {"prompt": "分镜描述", "script_file": "episode_1.json"},
+            "project_name": "demo",
+            "task_type": "storyboard",
+            "media_type": "image",
+            "resource_id": "E1S01",
+            "script_file": "episode_1.json",
+        }
+        assert await _extract_provider(task) == "openai"
+
+    async def test_reference_video_routes_to_video_lane(self, monkeypatch):
+        _patch_pm(
+            monkeypatch,
+            {
+                "video_backend": "ark/seedance-1-0-pro",
+                "image_provider_t2i": "gemini-vertex/imagen-3",
+            },
+        )
+        task = {"payload": {}, "project_name": "demo", "task_type": "reference_video"}
+        assert await _extract_provider(task) == "ark"
+
+    async def test_payload_provider_takes_precedence_over_project(self, monkeypatch):
+        _patch_pm(monkeypatch, {"video_backend": "grok/grok-imagine-video"})
+        task = {"payload": {"video_provider": "ark"}, "project_name": "demo", "task_type": "video"}
+        assert await _extract_provider(task) == "ark"
+
+    async def test_deleted_project_load_failure_falls_back_not_raises(self, monkeypatch):
+        def _raising_pm():
+            def _load(self, name):
+                raise FileNotFoundError(name)
+
+            return type("PM", (), {"load_project": _load})()
+
+        monkeypatch.setattr("lib.config.resolver.get_project_manager", _raising_pm)
+        task = {"payload": {}, "project_name": "deleted-proj", "task_type": "video"}
         assert await _extract_provider(task) == DEFAULT_PROVIDER
 
-    async def test_normalize_old_name(self):
-        task = {"payload": {"video_provider": "gemini"}}
-        assert await _extract_provider(task) == "gemini-aistudio"
 
-    async def test_resolves_video_from_global_config(self, monkeypatch):
-        """payload 无 provider、项目无覆盖时，从全局 ConfigResolver 解析。"""
+class TestExtractProviderAlignsWithExecution:
+    async def test_image_alignment(self, monkeypatch):
+        from lib.config.resolver import ConfigResolver
+        from lib.db import async_session_factory
 
-        async def fake_video_backend(self):
-            return ("gemini-vertex", "veo-2.0-generate-001")
+        project = {"image_provider_t2i": "openai/gen-1", "image_provider_i2i": "openai/edit-1"}
+        _patch_pm(monkeypatch, project)
+        task = {"payload": {}, "project_name": "demo", "task_type": "storyboard"}
 
-        monkeypatch.setattr(
-            "lib.config.resolver.ConfigResolver.default_video_backend",
-            fake_video_backend,
-        )
-        monkeypatch.setattr(
-            "lib.config.resolver.get_project_manager",
-            lambda: type("PM", (), {"load_project": lambda self, name: {}})(),
-        )
-        task = {"payload": {}, "project_name": "test", "task_type": "video"}
-        assert await _extract_provider(task) == "gemini-vertex"
+        worker_provider = await _extract_provider(task)
+        resolved = await ConfigResolver(async_session_factory).resolve_image_backend(project, {}, capability="t2i")
+        assert worker_provider == resolved.provider_id == "openai"
 
-    async def test_resolves_image_from_global_config(self, monkeypatch):
-        """payload 无 provider、项目无覆盖时，从全局 ConfigResolver 解析。"""
+    async def test_video_alignment(self, monkeypatch):
+        from lib.config.resolver import ConfigResolver
+        from lib.db import async_session_factory
 
-        async def fake_image_backend(self):
-            return ("gemini-vertex", "imagen-3.0-generate-002")
+        project = {"video_backend": "ark/seedance-1-0-pro"}
+        _patch_pm(monkeypatch, project)
+        task = {"payload": {}, "project_name": "demo", "task_type": "video"}
 
-        monkeypatch.setattr(
-            "lib.config.resolver.ConfigResolver.default_image_backend",
-            fake_image_backend,
-        )
-        monkeypatch.setattr(
-            "lib.config.resolver.get_project_manager",
-            lambda: type("PM", (), {"load_project": lambda self, name: {}})(),
-        )
-        task = {"payload": {}, "project_name": "test", "task_type": "image"}
-        assert await _extract_provider(task) == "gemini-vertex"
-
-    async def test_project_level_video_provider_takes_precedence(self, monkeypatch):
-        """项目级 video_backend 优先于全局默认。"""
-
-        async def should_not_be_called(self):
-            raise AssertionError("ConfigResolver should not be called")
-
-        monkeypatch.setattr(
-            "lib.config.resolver.ConfigResolver.default_video_backend",
-            should_not_be_called,
-        )
-        monkeypatch.setattr(
-            "lib.config.resolver.get_project_manager",
-            lambda: type("PM", (), {"load_project": lambda self, name: {"video_backend": "ark"}})(),
-        )
-        task = {"payload": {}, "project_name": "test", "task_type": "video"}
-        assert await _extract_provider(task) == "ark"
-
-    async def test_project_level_image_backend_takes_precedence(self, monkeypatch):
-        """项目级 image_backend 优先于全局默认。"""
-
-        async def should_not_be_called(self):
-            raise AssertionError("ConfigResolver should not be called")
-
-        monkeypatch.setattr(
-            "lib.config.resolver.ConfigResolver.default_image_backend",
-            should_not_be_called,
-        )
-        monkeypatch.setattr(
-            "lib.config.resolver.get_project_manager",
-            lambda: type("PM", (), {"load_project": lambda self, name: {"image_backend": "gemini-vertex/imagen-3"}})(),
-        )
-        task = {"payload": {}, "project_name": "test", "task_type": "image"}
-        assert await _extract_provider(task) == "gemini-vertex"
-
-    async def test_payload_provider_takes_precedence_over_config(self, monkeypatch):
-        """payload 中有 provider 时优先使用，不走项目/全局配置。"""
-
-        async def should_not_be_called(self):
-            raise AssertionError("ConfigResolver should not be called")
-
-        monkeypatch.setattr(
-            "lib.config.resolver.ConfigResolver.default_video_backend",
-            should_not_be_called,
-        )
-        task = {"payload": {"video_provider": "ark"}, "project_name": "test", "task_type": "video"}
-        assert await _extract_provider(task) == "ark"
-
-
-class TestProjectLevelProvider:
-    def test_video_provider(self):
-        assert _project_level_provider({"video_backend": "ark"}, "video") == "ark"
-
-    def test_video_backend_with_slash(self):
-        assert _project_level_provider({"video_backend": "grok/grok-imagine-video"}, "video") == "grok"
-
-    def test_video_no_override(self):
-        assert _project_level_provider({}, "video") is None
-
-    def test_image_backend_with_slash(self):
-        assert _project_level_provider({"image_backend": "gemini-vertex/imagen-3"}, "image") == "gemini-vertex"
-
-    def test_image_backend_without_slash(self):
-        assert _project_level_provider({"image_backend": "gemini-vertex"}, "image") == "gemini-vertex"
-
-    def test_image_no_override(self):
-        assert _project_level_provider({}, "image") is None
-
-
-class TestNormalizeProviderId:
-    def test_old_to_new(self):
-        assert _normalize_provider_id("gemini") == "gemini-aistudio"
-        assert _normalize_provider_id("vertex") == "gemini-vertex"
-
-    def test_already_new(self):
-        assert _normalize_provider_id("ark") == "ark"
-        assert _normalize_provider_id("grok") == "grok"
-
-    def test_seedance_to_ark(self):
-        assert _normalize_provider_id("seedance") == "ark"
+        worker_provider = await _extract_provider(task)
+        resolved = await ConfigResolver(async_session_factory).resolve_video_backend(project, {})
+        assert worker_provider == resolved.provider_id == "ark"
 
 
 class TestBuildDefaultPools:
@@ -258,10 +289,7 @@ class TestGenerationWorker:
         async def _fake_execute(task):
             return {"ok": task["task_id"]}
 
-        monkeypatch.setattr(
-            "server.services.generation_tasks.execute_generation_task",
-            _fake_execute,
-        )
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _fake_execute)
         await worker._process_task({"task_id": "t1"})
         assert queue.succeeded == [("t1", {"ok": "t1"})]
 
@@ -304,6 +332,105 @@ class TestGenerationWorker:
         assert "模型：doubao-seedance-1-0-pro" in message
         assert "错误码：SetLimitExceeded" in message
         assert "请求 ID：02177967014802800000000000000000000ffffac15d1c830f90a" in message
+
+    @pytest.mark.asyncio
+    async def test_process_task_cancelled_error_marks_cancelled(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _cancelled(_task):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _cancelled)
+        with pytest.raises(asyncio.CancelledError):
+            await worker._process_task({"task_id": "tc"})
+        assert queue.cancelled and queue.cancelled[0][0] == "tc"
+
+    @pytest.mark.asyncio
+    async def test_drain_finished_tasks_consumes_cancelled_child_task(self):
+        queue = _FakeQueue()
+        pool = ProviderPool(provider_id="test", image_max=1, video_max=1)
+        worker = GenerationWorker(queue=queue, pools={"test": pool})
+
+        async def _cancelled_child():
+            raise asyncio.CancelledError
+
+        task = asyncio.create_task(_cancelled_child())
+        await asyncio.sleep(0)
+        pool.image_inflight["tc"] = task
+
+        await worker._drain_finished_tasks()
+
+        assert "tc" not in pool.image_inflight
+
+    @pytest.mark.asyncio
+    async def test_process_task_zero_rows_succeeded_falls_through_to_cancelled(self, monkeypatch):
+        queue = _FakeQueue(succeeded_rows=0)
+        worker = GenerationWorker(queue=queue)
+
+        async def _ok(_task):
+            return {"result": "ok"}
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _ok)
+        await worker._process_task({"task_id": "t0rows"})
+        assert queue.succeeded == [("t0rows", {"result": "ok"})]
+        assert queue.cancelled and queue.cancelled[0][0] == "t0rows"
+
+    @pytest.mark.asyncio
+    async def test_request_cancel_signals_inflight_task(self):
+        queue = _FakeQueue()
+        pool = ProviderPool(provider_id="test", image_max=1, video_max=1)
+        worker = GenerationWorker(queue=queue, pools={"test": pool})
+
+        async def _long():
+            await asyncio.sleep(10)
+
+        t = asyncio.create_task(_long())
+        pool.video_inflight["tid"] = t
+
+        assert worker.request_cancel("tid") is True
+        await asyncio.sleep(0)
+        assert t.cancelled() or t.done()
+        assert worker.request_cancel("ghost") is False
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_cancelling_marks_cancelled(self):
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "orphan-cancelling",
+                "status": "cancelling",
+                "provider_id": None,
+                "provider_job_id": None,
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        await worker._handle_orphan_tasks_on_start()
+        assert queue.cancelled and queue.cancelled[0][0] == "orphan-cancelling"
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_running_no_job_id_marks_restart_lost(self):
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "orphan-lost",
+                "status": "running",
+                "provider_id": None,
+                "provider_job_id": None,
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        await worker._handle_orphan_tasks_on_start()
+        assert queue.failed and queue.failed[0][0] == "orphan-lost"
+        assert "[restart_lost]" in queue.failed[0][1]
 
     @pytest.mark.asyncio
     async def test_start_stop_run_loop_releases_lease(self):
@@ -353,7 +480,6 @@ class TestGenerationWorker:
         worker = GenerationWorker(queue=_FakeQueue(), pools=pools)
         assert worker._any_pool_has_room("image")
         assert worker._any_pool_has_room("video")
-        # Fill them up
         loop = asyncio.get_running_loop()
         dummy = loop.create_future()
         dummy.set_result(None)
@@ -362,8 +488,6 @@ class TestGenerationWorker:
 
     @pytest.mark.asyncio
     async def test_claim_tasks_dispatches_to_correct_pool(self, monkeypatch):
-        """Tasks are dispatched to the correct provider pool."""
-
         class _ClaimableQueue(_FakeQueue):
             def __init__(self):
                 super().__init__()
@@ -382,7 +506,7 @@ class TestGenerationWorker:
                     },
                 ]
 
-            async def claim_next_task(self, media_type):  # type: ignore[override]
+            async def claim_next_task(self, media_type, **_kwargs):  # type: ignore[override]
                 for i, t in enumerate(self._tasks):
                     if t["media_type"] == media_type:
                         return self._tasks.pop(i)
@@ -398,17 +522,13 @@ class TestGenerationWorker:
         async def _fake_execute(task):
             return {"ok": True}
 
-        monkeypatch.setattr(
-            "server.services.generation_tasks.execute_generation_task",
-            _fake_execute,
-        )
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _fake_execute)
 
         claimed = await worker._claim_tasks()
         assert claimed
         assert "img1" in pools["gemini-aistudio"].image_inflight
         assert "vid1" in pools["ark"].video_inflight
 
-        # Wait for tasks to complete
         await asyncio.gather(
             *[
                 *pools["gemini-aistudio"].image_inflight.values(),
@@ -416,6 +536,296 @@ class TestGenerationWorker:
             ],
             return_exceptions=True,
         )
+
+    def test_pool_full_providers_excludes_max_zero(self):
+        pools = {
+            "video-only": ProviderPool(provider_id="video-only", image_max=0, video_max=2),
+            "img-full": ProviderPool(provider_id="img-full", image_max=1, video_max=0),
+        }
+        loop = asyncio.new_event_loop()
+        dummy = loop.create_future()
+        dummy.set_result(None)
+        pools["img-full"].image_inflight["t1"] = dummy
+
+        worker = GenerationWorker(queue=_FakeQueue(), pools=pools)
+        full_image = worker._pool_full_providers("image")
+        assert "img-full" in full_image
+        assert "video-only" not in full_image
+
+        full_video = worker._pool_full_providers("video")
+        assert "img-full" not in full_video
+        assert "video-only" not in full_video
+        loop.close()
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_image_running_marks_restart_lost(self, monkeypatch):
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "img-orphan",
+                "status": "running",
+                "provider_id": "gemini-aistudio",
+                "provider_job_id": "should-not-be-used",
+                "media_type": "image",
+                "task_type": "storyboard",
+                "payload": {},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        requeued: list[str] = []
+
+        async def _capture_requeue(self, task_id):
+            requeued.append(task_id)
+
+        monkeypatch.setattr(GenerationWorker, "_requeue_single_task", _capture_requeue)
+        await worker._handle_orphan_tasks_on_start()
+        assert requeued == []
+        assert queue.failed and queue.failed[0][0] == "img-orphan"
+        assert "[restart_lost]" in queue.failed[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_non_resumable_video_marks_resume_unsupported(self, monkeypatch):
+        from lib.providers import PROVIDER_GROK
+
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "grok-orphan",
+                "status": "running",
+                "provider_id": PROVIDER_GROK,
+                "provider_job_id": "some-job",
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        requeued: list[str] = []
+
+        async def _capture_requeue(self, task_id):
+            requeued.append(task_id)
+
+        monkeypatch.setattr(GenerationWorker, "_requeue_single_task", _capture_requeue)
+        await worker._handle_orphan_tasks_on_start()
+        assert requeued == []
+        assert queue.failed and queue.failed[0][0] == "grok-orphan"
+        assert "[resume_unsupported]" in queue.failed[0][1]
+        assert PROVIDER_GROK in queue.failed[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_discard_paths_fallback_to_cancelled_on_zero_rows(self, monkeypatch):
+        from lib.providers import PROVIDER_GROK
+
+        queue = _FakeQueue(failed_rows=0)
+        queue._orphans = [
+            {
+                "task_id": "img-raced",
+                "status": "running",
+                "provider_id": "gemini-aistudio",
+                "provider_job_id": None,
+                "media_type": "image",
+                "task_type": "storyboard",
+                "payload": {},
+                "project_name": "demo",
+            },
+            {
+                "task_id": "grok-raced",
+                "status": "running",
+                "provider_id": PROVIDER_GROK,
+                "provider_job_id": "job",
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {},
+                "project_name": "demo",
+            },
+        ]
+        worker = GenerationWorker(queue=queue)
+        await worker._handle_orphan_tasks_on_start()
+        cancelled_ids = {tid for tid, _by in queue.cancelled}
+        assert cancelled_ids == {"img-raced", "grok-raced"}
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_uses_persisted_provider_id(self, monkeypatch):
+        from lib.providers import PROVIDER_GROK
+
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "ghost-orphan",
+                "status": "running",
+                "provider_id": PROVIDER_GROK,
+                "provider_job_id": "stale-job",
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {"video_provider": "ark"},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        requeued: list[str] = []
+        resume_dispatched: list[str] = []
+
+        async def _capture_requeue(self, task_id):
+            requeued.append(task_id)
+
+        async def _capture_resume(self, task):
+            resume_dispatched.append(task["task_id"])
+
+        monkeypatch.setattr(GenerationWorker, "_requeue_single_task", _capture_requeue)
+        monkeypatch.setattr(GenerationWorker, "_process_resume_task", _capture_resume)
+        await worker._handle_orphan_tasks_on_start()
+        assert requeued == []
+        assert resume_dispatched == []
+        assert queue.failed and queue.failed[0][0] == "ghost-orphan"
+        assert "[resume_unsupported]" in queue.failed[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_orphan_resumable_dispatches_process_resume_task(self, monkeypatch):
+        queue = _FakeQueue()
+        queue._orphans = [
+            {
+                "task_id": "ark-orphan",
+                "status": "running",
+                "provider_id": "ark",
+                "provider_job_id": "ark-job-1",
+                "media_type": "video",
+                "task_type": "video",
+                "payload": {},
+                "project_name": "demo",
+            }
+        ]
+        worker = GenerationWorker(queue=queue)
+        dispatched: list[dict] = []
+
+        async def _capture_resume(self, task):
+            dispatched.append(task)
+
+        monkeypatch.setattr(GenerationWorker, "_process_resume_task", _capture_resume)
+        await worker._handle_orphan_tasks_on_start()
+        pool = worker._get_or_create_pool("ark")
+        assert "ark-orphan" in pool.video_inflight
+        await asyncio.gather(*pool.video_inflight.values(), return_exceptions=True)
+        assert len(dispatched) == 1
+        assert dispatched[0]["task_id"] == "ark-orphan"
+
+    @pytest.mark.asyncio
+    async def test_process_resume_task_locks_persisted_provider_to_payload(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+        captured_task: dict | None = None
+
+        async def _fake_execute(task):
+            nonlocal captured_task
+            captured_task = task
+            return {"ok": True}
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _fake_execute)
+
+        task = {
+            "task_id": "resume-locked",
+            "task_type": "video",
+            "media_type": "video",
+            "provider_id": "openai",
+            "provider_job_id": "openai-job",
+            "payload": {"video_provider": "gemini-aistudio"},
+            "project_name": "demo",
+        }
+        await worker._process_resume_task(task)
+        assert captured_task is not None
+        assert captured_task["payload"]["video_provider"] == "openai"
+        assert queue.succeeded == [("resume-locked", {"ok": True})]
+
+    @pytest.mark.asyncio
+    async def test_process_resume_task_resume_expired(self, monkeypatch):
+        from lib.video_backends.base import ResumeExpiredError
+
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _expire(_task):
+            raise ResumeExpiredError(job_id="x", provider="ark")
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _expire)
+        task = {
+            "task_id": "exp",
+            "task_type": "video",
+            "media_type": "video",
+            "provider_id": "ark",
+            "provider_job_id": "x",
+            "payload": {},
+            "project_name": "demo",
+        }
+        await worker._process_resume_task(task)
+        assert queue.failed and queue.failed[0][0] == "exp"
+        assert "[resume_expired]" in queue.failed[0][1]
+
+    @pytest.mark.asyncio
+    async def test_process_resume_task_resume_unsupported(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _unsup(_task):
+            raise NotImplementedError("no resume_video")
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _unsup)
+        task = {
+            "task_id": "uns",
+            "task_type": "video",
+            "media_type": "video",
+            "provider_id": "vidu",
+            "provider_job_id": "x",
+            "payload": {},
+            "project_name": "demo",
+        }
+        await worker._process_resume_task(task)
+        assert queue.failed and queue.failed[0][0] == "uns"
+        assert "[resume_unsupported]" in queue.failed[0][1]
+
+    @pytest.mark.asyncio
+    async def test_process_resume_task_generic_exception(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _boom(_task):
+            raise RuntimeError("transient backend error")
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _boom)
+        task = {
+            "task_id": "boom",
+            "task_type": "video",
+            "media_type": "video",
+            "provider_id": "ark",
+            "provider_job_id": "x",
+            "payload": {},
+            "project_name": "demo",
+        }
+        await worker._process_resume_task(task)
+        assert queue.failed and queue.failed[0][0] == "boom"
+        assert not queue.failed[0][1].startswith("[resume_")
+
+    @pytest.mark.asyncio
+    async def test_process_resume_task_cancelled_error(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _cancel(_task):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _cancel)
+        task = {
+            "task_id": "rc",
+            "task_type": "video",
+            "media_type": "video",
+            "provider_id": "ark",
+            "provider_job_id": "x",
+            "payload": {},
+            "project_name": "demo",
+        }
+        with pytest.raises(asyncio.CancelledError):
+            await worker._process_resume_task(task)
+        assert queue.cancelled and queue.cancelled[0][0] == "rc"
 
 
 class TestFriendlyGenerationErrors:

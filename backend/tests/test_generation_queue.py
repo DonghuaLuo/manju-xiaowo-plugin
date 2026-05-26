@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lib.db.base import Base
-from lib.generation_queue import GenerationQueue
+from lib.generation_queue import GenerationQueue, _derive_provider_id_for_enqueue
 
 
 @pytest.fixture
@@ -23,6 +23,67 @@ async def queue():
 
 
 class TestGenerationQueue:
+    async def test_derive_provider_id_uses_i2i_for_character_reference(self, monkeypatch, tmp_path):
+        ref_path = tmp_path / "refs" / "alice.png"
+        ref_path.parent.mkdir()
+        ref_path.write_bytes(b"image")
+        project = {
+            "image_provider_t2i": "ark/gen-1",
+            "image_provider_i2i": "openai/edit-1",
+            "characters": {"Alice": {"reference_image": "refs/alice.png"}},
+        }
+
+        class PM:
+            def load_project(self, name):
+                return project
+
+            def get_project_path(self, name):
+                return tmp_path
+
+        monkeypatch.setattr("lib.config.resolver.get_project_manager", lambda: PM())
+
+        provider_id = await _derive_provider_id_for_enqueue(
+            project_name="demo",
+            task_type="character",
+            media_type="image",
+            resource_id="Alice",
+            payload={"prompt": "角色描述"},
+        )
+
+        assert provider_id == "openai"
+
+    async def test_enqueue_task_persists_i2i_provider_for_character_reference(self, queue, monkeypatch, tmp_path):
+        ref_path = tmp_path / "refs" / "alice.png"
+        ref_path.parent.mkdir()
+        ref_path.write_bytes(b"image")
+        project = {
+            "image_provider_t2i": "ark/gen-1",
+            "image_provider_i2i": "openai/edit-1",
+            "characters": {"Alice": {"reference_image": "refs/alice.png"}},
+        }
+
+        class PM:
+            def load_project(self, name):
+                return project
+
+            def get_project_path(self, name):
+                return tmp_path
+
+        monkeypatch.setattr("lib.config.resolver.get_project_manager", lambda: PM())
+
+        result = await queue.enqueue_task(
+            project_name="demo",
+            task_type="character",
+            media_type="image",
+            resource_id="Alice",
+            payload={"prompt": "角色描述"},
+            source="webui",
+        )
+        task = await queue.get_task(result["task_id"])
+
+        assert task is not None
+        assert task["provider_id"] == "openai"
+
     async def test_enqueue_dedupe_claim_and_succeed(self, queue):
         first = await queue.enqueue_task(
             project_name="demo",
@@ -52,7 +113,9 @@ class TestGenerationQueue:
         assert running["task_id"] == first["task_id"]
         assert running["status"] == "running"
 
-        done = await queue.mark_task_succeeded(first["task_id"], {"file_path": "storyboards/scene_E1S01.png"})
+        rows = await queue.mark_task_succeeded(first["task_id"], {"file_path": "storyboards/scene_E1S01.png"})
+        assert rows == 1
+        done = await queue.get_task(first["task_id"])
         assert done is not None
         assert done["status"] == "succeeded"
         assert done["result"]["file_path"] == "storyboards/scene_E1S01.png"
@@ -297,3 +360,97 @@ class TestGenerationQueue:
         stats = await queue.get_task_stats(project_name="demo")
         assert stats["cancelled"] == 2
         assert stats["queued"] == 0
+
+    async def test_persist_provider_job_id_wrapper(self, queue):
+        """persist_provider_job_id 是 wrapper,只验证不抛(行为细节在 repo 层测过)。"""
+        enqueued = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r1",
+            payload={},
+            script_file="ep1.json",
+        )
+        # 入队的 task 此时是 queued,但 persist 不校验 status(独立 commit)
+        await queue.persist_provider_job_id(enqueued["task_id"], "job-abc-123")
+        task = await queue.get_task(enqueued["task_id"])
+        assert task is not None
+        assert task["provider_job_id"] == "job-abc-123"
+
+    async def test_mark_task_cancelled_wrapper(self, queue):
+        """mark_task_cancelled wrapper → repo.finalize_cancelled,SQL 守卫接住 queued/cancelling/running。"""
+        enqueued = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r1",
+            payload={},
+            script_file="ep1.json",
+        )
+        # 从 queued 直接落 cancelled(进程级 cancel 兜底路径)
+        rows = await queue.mark_task_cancelled(enqueued["task_id"], cancelled_by="restart")
+        assert rows == 1
+        task = await queue.get_task(enqueued["task_id"])
+        assert task is not None
+        assert task["status"] == "cancelled"
+        # 终态再调一次返回 0(SQL 守卫排除终态)
+        rows = await queue.mark_task_cancelled(enqueued["task_id"])
+        assert rows == 0
+
+    async def test_cancel_task_dispatches_worker_callback(self, queue):
+        """cancel_task 把 cancelling 列表派发给 worker_cancel_callback(秒级响应)。"""
+        # 先把任务推到 running,这样 cancel 走 cancelling 中间态
+        enqueued = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r1",
+            payload={},
+            script_file="ep1.json",
+        )
+        await queue.claim_next_task("video")
+
+        signaled: list[str] = []
+
+        def _fake_cancel(task_id: str) -> bool:
+            signaled.append(task_id)
+            return True
+
+        queue.set_worker_cancel_callback(_fake_cancel)
+        result = await queue.cancel_task(enqueued["task_id"])
+        # running task 应进入 cancelling
+        assert signaled == [enqueued["task_id"]]
+        assert result["cancelling"] == [enqueued["task_id"]]
+
+    async def test_cancel_task_callback_exception_does_not_break(self, queue):
+        """callback 抛异常不影响 cancel_task 返回(best-effort 信号)。"""
+        enqueued = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r1",
+            payload={},
+            script_file="ep1.json",
+        )
+        await queue.claim_next_task("video")
+
+        def _bad_cancel(_task_id: str) -> bool:
+            raise RuntimeError("worker not responding")
+
+        queue.set_worker_cancel_callback(_bad_cancel)
+        # 不应抛
+        result = await queue.cancel_task(enqueued["task_id"])
+        assert result["cancelling"] == [enqueued["task_id"]]
+
+    async def test_get_cancel_preview_wrapper(self, queue):
+        """get_cancel_preview wrapper → repo.get_cancel_preview。"""
+        enqueued = await queue.enqueue_task(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r1",
+            payload={},
+            script_file="ep1.json",
+        )
+        preview = await queue.get_cancel_preview(enqueued["task_id"])
+        assert preview["task"]["task_id"] == enqueued["task_id"]

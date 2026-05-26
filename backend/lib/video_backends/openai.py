@@ -12,10 +12,13 @@ from lib.providers import PROVIDER_OPENAI
 from lib.retry import DOWNLOAD_BACKOFF_SECONDS, DOWNLOAD_MAX_ATTEMPTS, with_retry_async
 from lib.video_backends.base import (
     IMAGE_MIME_TYPES,
+    ResumeExpiredError,
     VideoCapabilities,
     VideoCapability,
     VideoGenerationRequest,
     VideoGenerationResult,
+    get_resume_job_id,
+    persist_job_id_if_in_task_context,
     poll_with_retry,
 )
 
@@ -36,11 +39,26 @@ _SIZE_MAP: dict[tuple[str, str], str] = {
     ("1024p", "16:9"): "1792x1024",
 }
 
+# resolution=None 时按 aspect_ratio 兜底的最小 size。OpenAI 官方协议下 size 是唯一
+# 传比例的通道，不传则中转聚合（NewAPI / huitongkeji 等）会让各家上游用自己的默认
+# 比例，导致同一项目里输出比例横/方/竖随模型而变。720p 与 NewAPIVideoBackend 的
+# _DEFAULT_SIZE 一致，被所有上游模型接受。
+_FALLBACK_SIZE_BY_ASPECT: dict[str, str] = {
+    "9:16": "720x1280",
+    "16:9": "1280x720",
+}
+
 
 def _resolve_size(resolution: str | None, aspect_ratio: str) -> str | None:
-    """解析 size：None 不传；已知复合 key 映射；未知 → warning 后透传作为 size。"""
+    """解析 size：None → 按 aspect 兜底；已知复合 key 映射；未知 → warning 后透传。"""
     if resolution is None:
-        return None
+        fallback = _FALLBACK_SIZE_BY_ASPECT.get(aspect_ratio)
+        if fallback is None:
+            logger.warning(
+                "OpenAI video: resolution 未配置且 aspect=%r 无兜底，size 字段不传，比例由上游默认决定",
+                aspect_ratio,
+            )
+        return fallback
     mapped = _SIZE_MAP.get((resolution, aspect_ratio))
     if mapped is not None:
         return mapped
@@ -80,6 +98,12 @@ class OpenAIVideoBackend:
         return VideoCapabilities(reference_images=True, max_reference_images=3)
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
+        # Worker restart recovery sets a resume id so we can poll/download the
+        # existing OpenAI job instead of submitting a second paid generation.
+        resume_id = get_resume_job_id()
+        if resume_id is not None:
+            return await self.resume_video(resume_id, request)
+
         kwargs: dict = {
             "prompt": request.prompt,
             "model": self._model,
@@ -106,8 +130,24 @@ class OpenAIVideoBackend:
         logger.info("调用 %s 视频 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
 
         video = await self._create_video(**kwargs)
+        await persist_job_id_if_in_task_context(video.id)
         final = await self._poll_until_complete(video.id, request.duration_seconds)
 
+        return await self._download_and_build_result(final, request, kwargs)
+
+    async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
+        """Resume a submitted OpenAI job by polling and downloading only."""
+        try:
+            final = await self._poll_until_complete(job_id, request.duration_seconds)
+        except Exception as exc:
+            if _is_openai_not_found(exc):
+                raise ResumeExpiredError(job_id=job_id, provider=PROVIDER_OPENAI) from exc
+            raise
+        return await self._download_and_build_result(final, request, {"seconds": str(request.duration_seconds)})
+
+    async def _download_and_build_result(
+        self, final, request: VideoGenerationRequest, kwargs: dict
+    ) -> VideoGenerationResult:
         content = await self._download_content_with_retry(final.id)
 
         def _write():
@@ -165,3 +205,19 @@ class OpenAIVideoBackend:
 def _encode_start_image(image_path: Path) -> tuple[str, bytes, str]:
     mime = IMAGE_MIME_TYPES.get(image_path.suffix.lower(), "image/png")
     return (image_path.name, image_path.read_bytes(), mime)
+
+
+def _is_openai_not_found(exc: BaseException) -> bool:
+    """Detect OpenAI/Sora job missing or expired responses."""
+    try:
+        from openai import NotFoundError  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        NotFoundError = None  # noqa: N806
+
+    if NotFoundError is not None and isinstance(exc, NotFoundError):
+        return True
+    status_code = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if status_code == 404:
+        return True
+    msg = str(exc).lower()
+    return "not found" in msg or "expired" in msg

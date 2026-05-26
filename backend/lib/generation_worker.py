@@ -23,11 +23,22 @@ from lib.generation_queue import (
     TASK_WORKER_HEARTBEAT_SEC,
     TASK_WORKER_LEASE_TTL_SEC,
     GenerationQueue,
+    _derive_image_capability_for_task,
     get_generation_queue,
 )
 
 # Default provider used when a task payload does not specify one.
 DEFAULT_PROVIDER = "gemini-aistudio"
+
+
+def _non_resumable_video_providers() -> frozenset[str]:
+    """不实现 VideoBackend.resume_video 的视频 provider 集合。"""
+    from lib.providers import PROVIDER_GROK, PROVIDER_VIDU
+
+    return frozenset({PROVIDER_GROK, PROVIDER_VIDU})
+
+
+NON_RESUMABLE_VIDEO_PROVIDERS = _non_resumable_video_providers()
 
 
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -70,61 +81,40 @@ class ProviderPool:
         return [*self.image_inflight.values(), *self.video_inflight.values()]
 
 
-def _project_level_provider(project: dict, task_type: str) -> str | None:
-    """Read project-level provider override, if any.
-
-    video/image 均统一从 ``video_backend`` / ``image_backend``（"provider/model" 格式）解析。
-    """
-    field = "video_backend" if task_type == "video" else "image_backend"
-    project_backend = project.get(field)
-    if project_backend and "/" in project_backend:
-        return project_backend.split("/", 1)[0]
-    return project_backend
-
-
 async def _extract_provider(task: dict[str, Any]) -> str:
-    """Extract provider_id from a claimed task dict.
-
-    优先级：payload 显式值 > 项目级配置 > 全局默认。
-    """
-    payload = task.get("payload") or {}
-    # 兼容已入队的历史任务（payload 中显式携带 provider）
-    provider = payload.get("video_provider") or payload.get("image_provider")
-    if provider:
-        return _normalize_provider_id(provider)
-    # 从项目配置 → 全局默认解析真实 provider
+    """Extract provider_id from a claimed task, used only for rate-limit pool routing."""
     project_name = task.get("project_name")
-    if not project_name:
+    payload = task.get("payload") or {}
+    is_video = task.get("media_type") == "video" or task.get("task_type") in ("video", "reference_video")
+
+    try:
+        project: dict | None = None
+        if project_name:
+            from lib.config.resolver import get_project_manager
+
+            project = await asyncio.to_thread(get_project_manager().load_project, project_name)
+
+        from lib.config.resolver import ConfigResolver
+        from lib.db import async_session_factory
+
+        resolver = ConfigResolver(async_session_factory)
+        if is_video:
+            resolved = await resolver.resolve_video_backend(project, payload)
+        else:
+            capability = await asyncio.to_thread(
+                _derive_image_capability_for_task,
+                project_name=project_name,
+                project=project,
+                payload=payload,
+                task_type=task.get("task_type") or "",
+                resource_id=str(task.get("resource_id") or "") or None,
+                script_file=task.get("script_file") or payload.get("script_file"),
+            )
+            resolved = await resolver.resolve_image_backend(project, payload, capability=capability)
+    except Exception:
+        logger.debug("provider 解析失败，回退 DEFAULT_PROVIDER 仅供限流路由", exc_info=True)
         return DEFAULT_PROVIDER
-
-    from lib.config.resolver import get_project_manager
-
-    task_type = task.get("task_type", "")
-    project = get_project_manager().load_project(project_name)
-    project_provider = _project_level_provider(project, task_type)
-    if project_provider:
-        return _normalize_provider_id(project_provider)
-
-    # 回退到全局默认
-    from lib.config.resolver import ConfigResolver
-    from lib.db import async_session_factory
-
-    resolver = ConfigResolver(async_session_factory)
-    if task_type == "video":
-        provider_id, _ = await resolver.default_video_backend()
-    else:
-        provider_id, _ = await resolver.default_image_backend()
-    return provider_id
-
-
-def _normalize_provider_id(raw: str) -> str:
-    """Normalize old-style provider names to registry provider_id."""
-    mapping = {
-        "gemini": "gemini-aistudio",
-        "vertex": "gemini-vertex",
-        "seedance": "ark",
-    }
-    return mapping.get(raw, raw)
+    return resolved.provider_id or DEFAULT_PROVIDER
 
 
 async def _load_pools_from_db() -> dict[str, ProviderPool]:
@@ -368,11 +358,11 @@ class GenerationWorker:
 
                 await self._drain_finished_tasks()
 
-                # 仅在"新获得 lease 且本实例无在途任务"时回收 running 任务，
-                # 避免 lease 短暂抖动时把自己正在执行的任务错误回队。
+                # 仅在真重启 / 长时间失去 lease 后重获时扫一次孤儿做重启自愈：
+                # 不主动重新 submit，优先按 provider_job_id 接续轮询。
                 all_inflight = self._image_inflight or self._video_inflight
                 if self._owns_lease and not had_lease and not all_inflight:
-                    await self.queue.requeue_running_tasks()
+                    await self._handle_orphan_tasks_on_start()
 
                 if not self._owns_lease:
                     await asyncio.sleep(self.heartbeat_interval)
@@ -391,21 +381,26 @@ class GenerationWorker:
                 await self.queue.release_worker_lease(name=self.lease_name, owner_id=self.owner_id)
             self._owns_lease = False
 
+    def _pool_full_providers(self, media_type: str) -> frozenset[str]:
+        """返回当前 cycle 指定 media_type 池已满的 provider_id 集合。"""
+        if media_type == "image":
+            return frozenset(pid for pid, p in self._pools.items() if p.image_max > 0 and not p.has_image_room())
+        return frozenset(pid for pid, p in self._pools.items() if p.video_max > 0 and not p.has_video_room())
+
     async def _claim_tasks(self) -> bool:
         """Claim tasks from queue and route to per-provider pools.
 
-        For each media_type, claim the next FIFO task. If the task's provider
-        pool has room, dispatch it. If the pool is full, requeue it and stop
-        claiming that media_type (since we'd keep getting the same task).
+        池满 task 在 SQL 层按 provider 黑名单过滤，避免 claim → requeue 反复刷屏。
         """
         claimed_any = False
 
         for media_type in ("image", "video"):
-            if not self._any_pool_has_room(media_type):
-                continue
-
             while True:
-                task = await self.queue.claim_next_task(media_type=media_type)
+                pool_full = self._pool_full_providers(media_type)
+                task = await self.queue.claim_next_task(
+                    media_type=media_type,
+                    pool_full_providers=pool_full,
+                )
                 if not task:
                     break
 
@@ -420,7 +415,7 @@ class GenerationWorker:
                     has_room = pool.has_video_room()
 
                 if max_capacity == 0:
-                    # 供应商不支持此媒体类型（容量为 0），直接失败而非无限 requeue
+                    # 供应商不支持此媒体类型（容量为 0），直接失败
                     logger.warning(
                         "供应商 %s 不支持 %s 生成，任务 %s 标记失败",
                         provider_id,
@@ -435,15 +430,14 @@ class GenerationWorker:
                     continue
 
                 if not has_room:
-                    # Provider pool is full — requeue the task and stop
-                    # claiming this media_type (FIFO means we'd get it again).
                     logger.info(
-                        "供应商 %s 的 %s 池已满，任务 %s 放回队列",
+                        "供应商 %s 的 %s 池满，task %s 回队等待下一 cycle",
                         provider_id,
                         media_type,
                         task["task_id"],
                     )
                     await self._requeue_single_task(task["task_id"])
+                    # 下一轮 SQL 会重算 pool_full 并过滤掉这个 provider。
                     break
 
                 # Dispatch to pool
@@ -454,14 +448,10 @@ class GenerationWorker:
                     name=f"generation-{media_type}-{task['task_id']}",
                 )
 
-                # Re-check if any pool still has room before trying next claim
-                if not self._any_pool_has_room(media_type):
-                    break
-
         return claimed_any
 
     async def _requeue_single_task(self, task_id: str) -> None:
-        """Put a claimed (running) task back to queued status."""
+        """Put a claimed running task back to queued status."""
         try:
             from datetime import datetime
 
@@ -494,6 +484,8 @@ class GenerationWorker:
             for finished_task in pool.drain_finished():
                 try:
                     await finished_task
+                except asyncio.CancelledError:
+                    logger.debug("已处理的任务取消已在 _process_task 中记录")
                 except Exception:
                     logger.debug("已处理的任务异常已在 _process_task 中记录")
 
@@ -509,21 +501,187 @@ class GenerationWorker:
             pool.video_inflight.clear()
 
     async def _process_task(self, task: dict[str, Any]) -> None:
+        """Run a generation task with 0-rows-cancelled finally protocol."""
         task_id = task["task_id"]
         task_type = task.get("task_type", "unknown")
         provider_id = await _extract_provider(task)
         logger.info("开始处理任务 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+
+        from lib.video_backends.base import reset_current_task_id, set_current_task_id
+
+        token = set_current_task_id(task_id)
         try:
             from server.services.generation_tasks import execute_generation_task
 
-            result = await execute_generation_task(task)
-            await self.queue.mark_task_succeeded(task_id, result)
-            logger.info("任务完成 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
-        except Exception as exc:
-            logger.exception("任务失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
-            from lib.friendly_errors import summarize_generation_error
+            try:
+                result = await execute_generation_task(task)
+            except asyncio.CancelledError:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                raise
+            except Exception as exc:
+                logger.exception("任务失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+                from lib.friendly_errors import summarize_generation_error
 
-            await self.queue.mark_task_failed(
-                task_id,
-                summarize_generation_error(exc, provider_id=provider_id, task=task),
+                rows = await asyncio.shield(
+                    self.queue.mark_task_failed(
+                        task_id,
+                        summarize_generation_error(exc, provider_id=provider_id, task=task),
+                    )
+                )
+                if rows == 0:
+                    await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                return
+
+            try:
+                rows = await asyncio.shield(self.queue.mark_task_succeeded(task_id, result))
+            except asyncio.CancelledError:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                raise
+            if rows == 0:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+            else:
+                logger.info("任务完成 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+        finally:
+            reset_current_task_id(token)
+
+    async def _process_resume_task(self, task: dict[str, Any]) -> None:
+        """重启自愈入口：用 provider_job_id 接续轮询，避免重复 submit。"""
+        task_id = task["task_id"]
+        task_type = task.get("task_type", "unknown")
+
+        persisted_provider_id = task.get("provider_id")
+        if persisted_provider_id:
+            payload = task.get("payload")
+            if payload is None:
+                payload = {}
+                task["payload"] = payload
+            is_video = task.get("media_type") == "video" or task_type in ("video", "reference_video")
+            if is_video:
+                payload["video_provider"] = persisted_provider_id
+            else:
+                payload["image_provider"] = persisted_provider_id
+
+        provider_id = await _extract_provider(task)
+        job_id = task.get("provider_job_id") or ""
+        logger.info("重启自愈处理任务 %s (type=%s, provider=%s, job=%s)", task_id, task_type, provider_id, job_id)
+
+        from lib.video_backends.base import (
+            ResumeExpiredError,
+            reset_current_task_id,
+            reset_resume_job_id,
+            set_current_task_id,
+            set_resume_job_id,
+        )
+
+        token_task = set_current_task_id(task_id)
+        token_resume = set_resume_job_id(job_id)
+        try:
+            from server.services.generation_tasks import execute_generation_task
+
+            try:
+                result = await execute_generation_task(task)
+            except asyncio.CancelledError:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                raise
+            except NotImplementedError as exc:
+                logger.warning("resume 不支持 task %s: %s", task_id, exc)
+                rows = await asyncio.shield(self.queue.mark_task_failed(task_id, f"[resume_unsupported] {exc}"))
+                if rows == 0:
+                    await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                return
+            except ResumeExpiredError as exc:
+                logger.warning("resume 已过期 task %s: %s", task_id, exc)
+                rows = await asyncio.shield(self.queue.mark_task_failed(task_id, f"[resume_expired] {exc}"))
+                if rows == 0:
+                    await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                return
+            except Exception as exc:
+                logger.exception("resume 失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+                rows = await asyncio.shield(self.queue.mark_task_failed(task_id, str(exc)))
+                if rows == 0:
+                    await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                return
+
+            try:
+                rows = await asyncio.shield(self.queue.mark_task_succeeded(task_id, result))
+            except asyncio.CancelledError:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                raise
+            if rows == 0:
+                await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+            else:
+                logger.info("重启自愈完成 %s", task_id)
+        finally:
+            reset_resume_job_id(token_resume)
+            reset_current_task_id(token_task)
+
+    def request_cancel(self, task_id: str) -> bool:
+        """In-process cancel 信号：找到 inflight asyncio.Task 后 cancel。"""
+        for pool in self._pools.values():
+            for inflight in (pool.image_inflight, pool.video_inflight):
+                t = inflight.get(task_id)
+                if t is not None and not t.done():
+                    t.cancel()
+                    logger.info("已对 task %s 发出 in-process cancel 信号", task_id)
+                    return True
+        logger.info("request_cancel: task %s 不在 inflight", task_id)
+        return False
+
+    async def _handle_orphan_tasks_on_start(self) -> None:
+        """重启自愈：扫 running/cancelling 孤儿，能 resume 才接续，不重新提交。"""
+        orphans = await self.queue.list_orphan_tasks_on_start()
+        if not orphans:
+            return
+        logger.info("开始扫孤儿任务，待处理 %d 个", len(orphans))
+
+        for task in orphans:
+            task_id = task["task_id"]
+            status = task.get("status")
+            if status == "cancelling":
+                await self.queue.mark_task_cancelled(task_id, cancelled_by="user")
+                logger.info("孤儿 cancelling → cancelled: %s", task_id)
+                continue
+
+            media_type = task.get("media_type") or (
+                "video" if task.get("task_type") in ("video", "reference_video") else "image"
             )
+
+            if media_type == "image":
+                logger.warning("孤儿 image running → [restart_lost]: %s", task_id)
+                rows = await self.queue.mark_task_failed(
+                    task_id,
+                    "[restart_lost] image 任务无法接续，需手动重试以避免重复计费",
+                )
+                if rows == 0:
+                    await self.queue.mark_task_cancelled(task_id, cancelled_by="user")
+                continue
+
+            provider_id = task.get("provider_id") or await _extract_provider(task)
+            if provider_id in NON_RESUMABLE_VIDEO_PROVIDERS:
+                logger.warning("孤儿 video running provider=%s 不支持 resume: %s", provider_id, task_id)
+                rows = await self.queue.mark_task_failed(
+                    task_id,
+                    f"[resume_unsupported] provider={provider_id} 不支持接续，需手动重试以避免重复计费",
+                )
+                if rows == 0:
+                    await self.queue.mark_task_cancelled(task_id, cancelled_by="user")
+                continue
+
+            job_id = task.get("provider_job_id")
+            if not job_id:
+                logger.warning("孤儿 running 无 job_id → [restart_lost]: %s", task_id)
+                rows = await self.queue.mark_task_failed(
+                    task_id,
+                    "[restart_lost] worker 重启时未持久化 provider_job_id",
+                )
+                if rows == 0:
+                    await self.queue.mark_task_cancelled(task_id, cancelled_by="user")
+                continue
+
+            pool = self._get_or_create_pool(provider_id)
+            inflight = pool.video_inflight if media_type == "video" else pool.image_inflight
+            inflight[task_id] = asyncio.create_task(
+                self._process_resume_task(task),
+                name=f"resume-{media_type}-{task_id}",
+            )
+        logger.info("孤儿扫描完成，已派发 resume 任务")
