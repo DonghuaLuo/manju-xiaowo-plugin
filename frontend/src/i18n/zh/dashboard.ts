@@ -794,8 +794,12 @@ export default {
 
   // PreprocessingView
   'preprocessing_saved': '预处理内容已保存',
+  'table_save_title': '保存表格',
+  'table_saved': '表格已保存到：{{path}}',
+  'preprocessing_editor_resize': '调整编辑框高度',
   'loading_preprocessing': '加载预处理内容...',
   'no_preprocessing_content': '暂无预处理内容',
+  'copy_failed': '复制失败：{{message}}',
   'segment_split_complete': '片段拆分已完成',
   'script_normalized_complete': '规范化剧本已完成',
   'reference_units_split_complete': 'Units 拆分已完成（{{count}} units）',

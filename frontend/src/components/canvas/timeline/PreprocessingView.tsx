@@ -1,6 +1,14 @@
-import { useState, useEffect, useCallback, useId, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useId,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { Edit3, Save, X } from "lucide-react";
+import { ChevronsUpDown, Edit3, Save, X } from "lucide-react";
 import { API } from "@/api";
 import { voidPromise } from "@/utils/async";
 import { useAppStore } from "@/stores/app-store";
@@ -47,7 +55,13 @@ export function PreprocessingView({
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const editorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorResizeCleanupRef = useRef<(() => void) | null>(null);
   const statusLabelId = useId();
+
+  useEffect(() => () => {
+    editorResizeCleanupRef.current?.();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +108,36 @@ export function PreprocessingView({
     setEditing(false);
     setEditContent(content ?? "");
   }, [content]);
+
+  const handleEditorResizePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const textarea = editorTextareaRef.current;
+    if (!textarea) return;
+
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = textarea.getBoundingClientRect().height;
+    const minHeight = 400;
+
+    editorResizeCleanupRef.current?.();
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      const nextHeight = Math.max(minHeight, startHeight + moveEvent.clientY - startY);
+      textarea.style.height = `${Math.round(nextHeight)}px`;
+    };
+
+    const cleanup = () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", cleanup);
+      document.removeEventListener("pointercancel", cleanup);
+      editorResizeCleanupRef.current = null;
+    };
+
+    editorResizeCleanupRef.current = cleanup;
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", cleanup, { once: true });
+    document.addEventListener("pointercancel", cleanup, { once: true });
+  }, []);
 
   const statusLabel =
     contentMode === "narration"
@@ -184,15 +228,27 @@ export function PreprocessingView({
 
       {/* Content */}
       {editing ? (
-        <textarea
-          aria-labelledby={statusLabelId}
-          value={editContent}
-          onChange={(e) => setEditContent(e.target.value)}
-          className="min-h-[400px] w-full resize-y rounded-lg border border-gray-700 bg-gray-800 p-4 font-mono text-sm leading-relaxed text-gray-200 outline-none focus-ring focus-visible:border-indigo-500"
-        />
+        <div className="preprocessing-editor-field">
+          <textarea
+            ref={editorTextareaRef}
+            aria-labelledby={statusLabelId}
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            className="preprocessing-editor-textarea min-h-[400px] w-full resize-none rounded-lg border border-gray-700 bg-gray-800 p-4 pb-11 pr-11 font-mono text-sm leading-relaxed text-gray-200 outline-none focus-ring focus-visible:border-indigo-500"
+          />
+          <button
+            type="button"
+            className="preprocessing-editor-resize-handle"
+            aria-label={t("dashboard:preprocessing_editor_resize")}
+            title={t("dashboard:preprocessing_editor_resize")}
+            onPointerDown={handleEditorResizePointerDown}
+          >
+            <ChevronsUpDown className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
       ) : (
         <div
-          className={`prose-invert max-w-none overflow-x-auto rounded-lg border border-gray-800 bg-gray-900/50 p-4 text-sm ${compact ? "markdown-compact" : ""}`}
+          className={`preprocessing-document-shell prose-invert max-w-none text-sm ${compact ? "markdown-compact is-compact" : ""}`}
         >
           <StreamMarkdown content={content} />
         </div>

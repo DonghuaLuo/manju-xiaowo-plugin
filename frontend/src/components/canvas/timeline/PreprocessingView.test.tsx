@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PreprocessingView } from "./PreprocessingView";
 import { API } from "@/api";
 
@@ -51,5 +51,39 @@ describe("PreprocessingView statusLabel by contentMode", () => {
     expect(container.querySelector(".bg-emerald-500")).toBeNull();
     // markdown 容器拿到 compact marker
     expect(container.querySelector(".markdown-compact")).not.toBeNull();
+  });
+
+  it("uses a larger custom resize handle in edit mode", async () => {
+    vi.spyOn(API, "getDraftContent").mockResolvedValue("# hi");
+    render(<PreprocessingView projectName="p" episode={1} contentMode="drama" />);
+
+    await waitFor(() => expect(API.getDraftContent).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /编辑|Edit/ }));
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(textarea).toHaveClass("resize-none");
+
+    const handle = screen.getByRole("button", {
+      name: /调整编辑框高度|Resize editor height/,
+    });
+    expect(handle).toHaveClass("preprocessing-editor-resize-handle");
+
+    vi.spyOn(textarea, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 400,
+      top: 0,
+      right: 800,
+      bottom: 400,
+      left: 0,
+      toJSON: () => {},
+    } as DOMRect);
+
+    fireEvent.pointerDown(handle, { clientY: 400 });
+    fireEvent.pointerMove(document, { clientY: 468 });
+    fireEvent.pointerUp(document);
+
+    expect(textarea.style.height).toBe("468px");
   });
 });

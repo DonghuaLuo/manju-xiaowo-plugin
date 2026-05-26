@@ -770,8 +770,12 @@ export default {
 
   // PreprocessingView
   'preprocessing_saved': 'Đã lưu nội dung tiền xử lý',
+  'table_save_title': 'Lưu bảng',
+  'table_saved': 'Đã lưu bảng vào: {{path}}',
+  'preprocessing_editor_resize': 'Đổi chiều cao trình chỉnh sửa',
   'loading_preprocessing': 'Đang tải nội dung tiền xử lý...',
   'no_preprocessing_content': 'Không có nội dung tiền xử lý',
+  'copy_failed': 'Sao chép thất bại: {{message}}',
   'segment_split_complete': 'Hoàn tất chia đoạn',
   'script_normalized_complete': 'Hoàn tất chuẩn hóa kịch bản',
   'reference_units_split_complete': 'Hoàn tất chia đơn vị tham chiếu ({{count}} đơn vị)',

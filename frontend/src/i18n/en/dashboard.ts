@@ -793,8 +793,12 @@ export default {
 
   // PreprocessingView
   'preprocessing_saved': 'Preprocessing content saved',
+  'table_save_title': 'Save table',
+  'table_saved': 'Table saved to: {{path}}',
+  'preprocessing_editor_resize': 'Resize editor height',
   'loading_preprocessing': 'Loading preprocessing content...',
   'no_preprocessing_content': 'No preprocessing content',
+  'copy_failed': 'Failed to copy: {{message}}',
   'segment_split_complete': 'Segment split complete',
   'script_normalized_complete': 'Script normalization complete',
   'reference_units_split_complete': 'Reference units split complete ({{count}} units)',

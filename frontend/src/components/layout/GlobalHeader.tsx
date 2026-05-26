@@ -219,14 +219,14 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           <button
             type="button"
             onClick={onNavigateBack}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors focus-ring"
+            className="inline-flex h-[30px] shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs transition-colors focus-ring"
             style={{ color: "var(--color-text-3)" }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-text)")}
             onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-text-3)")}
             aria-label={t("dashboard:projects")}
           >
             <ChevronLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">{t("dashboard:projects")}</span>
+            <span className="hidden whitespace-nowrap leading-none sm:inline">{t("dashboard:projects")}</span>
           </button>
           <div
             aria-hidden="true"

@@ -92,6 +92,10 @@ const dashboardOverrides = {
     "video_generation": "Генерация видео",
     "api_calls": "API-вызовы",
     "no_usage_data": "Данных об использовании пока нет",
+    "table_save_title": "Сохранить таблицу",
+    "table_saved": "Таблица сохранена: {{path}}",
+    "preprocessing_editor_resize": "Изменить высоту редактора",
+    "copy_failed": "Не удалось скопировать: {{message}}",
   } satisfies Partial<Record<keyof typeof enDashboard, string>>;
 
 export default mergeNamespace(baseDashboard, dashboardOverrides);

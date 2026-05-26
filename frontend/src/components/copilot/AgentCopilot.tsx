@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useId } from "react";
 import { PluginSDK } from "xiaowo-sdk";
 import { voidCall, voidPromise } from "@/utils/async";
-import { Bot, Send, Square, Plus, ChevronDown, Trash2, MessageSquare, PanelRightClose, Paperclip, X } from "lucide-react";
+import { Bot, Send, Square, Plus, ChevronDown, Trash2, MessageSquare, ChevronsRight, Paperclip, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
@@ -198,6 +198,7 @@ export function AgentCopilot() {
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const allTurns = composeAllTurns(turns, draftTurn);
   const isRunning = sessionStatus === "running";
@@ -439,24 +440,6 @@ export function AgentCopilot() {
         style={{ borderBottom: "1px solid var(--color-hairline)" }}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleAssistantPanel}
-            className="shrink-0 rounded p-1 transition-colors focus-ring"
-            style={{ color: "var(--color-text-3)" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "oklch(0.28 0.012 265 / 0.6)";
-              e.currentTarget.style.color = "var(--color-text)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "var(--color-text-3)";
-            }}
-            title={t("collapse_panel")}
-            aria-label={t("collapse_panel")}
-          >
-            <PanelRightClose aria-hidden className="h-4 w-4" />
-          </button>
           <div
             className="grid h-6 w-6 shrink-0 place-items-center rounded-md"
             style={{
@@ -576,9 +559,28 @@ export function AgentCopilot() {
 
       {/* Input area */}
       <div
-        className="p-3"
+        className="relative p-3"
         style={{ borderTop: "1px solid var(--color-hairline-soft)" }}
       >
+        <button
+          type="button"
+          onClick={toggleAssistantPanel}
+          className="absolute bottom-0 left-0 z-20 cursor-pointer bg-transparent p-0 transition-colors focus-ring"
+          style={{
+            color: "var(--color-text-3)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--color-accent-2)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--color-text-3)";
+          }}
+          title={t("collapse_panel")}
+          aria-label={t("collapse_panel")}
+        >
+          <ChevronsRight aria-hidden className="h-4 w-4" />
+        </button>
+
         {/* Thumbnail strip */}
         {attachedImages.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -626,17 +628,27 @@ export function AgentCopilot() {
         )}
 
         <div
-          className="relative flex items-end gap-2 rounded-lg px-3 py-2 transition-colors"
+          className="relative min-h-[76px] rounded-lg pb-10 pl-3 pr-0 pt-2 transition-colors"
           style={{
-            border: `1px solid ${isDragOver ? "var(--color-accent)" : "var(--color-hairline)"}`,
             background: isDragOver
               ? "var(--color-accent-dim)"
-              : "oklch(0.20 0.012 265 / 0.7)",
+              : inputFocused
+                ? "oklch(0.245 0.014 265 / 0.86)"
+                : "oklch(0.225 0.012 265 / 0.78)",
             backdropFilter: "blur(8px)",
             WebkitBackdropFilter: "blur(8px)",
             boxShadow: isDragOver
-              ? "0 0 0 3px var(--color-accent-soft), inset 0 1px 0 oklch(1 0 0 / 0.04)"
-              : "inset 0 1px 0 oklch(1 0 0 / 0.04)",
+              ? "0 0 0 3px var(--color-accent-soft)"
+              : inputFocused
+                ? "0 10px 28px -24px var(--color-accent-glow), inset 0 1px 0 oklch(1 0 0 / 0.035)"
+                : "inset 0 1px 0 oklch(1 0 0 / 0.025)",
+          }}
+          onFocus={() => setInputFocused(true)}
+          onBlur={(e) => {
+            const next = e.relatedTarget;
+            if (!next || !e.currentTarget.contains(next)) {
+              setInputFocused(false);
+            }
           }}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -671,7 +683,7 @@ export function AgentCopilot() {
               // eslint-disable-next-line react-hooks/refs -- aria-activedescendant 需实时读取 slashMenuRef 的派生值，改用回调 prop 需修改 SlashCommandMenu 接口，超出范围
               slashMenuRef.current?.activeDescendantId
             }
-            className="flex-1 resize-none overflow-hidden bg-transparent text-[13px] outline-none"
+            className="block w-full resize-none overflow-hidden bg-transparent pb-1 text-[13px] outline-none"
             style={{
               maxHeight: `${MAX_TEXTAREA_HEIGHT_VH}vh`,
               color: "var(--color-text)",
@@ -679,63 +691,65 @@ export function AgentCopilot() {
             disabled={inputDisabled}
           />
 
-          {/* Attachment button */}
-          <button
-            type="button"
-            onClick={voidPromise(handlePickImage)}
-            disabled={attachDisabled}
-            className="shrink-0 rounded p-1.5 transition-colors focus-ring disabled:opacity-30"
-            style={{ color: "var(--color-text-3)" }}
-            onMouseEnter={(e) => {
-              if (!attachDisabled) {
-                e.currentTarget.style.background = "oklch(0.26 0.012 265 / 0.6)";
-                e.currentTarget.style.color = "var(--color-text)";
-              }
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "var(--color-text-3)";
-            }}
-            title={attachedImages.length >= MAX_IMAGES ? t("max_images_hint", { count: MAX_IMAGES }) : t("attach_image")}
-            aria-label={t("attach_image")}
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
-
-          {isRunning ? (
+          <div className="absolute bottom-2 right-2 flex items-center gap-1">
+            {/* Attachment button */}
             <button
-              onClick={voidPromise(interrupt)}
-              className="shrink-0 rounded p-1.5 transition-colors focus-ring"
-              style={{ color: "var(--color-danger)" }}
+              type="button"
+              onClick={voidPromise(handlePickImage)}
+              disabled={attachDisabled}
+              className="shrink-0 rounded p-1.5 transition-colors focus-ring disabled:opacity-30"
+              style={{ color: "var(--color-text-3)" }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "oklch(0.70 0.18 25 / 0.15)";
+                if (!attachDisabled) {
+                  e.currentTarget.style.background = "oklch(0.26 0.012 265 / 0.6)";
+                  e.currentTarget.style.color = "var(--color-text)";
+                }
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = "var(--color-text-3)";
               }}
-              title={t("stop_session")}
-              aria-label={t("stop_session")}
+              title={attachedImages.length >= MAX_IMAGES ? t("max_images_hint", { count: MAX_IMAGES }) : t("attach_image")}
+              aria-label={t("attach_image")}
             >
-              <Square className="h-4 w-4" />
+              <Paperclip className="h-4 w-4" />
             </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={(!localInput.trim() && attachedImages.length === 0) || inputDisabled}
-              className="shrink-0 rounded-md p-1.5 transition-opacity focus-ring disabled:cursor-not-allowed disabled:opacity-30"
-              style={{
-                color: "oklch(0.14 0 0)",
-                background:
-                  "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
-                boxShadow:
-                  "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
-              }}
-              title={t("send_message")}
-              aria-label={t("send_message")}
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          )}
+
+            {isRunning ? (
+              <button
+                onClick={voidPromise(interrupt)}
+                className="shrink-0 rounded p-1.5 transition-colors focus-ring"
+                style={{ color: "var(--color-danger)" }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "oklch(0.70 0.18 25 / 0.15)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+                title={t("stop_session")}
+                aria-label={t("stop_session")}
+              >
+                <Square className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={(!localInput.trim() && attachedImages.length === 0) || inputDisabled}
+                className="shrink-0 rounded-md p-1.5 transition-opacity focus-ring disabled:cursor-not-allowed disabled:opacity-30"
+                style={{
+                  color: "oklch(0.14 0 0)",
+                  background:
+                    "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
+                  boxShadow:
+                    "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
+                }}
+                title={t("send_message")}
+                aria-label={t("send_message")}
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
 
       </div>

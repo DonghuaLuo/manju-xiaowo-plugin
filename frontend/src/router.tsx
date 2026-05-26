@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { Route, Switch, Redirect, useParams } from "wouter";
+import { PluginSDK } from "xiaowo-sdk";
 import { StudioLayout } from "@/components/layout";
 import { StudioCanvasRouter } from "@/components/canvas/StudioCanvasRouter";
 import { ProjectsPage } from "@/components/pages/ProjectsPage";
@@ -13,6 +14,21 @@ import { ToastOverlay } from "@/components/layout/ToastOverlay";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAssistantStore } from "@/stores/assistant-store";
+
+let workspaceMaximizeState: "idle" | "pending" | "done" = "idle";
+
+function maximizeWorkspaceWindowOnce() {
+  if (workspaceMaximizeState !== "idle") return;
+  workspaceMaximizeState = "pending";
+  void PluginSDK.maximize()
+    .then(() => {
+      workspaceMaximizeState = "done";
+    })
+    .catch((error) => {
+      workspaceMaximizeState = "idle";
+      console.error("Failed to maximize plugin window on first project entry", error);
+    });
+}
 
 // ---------------------------------------------------------------------------
 // StudioWorkspace — loads project data and renders three-column layout
@@ -26,6 +42,8 @@ function StudioWorkspace() {
   useEffect(() => {
     if (!projectName) return;
     let cancelled = false;
+
+    maximizeWorkspaceWindowOnce();
 
     // 清空上一个项目的 assistant 状态，确保会话隔离
     const assistantState = useAssistantStore.getState();

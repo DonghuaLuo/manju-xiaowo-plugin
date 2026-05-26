@@ -190,14 +190,14 @@ export function StudioLayout({ children }: StudioLayoutProps) {
         </div>
       </div>
 
-      {/* 悬浮助手球：收起时显示在右上角 */}
+      {/* 悬浮助手球：收起时显示在右下角 */}
       <button
         type="button"
         onClick={toggleAssistantPanel}
         disabled={assistantPanelOpen}
         tabIndex={assistantPanelOpen ? -1 : 0}
         aria-hidden={assistantPanelOpen}
-        className={`fixed right-4 top-14 grid h-10 w-10 place-items-center rounded-xl transition-all duration-300 ease-in-out ${UI_LAYERS.workspaceFloating} ${
+        className={`fixed bottom-4 right-4 grid h-10 w-10 place-items-center rounded-xl transition-all duration-300 ease-in-out ${UI_LAYERS.workspaceFloating} ${
           assistantPanelOpen
             ? "scale-0 pointer-events-none opacity-0"
             : "scale-100 cursor-pointer opacity-100"
