@@ -415,6 +415,28 @@ class TestExportEpisodeDraft:
             assert "/tmp/" not in raw and "\\Temp\\" not in raw
             assert draft_path in raw
 
+    def test_exports_draft_directory_without_zip(self, tmp_path):
+        """桌面插件直接导出时在剪映草稿目录创建草稿目录，不生成 ZIP。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, _ = self._setup_project(tmp_path)
+        svc = JianyingDraftService(pm)
+        draft_root = tmp_path / "jianying-drafts"
+
+        draft_dir = svc.export_episode_draft_to_directory(
+            project_name="demo",
+            episode=1,
+            draft_path=str(draft_root),
+        )
+
+        assert draft_dir.parent == draft_root
+        assert draft_dir.is_dir()
+        assert (draft_dir / "draft_info.json").exists()
+        assert (draft_dir / "draft_meta_info.json").exists()
+        assert (draft_dir / "assets" / "segment_S1.mp4").exists()
+        assert (draft_dir / "assets" / "segment_S2.mp4").exists()
+        assert not list(draft_root.glob("*.zip"))
+
     def test_episode_not_found_raises(self, tmp_path):
         """集数不存在时抛出 FileNotFoundError"""
         from server.services.jianying_draft_service import JianyingDraftService

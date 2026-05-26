@@ -60,76 +60,91 @@ def format_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
-def open_file_location(file_path):
-    """
-    在文件管理器中打开文件所在目录并选中该文件
+def _open_file_manager(args):
+    subprocess.Popen(
+        args,
+        shell=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-    Args:
-        file_path: 文件路径
 
-    Returns:
-        dict: 操作结果
-    """
+def open_in_dir_explorer(file_dir):
+    """在系统文件管理器中打开目录。"""
     try:
-        path = Path(file_path)
+        if not file_dir:
+            return {"success": False, "message": "目录路径不能为空"}
 
+        dir_path = Path(file_dir).expanduser()
+        if not dir_path.exists():
+            return {"success": False, "message": f"目录不存在: {file_dir}"}
+
+        if not dir_path.is_dir():
+            return {"success": False, "message": f"路径不是目录: {file_dir}"}
+
+        absolute_dir = str(dir_path.resolve())
+        if sys.platform == "win32":
+            _open_file_manager(["explorer", absolute_dir])
+        elif sys.platform == "darwin":
+            _open_file_manager(["open", absolute_dir])
+        else:
+            _open_file_manager(["xdg-open", absolute_dir])
+
+        return {
+            "success": True,
+            "message": "目录已打开",
+            "path": absolute_dir,
+            "openedPath": absolute_dir,
+        }
+
+    except Exception as e:
+        print(traceback.format_exc(), flush=True)
+        return {"success": False, "message": f"打开目录失败: {str(e)}"}
+
+
+def open_in_file_explorer(file_path):
+    """在系统文件管理器中打开路径；文件会定位选中，目录会直接打开。"""
+    try:
+        if not file_path:
+            return {"success": False, "message": "路径不能为空"}
+
+        path = Path(file_path).expanduser()
         if not path.exists():
-            return {"success": False, "message": "文件不存在"}
+            return {"success": False, "message": f"路径不存在: {file_path}"}
+
+        if path.is_dir():
+            return open_in_dir_explorer(path)
 
         if not path.is_file():
-            return {"success": False, "message": "路径不是文件"}
+            return {"success": False, "message": f"路径不是文件: {file_path}"}
 
-        # 根据操作系统选择打开方式
+        absolute_file = str(path.resolve())
+        parent_dir = str(path.parent.resolve())
         if sys.platform == "win32":
-            # Windows - 使用 explorer /select 命令选中文件
-            subprocess.Popen(["explorer", "/select,", os.path.abspath(file_path)])
+            _open_file_manager(["explorer", "/select,", absolute_file])
         elif sys.platform == "darwin":
-            # macOS - 使用 open -R 命令选中文件
-            subprocess.Popen(["open", "-R", str(path)])
+            _open_file_manager(["open", "-R", absolute_file])
         else:
-            # Linux - 大多数文件管理器不支持选中文件，只能打开目录
-            # 尝试使用 dbus 调用文件管理器（适用于支持的桌面环境）
-            subprocess.Popen(["xdg-open", str(path.parent)])
+            _open_file_manager(["xdg-open", parent_dir])
 
-        return {"success": True, "message": "已打开文件位置"}
+        return {
+            "success": True,
+            "message": "已打开文件位置",
+            "path": absolute_file,
+            "openedPath": parent_dir,
+        }
 
     except Exception as e:
         print(traceback.format_exc(), flush=True)
         return {"success": False, "message": f"打开文件位置失败: {str(e)}"}
 
+
+def open_file_location(file_path):
+    """兼容旧调用：打开文件所在目录并选中文件。"""
+    return open_in_file_explorer(file_path)
+
+
 def open_directory(path):
-    """
-    在文件管理器中打开指定目录
-
-    Args:
-        path: 要打开的目录路径
-
-    Returns:
-        dict: 包含 success 和 message 的字典
-    """
-    try:
-        # 确保路径存在
-        dir_path = Path(path)
-        if not dir_path.exists():
-            return {"success": False, "message": f"目录不存在: {path}"}
-
-        if not dir_path.is_dir():
-            return {"success": False, "message": f"路径不是目录: {path}"}
-
-        # 根据操作系统选择打开方式
-        if sys.platform == "win32":
-            # Windows - 使用 explorer 命令在前台打开
-            # 使用 Popen 而不是 run，避免等待进程结束
-            subprocess.Popen(["explorer", os.path.abspath(path)])
-        elif sys.platform == "darwin":
-            # macOS
-            subprocess.Popen(["open", path], check=True)
-        else:
-            # Linux
-            subprocess.Popen(["xdg-open", path], check=True)
-
-        return {"success": True, "message": "目录已打开"}
-
-    except Exception as e:
-        print(traceback.format_exc(),flush=True)
-        return {"success": False, "message": f"打开目录失败: {str(e)}"}
+    """兼容旧调用：在文件管理器中打开指定目录。"""
+    return open_in_dir_explorer(path)

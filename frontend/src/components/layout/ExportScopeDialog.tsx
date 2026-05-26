@@ -1,14 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Package,
   History,
   Clapperboard,
   ArrowLeft,
+  FolderOpen,
   Loader2,
   PackageCheck,
 } from "lucide-react";
+import { PluginSDK } from "xiaowo-sdk";
 import { GlassPopover } from "@/components/ui/GlassPopover";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { API } from "@/api";
 import { useTranslation } from "react-i18next";
 import type { RefObject, ReactNode } from "react";
 import type { EpisodeMeta } from "@/types/project";
@@ -17,6 +20,19 @@ import { WARM_TONE } from "@/utils/severity-tone";
 export type ExportScope = "current" | "full" | "jianying-draft";
 
 const DRAFT_PATH_STORAGE_KEY = "arcreel_jianying_draft_path";
+
+function readStoredDraftPath(): string {
+  return localStorage.getItem(DRAFT_PATH_STORAGE_KEY) || "";
+}
+
+function persistDraftPath(path: string): void {
+  const normalized = path.trim();
+  if (normalized) {
+    localStorage.setItem(DRAFT_PATH_STORAGE_KEY, normalized);
+    return;
+  }
+  localStorage.removeItem(DRAFT_PATH_STORAGE_KEY);
+}
 
 interface ExportScopeDialogProps {
   open: boolean;
@@ -42,15 +58,13 @@ export function ExportScopeDialog({
   const [selectedEpisode, setSelectedEpisode] = useState<number>(
     episodes.length > 0 ? episodes[0].episode : 1,
   );
-  const isWindows =
-    typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
-  const defaultDraftPath = isWindows
-    ? t("dashboard:draft_path_default_windows")
-    : t("dashboard:draft_path_default_mac");
-  const [draftPath, setDraftPath] = useState<string>(
-    () => localStorage.getItem(DRAFT_PATH_STORAGE_KEY) || defaultDraftPath,
-  );
+  const [draftPath, setDraftPath] = useState<string>(() => readStoredDraftPath());
   const [jianyingVersion, setJianyingVersion] = useState("6");
+
+  const updateDraftPath = useCallback((path: string) => {
+    setDraftPath(path);
+    persistDraftPath(path);
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -66,10 +80,47 @@ export function ExportScopeDialog({
     }
   }, [episodes]);
 
+  useEffect(() => {
+    if (!open || mode !== "jianying-form") return;
+    let cancelled = false;
+    void API.detectJianyingDraftRoot()
+      .then((path) => {
+        if (cancelled) return;
+        const detectedPath = path.trim();
+        if (detectedPath) {
+          setDraftPath(detectedPath);
+          persistDraftPath(detectedPath);
+          return;
+        }
+        setDraftPath(readStoredDraftPath());
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDraftPath(readStoredDraftPath());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, open]);
+
+  const handlePickDraftPath = async () => {
+    const selected = await PluginSDK.dialog.open({
+      title: t("dashboard:select_draft_dir"),
+      directory: true,
+      multiple: false,
+      defaultPath: draftPath.trim() || undefined,
+    });
+    if (typeof selected === "string") {
+      updateDraftPath(selected);
+    }
+  };
+
   const handleJianyingSubmit = () => {
     if (!draftPath.trim() || !onJianyingExport) return;
-    localStorage.setItem(DRAFT_PATH_STORAGE_KEY, draftPath.trim());
-    onJianyingExport(selectedEpisode, draftPath.trim(), jianyingVersion);
+    const normalizedDraftPath = draftPath.trim();
+    persistDraftPath(normalizedDraftPath);
+    onJianyingExport(selectedEpisode, normalizedDraftPath, jianyingVersion);
   };
 
   return (
@@ -239,20 +290,38 @@ export function ExportScopeDialog({
               label={t("dashboard:draft_path")}
               hint={t("dashboard:draft_path_hint")}
             >
-              <input
-                id="jianying-draft-path"
-                type="text"
-                value={draftPath}
-                onChange={(e) => setDraftPath(e.target.value)}
-                placeholder={t("dashboard:draft_path_placeholder")}
-                className="focus-ring w-full rounded-md px-2.5 py-1.5 text-[13px] outline-none"
-                style={{
-                  background: "oklch(0.16 0.010 265 / 0.6)",
-                  border: "1px solid var(--color-hairline)",
-                  color: "var(--color-text)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              />
+              <div className="flex gap-2">
+                <input
+                  id="jianying-draft-path"
+                  type="text"
+                  value={draftPath}
+                  onChange={(e) => updateDraftPath(e.target.value)}
+                  placeholder={t("dashboard:draft_path_placeholder")}
+                  className="focus-ring min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-[13px] outline-none"
+                  style={{
+                    background: "oklch(0.16 0.010 265 / 0.6)",
+                    border: "1px solid var(--color-hairline)",
+                    color: "var(--color-text)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handlePickDraftPath();
+                  }}
+                  className="focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-md transition-colors"
+                  style={{
+                    background: "oklch(0.16 0.010 265 / 0.6)",
+                    border: "1px solid var(--color-hairline)",
+                    color: "var(--color-text-2)",
+                  }}
+                  aria-label={t("dashboard:select_draft_dir")}
+                  title={t("dashboard:select_draft_dir")}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </FormField>
 
             <PrimaryButton

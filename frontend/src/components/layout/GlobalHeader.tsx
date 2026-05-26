@@ -1,7 +1,8 @@
-import { startTransition, useState, useEffect, useRef } from "react";
-import { errMsg, voidPromise } from "@/utils/async";
+import { startTransition, useCallback, useId, useState, useEffect, useRef } from "react";
+import { errMsg } from "@/utils/async";
 import { useLocation } from "wouter";
-import { ChevronLeft, Activity, Settings, Bell, Download, Loader2, Package } from "lucide-react";
+import { ChevronLeft, Activity, Settings, Bell, Download, Loader2, Package, FolderOpen } from "lucide-react";
+import { PluginSDK } from "xiaowo-sdk";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "@/stores/app-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
@@ -14,16 +15,27 @@ import { WorkspaceNotificationsDrawer } from "./WorkspaceNotificationsDrawer";
 import { ExportScopeDialog } from "./ExportScopeDialog";
 import { ProjectMenu } from "./ProjectMenu";
 import { PhaseStepper } from "./PhaseStepper";
+import { GlassModal } from "@/components/ui/GlassModal";
+import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
+import { PrimaryButton } from "@/components/ui/PrimaryButton";
 
-import { API } from "@/api";
+import { API, type ExportTaskEvent } from "@/api";
 import { ArchiveDiagnosticsDialog } from "@/components/shared/ArchiveDiagnosticsDialog";
 import { rememberAssetLibraryReturnTo } from "@/components/pages/AssetLibraryPage";
 import { costEntries, formatCostOrZero, formatCurrencyAmount } from "@/utils/cost-format";
-import { offerOpenSavedFile, saveBlobWithDialog } from "@/utils/desktop-download";
 import type { ExportDiagnostics, WorkspaceNotification } from "@/types";
 
 interface GlobalHeaderProps {
   onNavigateBack?: () => void;
+}
+
+function normalizeExportDiagnosticsPayload(value: unknown): ExportDiagnostics {
+  const payload = (value && typeof value === "object" ? value : {}) as Partial<ExportDiagnostics>;
+  return {
+    blocking: Array.isArray(payload.blocking) ? payload.blocking : [],
+    auto_fixed: Array.isArray(payload.auto_fixed) ? payload.auto_fixed : [],
+    warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+  };
 }
 
 /**
@@ -46,10 +58,12 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [jianyingExporting, setJianyingExporting] = useState(false);
   const [exportDiagnostics, setExportDiagnostics] = useState<ExportDiagnostics | null>(null);
+  const [openSavedPath, setOpenSavedPath] = useState<string | null>(null);
   const usageAnchorRef = useRef<HTMLDivElement>(null);
   const notificationAnchorRef = useRef<HTMLDivElement>(null);
   const taskHudAnchorRef = useRef<HTMLDivElement>(null);
   const exportAnchorRef = useRef<HTMLDivElement>(null);
+  const exportTaskIdsRef = useRef(new Set<string>());
   const isConfigComplete = useConfigStatusStore((s) => s.isComplete);
   const fetchConfigStatus = useConfigStatusStore((s) => s.fetch);
   const workspaceNotifications = useAppStore((s) => s.workspaceNotifications);
@@ -84,12 +98,12 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const extraCostCount = Math.max(0, nonZeroCostEntries.length - 2);
   const costTooltip = formatCostOrZero(costByCurrency);
 
-  const promptOpenSavedFile = async (savedPath: string) => {
+  const handleOpenSavedPath = useCallback(async () => {
+    const path = openSavedPath;
+    if (!path) return;
+    setOpenSavedPath(null);
     try {
-      await offerOpenSavedFile(savedPath, {
-        title: t("dashboard:open_saved_file_title"),
-        message: t("dashboard:open_saved_file_prompt", { path: savedPath }),
-      });
+      await API.openDesktopPath(path);
     } catch (err) {
       useAppStore
         .getState()
@@ -98,7 +112,78 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           "error",
         );
     }
-  };
+  }, [openSavedPath, t]);
+
+  const handleExportTask = useCallback((event: ExportTaskEvent) => {
+    const taskId = event.taskId;
+    if (!taskId || !exportTaskIdsRef.current.has(taskId)) return;
+    if (event.status !== "completed" && event.status !== "failed") return;
+
+    exportTaskIdsRef.current.delete(taskId);
+    if (event.kind === "project_archive") {
+      setExportingProject(false);
+    }
+    if (event.kind === "jianying_draft") {
+      setJianyingExporting(false);
+    }
+
+    if (event.status === "failed") {
+      const key = event.kind === "jianying_draft" ? "dashboard:jianying_export_failed" : "dashboard:export_failed";
+      useAppStore
+        .getState()
+        .pushNotification(t(key, { message: event.error || "" }), "error");
+      return;
+    }
+
+    if (event.kind === "project_archive") {
+      const savedPath = event.exportPath || "";
+      const diagnostics = normalizeExportDiagnosticsPayload(event.diagnostics);
+      const diagnosticCount =
+        diagnostics.blocking.length + diagnostics.auto_fixed.length + diagnostics.warnings.length;
+      if (diagnosticCount > 0) {
+        setExportDiagnostics(diagnostics);
+        useAppStore.getState().pushToast(
+          `${t("dashboard:project_zip_export_completed_with_diagnostics", {
+            count: diagnosticCount,
+          })}：${savedPath}`,
+          "warning",
+        );
+      } else {
+        useAppStore
+          .getState()
+          .pushToast(`${t("dashboard:project_zip_export_completed")}：${savedPath}`, "success");
+      }
+      if (savedPath) {
+        setOpenSavedPath(savedPath);
+      }
+      return;
+    }
+
+    if (event.kind === "jianying_draft") {
+      const draftDir = event.draftDir || event.draftPath || "";
+      useAppStore
+        .getState()
+        .pushToast(`${t("dashboard:jianying_export_completed")}：${draftDir}`, "success");
+      if (draftDir) {
+        setOpenSavedPath(draftDir);
+      }
+    }
+  }, [t]);
+
+  const syncExportTaskStatus = useCallback((taskId: string) => {
+    void API.getExportTaskStatus(taskId)
+      .then((event) => {
+        if (event) handleExportTask(event);
+      })
+      .catch(() => {});
+  }, [handleExportTask]);
+
+  useEffect(() => {
+    PluginSDK.onBackendEvent<ExportTaskEvent>("arcreel_export_task", handleExportTask);
+    return () => {
+      PluginSDK.offBackendEvent("arcreel_export_task", handleExportTask);
+    };
+  }, [handleExportTask]);
 
   const handleNotificationNavigate = (notification: WorkspaceNotification) => {
     if (!notification.target) return;
@@ -127,32 +212,26 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
 
     setJianyingExporting(true);
     try {
-      const { blob, filename } = await API.exportJianyingDraft(
+      const { taskId } = await API.startJianyingDraftExport(
         currentProjectName,
         episode,
         draftPath,
         jianyingVersion,
       );
-      const savedPath = await saveBlobWithDialog(blob, {
-        title: t("dashboard:jianying_export_started"),
-        defaultFileName: filename,
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
-      });
-      if (!savedPath) return;
+      exportTaskIdsRef.current.add(taskId);
+      syncExportTaskStatus(taskId);
       setExportDialogOpen(false);
       useAppStore
         .getState()
-        .pushToast(`${t("dashboard:jianying_export_started")}：${savedPath}`, "success");
-      await promptOpenSavedFile(savedPath);
+        .pushToast(`${t("dashboard:jianying_export_started")}：${draftPath}`, "success");
     } catch (err) {
+      setJianyingExporting(false);
       useAppStore
         .getState()
         .pushNotification(
           t("dashboard:jianying_export_failed", { message: errMsg(err) }),
           "error",
         );
-    } finally {
-      setJianyingExporting(false);
     }
   };
 
@@ -160,40 +239,30 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
     if (!currentProjectName || exportingProject) return;
 
     setExportDialogOpen(false);
-    setExportingProject(true);
     try {
-      const { blob, filename, diagnostics } = await API.exportProjectArchive(
-        currentProjectName,
-        scope,
-      );
-      const savedPath = await saveBlobWithDialog(blob, {
+      const selectedPath = await PluginSDK.dialog.save({
         title: t("dashboard:export_project_zip"),
-        defaultFileName: filename,
+        defaultPath: `${currentProjectName}-${scope}.zip`,
         filters: [{ name: "ZIP", extensions: ["zip"] }],
       });
-      if (!savedPath) return;
-      const diagnosticCount =
-        diagnostics.blocking.length + diagnostics.auto_fixed.length + diagnostics.warnings.length;
-      if (diagnosticCount > 0) {
-        setExportDiagnostics(diagnostics);
-        useAppStore.getState().pushToast(
-          `${t("dashboard:project_zip_download_started_with_diagnostics", {
-            count: diagnosticCount,
-          })}：${savedPath}`,
-          "warning",
-        );
-      } else {
-        useAppStore
-          .getState()
-          .pushToast(`${t("dashboard:project_zip_download_started")}：${savedPath}`, "success");
-      }
-      await promptOpenSavedFile(savedPath);
+      if (!selectedPath) return;
+
+      setExportingProject(true);
+      const { taskId, exportPath } = await API.startProjectArchiveExport(
+        currentProjectName,
+        scope,
+        selectedPath,
+      );
+      exportTaskIdsRef.current.add(taskId);
+      syncExportTaskStatus(taskId);
+      useAppStore
+        .getState()
+        .pushToast(`${t("dashboard:project_zip_export_started")}：${exportPath || selectedPath}`, "success");
     } catch (err) {
+      setExportingProject(false);
       useAppStore
         .getState()
         .pushNotification(t("dashboard:export_failed", { message: errMsg(err) }), "error");
-    } finally {
-      setExportingProject(false);
     }
   };
 
@@ -423,7 +492,9 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
               }}
               anchorRef={exportAnchorRef}
               episodes={currentProjectData?.episodes ?? []}
-              onJianyingExport={voidPromise(handleJianyingExport)}
+              onJianyingExport={(episode, draftPath, jianyingVersion) => {
+                void handleJianyingExport(episode, draftPath, jianyingVersion);
+              }}
               jianyingExporting={jianyingExporting}
             />
           </div>
@@ -513,6 +584,92 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           onClose={() => setExportDiagnostics(null)}
         />
       )}
+      {openSavedPath !== null && exportDiagnostics === null && (
+        <OpenSavedFileDialog
+          path={openSavedPath}
+          onOpen={() => void handleOpenSavedPath()}
+          onClose={() => setOpenSavedPath(null)}
+        />
+      )}
     </>
+  );
+}
+
+function OpenSavedFileDialog({
+  path,
+  onOpen,
+  onClose,
+}: {
+  path: string;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation(["dashboard", "common"]);
+  const titleId = useId();
+  const descriptionId = useId();
+
+  return (
+    <GlassModal
+      open
+      onClose={onClose}
+      labelledBy={titleId}
+      describedBy={descriptionId}
+      widthClassName="w-full max-w-md"
+    >
+      <div
+        className="flex items-start justify-between gap-4 px-5 py-4"
+        style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            aria-hidden
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl"
+            style={{
+              background:
+                "linear-gradient(135deg, var(--color-accent-dim), oklch(0.76 0.09 295 / 0.05))",
+              border: "1px solid var(--color-accent-soft)",
+              color: "var(--color-accent-2)",
+              boxShadow: "0 8px 18px -8px var(--color-accent-glow)",
+            }}
+          >
+            <FolderOpen className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2
+              id={titleId}
+              className="display-serif text-[16px] font-semibold tracking-tight"
+              style={{ color: "var(--color-text)" }}
+            >
+              {t("dashboard:open_saved_file_title")}
+            </h2>
+            <p
+              id={descriptionId}
+              className="mt-1 whitespace-pre-wrap break-all text-[12.5px] leading-[1.55]"
+              style={{ color: "var(--color-text-3)" }}
+            >
+              {t("dashboard:open_saved_file_prompt", { path })}
+            </p>
+          </div>
+        </div>
+        <ModalCloseButton onClick={onClose} />
+      </div>
+
+      <div className="flex justify-end gap-2 px-5 py-4">
+        <button
+          type="button"
+          className="arc-close-btn focus-ring inline-flex h-8 items-center justify-center rounded-md px-3 text-[12px]"
+          onClick={onClose}
+        >
+          {t("common:cancel")}
+        </button>
+        <PrimaryButton
+          size="sm"
+          onClick={onOpen}
+          leadingIcon={<FolderOpen className="h-3.5 w-3.5" />}
+        >
+          {t("dashboard:source_open")}
+        </PrimaryButton>
+      </div>
+    </GlassModal>
   );
 }

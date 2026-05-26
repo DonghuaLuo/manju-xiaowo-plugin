@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
+import { PluginSDK } from "xiaowo-sdk";
 import { GlobalHeader } from "@/components/layout/GlobalHeader";
 import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
@@ -81,6 +82,12 @@ describe("GlobalHeader", () => {
     vi.restoreAllMocks();
     desktopDownloadMock.offerOpenSavedFile.mockReset();
     desktopDownloadMock.saveBlobWithDialog.mockReset();
+    vi.mocked(PluginSDK.dialog.save).mockReset();
+    vi.mocked(PluginSDK.dialog.save).mockResolvedValue(null);
+    vi.mocked(PluginSDK.dialog.ask).mockReset();
+    vi.mocked(PluginSDK.dialog.ask).mockResolvedValue(false);
+    vi.mocked(PluginSDK.shell.open).mockReset();
+    vi.mocked(PluginSDK.shell.open).mockResolvedValue(undefined);
   });
 
   it("prefers the project title over the internal project name", async () => {
@@ -150,17 +157,12 @@ describe("GlobalHeader", () => {
       failed_count: 0,
       total_count: 0,
     });
-    const archiveBlob = new Blob(["zip"], { type: "application/zip" });
-    vi.spyOn(API, "exportProjectArchive").mockResolvedValue({
-      blob: archiveBlob,
-      filename: "demo-current.zip",
-      diagnostics: {
-        blocking: [],
-        auto_fixed: [{ code: "current_asset_restored_from_version", message: "修复视频引用" }],
-        warnings: [],
-      },
+    vi.spyOn(API, "startProjectArchiveExport").mockResolvedValue({
+      taskId: "export-task-1",
+      status: "queued",
+      exportPath: "C:\\exports\\demo-current.zip",
     });
-    desktopDownloadMock.saveBlobWithDialog.mockResolvedValueOnce("C:\\exports\\demo-current.zip");
+    vi.mocked(PluginSDK.dialog.save).mockResolvedValueOnce("C:\\exports\\demo-current.zip");
 
     useProjectsStore.setState({
       currentProjectName: "demo",
@@ -184,22 +186,81 @@ describe("GlobalHeader", () => {
     scopeBtn.click();
 
     await waitFor(() => {
-      expect(API.exportProjectArchive).toHaveBeenCalledWith("demo", "current");
+      expect(API.startProjectArchiveExport).toHaveBeenCalledWith(
+        "demo",
+        "current",
+        "C:\\exports\\demo-current.zip",
+      );
     });
-    expect(desktopDownloadMock.saveBlobWithDialog).toHaveBeenCalledWith(
-      archiveBlob,
+    expect(PluginSDK.dialog.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        defaultFileName: "demo-current.zip",
+        defaultPath: "demo-current.zip",
         filters: [{ name: "ZIP", extensions: ["zip"] }],
       }),
     );
-    expect(desktopDownloadMock.offerOpenSavedFile).toHaveBeenCalledWith(
-      "C:\\exports\\demo-current.zip",
-      expect.objectContaining({
-        message: expect.stringContaining("C:\\exports\\demo-current.zip"),
-      }),
-    );
-    expect(useAppStore.getState().toast?.text).toContain("包含 1 条诊断");
+    expect(useAppStore.getState().toast?.text).toContain("项目 ZIP 导出任务已开始");
+  });
+
+  it("uses an in-app dialog and backend call to open an exported location", async () => {
+    vi.spyOn(API, "getUsageStats").mockResolvedValue({
+      total_cost: 0,
+      image_count: 0,
+      video_count: 0,
+      failed_count: 0,
+      total_count: 0,
+    });
+    vi.spyOn(API, "getExportTaskStatus").mockResolvedValue({
+      taskId: "export-task-1",
+      kind: "project_archive",
+      status: "completed",
+      projectName: "demo",
+      scope: "current",
+      exportPath: "C:\\exports\\demo-current.zip",
+      diagnostics: { blocking: [], auto_fixed: [], warnings: [] },
+    });
+    vi.spyOn(API, "startProjectArchiveExport").mockResolvedValue({
+      taskId: "export-task-1",
+      status: "queued",
+      exportPath: "C:\\exports\\demo-current.zip",
+    });
+    vi.spyOn(API, "openDesktopPath").mockResolvedValue(undefined);
+    vi.mocked(PluginSDK.dialog.save).mockResolvedValueOnce("C:\\exports\\demo-current.zip");
+
+    useProjectsStore.setState({
+      currentProjectName: "demo",
+      currentProjectData: {
+        title: "导出项目",
+        content_mode: "narration",
+        style: "Anime",
+        episodes: [],
+        characters: {},
+        scenes: {},
+        props: {},
+      },
+    });
+
+    renderHeader();
+    screen.getByRole("button", { name: "导出当前项目 ZIP" }).click();
+    const scopeBtn = await screen.findByTestId("scope-current");
+    scopeBtn.click();
+
+    await waitFor(() => {
+      expect(API.startProjectArchiveExport).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(API.getExportTaskStatus).toHaveBeenCalledWith("export-task-1");
+    });
+
+    expect(await screen.findByText("打开保存位置？")).toBeInTheDocument();
+    expect(screen.getByText(/C:\\exports\\demo-current\.zip/)).toBeInTheDocument();
+
+    screen.getByRole("button", { name: "打开" }).click();
+
+    await waitFor(() => {
+      expect(API.openDesktopPath).toHaveBeenCalledWith("C:\\exports\\demo-current.zip");
+    });
+    expect(PluginSDK.shell.open).not.toHaveBeenCalled();
+    expect(PluginSDK.dialog.ask).not.toHaveBeenCalled();
   });
 
   it("renders asset library button", async () => {
@@ -251,7 +312,8 @@ describe("GlobalHeader", () => {
       failed_count: 0,
       total_count: 0,
     });
-    vi.spyOn(API, "exportProjectArchive").mockRejectedValue(new Error("network"));
+    vi.spyOn(API, "startProjectArchiveExport").mockRejectedValue(new Error("network"));
+    vi.mocked(PluginSDK.dialog.save).mockResolvedValueOnce("C:\\exports\\demo-full.zip");
 
     useProjectsStore.setState({
       currentProjectName: "demo",

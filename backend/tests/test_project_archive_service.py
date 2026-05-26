@@ -904,6 +904,26 @@ class TestExportScope:
             # versions.json 应保留（裁剪后）
             assert "demo/versions/versions.json" in names
 
+    def test_export_project_to_path_writes_requested_zip(self, tmp_path):
+        pm = ProjectManager(tmp_path / "projects")
+        self._create_project_with_versions(pm)
+        service = ProjectArchiveService(pm)
+        target_path = tmp_path / "exports" / "demo-current.zip"
+
+        written_path, diagnostics = service.export_project_to_path(
+            "demo",
+            target_path,
+            scope="current",
+        )
+
+        assert written_path == target_path
+        assert target_path.exists()
+        assert set(diagnostics) == {"blocking", "auto_fixed", "warnings"}
+        with zipfile.ZipFile(target_path) as archive:
+            names = set(archive.namelist())
+            assert f"demo/{ARCHIVE_MANIFEST_NAME}" in names
+            assert "demo/versions/storyboards/E1S01_v1.png" not in names
+
     def test_export_scope_current_trims_versions_json(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
         self._create_project_with_versions(pm)

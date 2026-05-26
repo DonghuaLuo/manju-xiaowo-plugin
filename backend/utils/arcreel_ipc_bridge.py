@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import platform
+import threading
 import subprocess
 import sys
 import time
@@ -43,6 +44,8 @@ _project_event_journal_offset: int | None = None
 _project_event_pending_batches: dict[str, list[dict[str, Any]]] = {}
 _assistant_stream_snapshots: dict[str, tuple[str, str | None]] = {}
 _assistant_stream_seen_messages: dict[str, set[str]] = {}
+_export_tasks: dict[str, dict[str, Any]] = {}
+_export_tasks_lock = threading.Lock()
 _event_id_seq = 0
 
 
@@ -459,6 +462,316 @@ def _zip_blob_result(
         else:
             with suppress(FileNotFoundError):
                 path.unlink()
+
+
+def _validate_desktop_path(raw_path: Any, *, field_name: str, max_length: int = 4096) -> Path:
+    path_text = str(raw_path or "").strip()
+    if not path_text:
+        raise ValueError(f"Missing {field_name}")
+    if len(path_text) > max_length or any(ord(char) < 32 for char in path_text):
+        raise ValueError(f"Invalid {field_name}")
+    return Path(path_text).expanduser()
+
+
+def _normalize_zip_export_path(raw_path: Any) -> Path:
+    path = _validate_desktop_path(raw_path, field_name="exportPath")
+    if path.suffix.lower() != ".zip":
+        path = Path(f"{path}.zip")
+    return path
+
+
+def _record_export_task(task_id: str, payload: dict[str, Any]) -> None:
+    snapshot = {"taskId": task_id, "updatedAt": _utc_now_iso(), **payload}
+    with _export_tasks_lock:
+        _export_tasks[task_id] = snapshot
+
+
+def _emit_export_task_event(task_id: str, payload: dict[str, Any]) -> None:
+    event = {"taskId": task_id, "updatedAt": _utc_now_iso(), **payload}
+    with _export_tasks_lock:
+        _export_tasks[task_id] = event
+    try:
+        from utils.xiaowo_sdk import sdk
+
+        sdk.send_event("arcreel_export_task", event)
+    except Exception:
+        _log_exception()
+
+
+def _run_project_archive_export_task(
+    *,
+    task_id: str,
+    project_name: str,
+    scope: str,
+    export_path: Path,
+) -> None:
+    _emit_export_task_event(
+        task_id,
+        {
+            "kind": "project_archive",
+            "status": "running",
+            "projectName": project_name,
+            "scope": scope,
+            "exportPath": str(export_path),
+        },
+    )
+    try:
+        from lib.app_data_dir import app_data_dir
+        from lib.project_manager import ProjectManager
+        from server.services.project_archive import ProjectArchiveService
+
+        service = ProjectArchiveService(ProjectManager(app_data_dir()))
+        target_path, diagnostics = service.export_project_to_path(
+            project_name,
+            export_path,
+            scope=scope,
+        )
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "project_archive",
+                "status": "completed",
+                "projectName": project_name,
+                "scope": scope,
+                "exportPath": str(target_path),
+                "diagnostics": diagnostics,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "project_archive",
+                "status": "failed",
+                "projectName": project_name,
+                "scope": scope,
+                "exportPath": str(export_path),
+                "error": str(exc),
+            },
+        )
+
+
+def _run_jianying_draft_export_task(
+    *,
+    task_id: str,
+    project_name: str,
+    episode: int,
+    draft_path: Path,
+    jianying_version: str,
+) -> None:
+    _emit_export_task_event(
+        task_id,
+        {
+            "kind": "jianying_draft",
+            "status": "running",
+            "projectName": project_name,
+            "episode": episode,
+            "draftPath": str(draft_path),
+        },
+    )
+    try:
+        from lib.app_data_dir import app_data_dir
+        from lib.project_manager import ProjectManager
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        service = JianyingDraftService(ProjectManager(app_data_dir()))
+        draft_dir = service.export_episode_draft_to_directory(
+            project_name=project_name,
+            episode=episode,
+            draft_path=str(draft_path),
+            use_draft_info_name=(jianying_version != "5"),
+        )
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "jianying_draft",
+                "status": "completed",
+                "projectName": project_name,
+                "episode": episode,
+                "draftPath": str(draft_path),
+                "draftDir": str(draft_dir),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "jianying_draft",
+                "status": "failed",
+                "projectName": project_name,
+                "episode": episode,
+                "draftPath": str(draft_path),
+                "error": str(exc),
+            },
+        )
+
+
+def _start_export_thread(name: str, target: Any, kwargs: dict[str, Any]) -> None:
+    thread = threading.Thread(
+        target=target,
+        kwargs=kwargs,
+        name=name,
+    )
+    thread.start()
+
+
+def _detect_jianying_draft_root() -> str:
+    candidates: list[Path] = []
+    system = platform.system()
+    home = Path.home()
+    if system == "Windows":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(Path(local_app_data) / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
+        candidates.append(home / "AppData" / "Local" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
+    elif system == "Darwin":
+        candidates.append(home / "Movies" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
+    else:
+        candidates.append(home / ".config" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_dir():
+            return key
+    return ""
+
+
+def _open_desktop_path(raw_path: Any) -> dict[str, str]:
+    from utils.common import open_in_file_explorer
+
+    path = _validate_desktop_path(raw_path, field_name="path")
+    result = open_in_file_explorer(path)
+    if not result.get("success"):
+        message = str(result.get("message") or f"路径不存在: {path}")
+        if "不存在" in message:
+            raise FileNotFoundError(message)
+        raise RuntimeError(message)
+
+    return {
+        "path": str(path),
+        "openedPath": str(result.get("openedPath") or path),
+    }
+
+
+async def open_desktop_path(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return {"ok": True, **_open_desktop_path((params or {}).get("path"))}
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
+
+
+async def _start_project_archive_export(params: dict[str, Any]) -> dict[str, Any]:
+    await _ensure_runtime()
+    project_name = str(params.get("projectName") or "").strip()
+    scope = str(params.get("scope") or "full")
+    if not project_name:
+        raise ValueError("Missing projectName")
+    if scope not in {"full", "current"}:
+        raise ValueError("Invalid export scope")
+
+    export_path = _normalize_zip_export_path(params.get("exportPath"))
+    task_id = uuid4().hex
+    _record_export_task(
+        task_id,
+        {
+            "kind": "project_archive",
+            "status": "queued",
+            "projectName": project_name,
+            "scope": scope,
+            "exportPath": str(export_path),
+        },
+    )
+    _start_export_thread(
+        f"arcreel-export-project-{task_id}",
+        _run_project_archive_export_task,
+        {
+            "task_id": task_id,
+            "project_name": project_name,
+            "scope": scope,
+            "export_path": export_path,
+        },
+    )
+    return {"ok": True, "taskId": task_id, "status": "queued", "exportPath": str(export_path)}
+
+
+async def start_project_archive_export(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await _start_project_archive_export(params)
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
+
+
+async def _start_jianying_draft_export(params: dict[str, Any]) -> dict[str, Any]:
+    await _ensure_runtime()
+    project_name = str(params.get("projectName") or "").strip()
+    jianying_version = str(params.get("jianyingVersion") or "6")
+    try:
+        episode = int(params.get("episode"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid episode") from exc
+
+    if not project_name:
+        raise ValueError("Missing projectName")
+    draft_path = _validate_desktop_path(params.get("draftPath"), field_name="draftPath", max_length=1024)
+
+    task_id = uuid4().hex
+    _record_export_task(
+        task_id,
+        {
+            "kind": "jianying_draft",
+            "status": "queued",
+            "projectName": project_name,
+            "episode": episode,
+            "draftPath": str(draft_path),
+        },
+    )
+    _start_export_thread(
+        f"arcreel-export-jianying-{task_id}",
+        _run_jianying_draft_export_task,
+        {
+            "task_id": task_id,
+            "project_name": project_name,
+            "episode": episode,
+            "draft_path": draft_path,
+            "jianying_version": jianying_version,
+        },
+    )
+    return {"ok": True, "taskId": task_id, "status": "queued", "draftPath": str(draft_path)}
+
+
+async def start_jianying_draft_export(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await _start_jianying_draft_export(params)
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
+
+
+async def get_export_task_status(params: dict[str, Any]) -> dict[str, Any]:
+    task_id = str((params or {}).get("taskId") or "").strip()
+    if not task_id:
+        return {"ok": False, "detail": "Missing taskId"}
+    with _export_tasks_lock:
+        task = _export_tasks.get(task_id)
+    if not task:
+        return {"ok": False, "detail": "Task not found"}
+    return {"ok": True, "task": task}
+
+
+async def detect_jianying_draft_root(params: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return {"ok": True, "path": _detect_jianying_draft_root()}
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc), "path": ""}
 
 
 async def _download_diagnostics_blob() -> dict[str, Any]:

@@ -452,6 +452,52 @@ type DesktopBinaryPayload = {
   diagnostics?: unknown;
 };
 
+export type ExportTaskKind = "project_archive" | "jianying_draft";
+export type ExportTaskStatus = "queued" | "running" | "completed" | "failed";
+
+export interface ExportTaskStartResponse {
+  ok?: boolean;
+  detail?: string;
+  taskId?: string;
+  status?: ExportTaskStatus;
+  exportPath?: string;
+  draftPath?: string;
+}
+
+export interface ExportTaskEvent {
+  taskId?: string;
+  kind?: ExportTaskKind;
+  status?: ExportTaskStatus;
+  projectName?: string;
+  scope?: "full" | "current";
+  episode?: number;
+  exportPath?: string;
+  draftPath?: string;
+  draftDir?: string;
+  diagnostics?: unknown;
+  error?: string;
+  updatedAt?: string;
+}
+
+export interface DetectJianyingDraftRootResponse {
+  ok?: boolean;
+  path?: string;
+  detail?: string;
+}
+
+export interface ExportTaskStatusResponse {
+  ok?: boolean;
+  task?: ExportTaskEvent;
+  detail?: string;
+}
+
+export interface OpenDesktopPathResponse {
+  ok?: boolean;
+  path?: string;
+  openedPath?: string;
+  detail?: string;
+}
+
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -538,6 +584,23 @@ function desktopBinaryPayloadToBlob(result: DesktopBinaryPayload, fallbackFilena
   return {
     blob: new Blob([arrayBuffer], { type: result.mimeType || "application/octet-stream" }),
     filename: result.filename || fallbackFilename,
+  };
+}
+
+function ensureExportTaskStarted(result: ExportTaskStartResponse): {
+  taskId: string;
+  status: ExportTaskStatus;
+  exportPath?: string;
+  draftPath?: string;
+} {
+  if (!result.ok || !result.taskId) {
+    throw new Error(result.detail || "导出任务启动失败");
+  }
+  return {
+    taskId: result.taskId,
+    status: result.status || "queued",
+    exportPath: result.exportPath,
+    draftPath: result.draftPath,
   };
 }
 
@@ -743,6 +806,36 @@ class API {
     };
   }
 
+  static async startProjectArchiveExport(
+    projectName: string,
+    scope: "full" | "current",
+    exportPath: string,
+  ): Promise<{ taskId: string; status: ExportTaskStatus; exportPath?: string }> {
+    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("arcreel_start_project_archive_export", {
+      projectName,
+      scope,
+      exportPath,
+    });
+    return ensureExportTaskStarted(result);
+  }
+
+  static async getExportTaskStatus(taskId: string): Promise<ExportTaskEvent | null> {
+    const result = await PluginSDK.callBackend<ExportTaskStatusResponse>("arcreel_export_task_status", {
+      taskId,
+    });
+    if (!result.ok || !result.task) return null;
+    return result.task;
+  }
+
+  static async openDesktopPath(path: string): Promise<void> {
+    const result = await PluginSDK.callBackend<OpenDesktopPathResponse>("arcreel_open_desktop_path", {
+      path,
+    });
+    if (!result.ok) {
+      throw new Error(result.detail || "打开保存位置失败");
+    }
+  }
+
   static async exportJianyingDraft(
     projectName: string,
     episode: number,
@@ -756,6 +849,30 @@ class API {
       jianyingVersion,
     });
     return desktopBinaryPayloadToBlob(result, `${projectName}-jianying-draft.zip`);
+  }
+
+  static async startJianyingDraftExport(
+    projectName: string,
+    episode: number,
+    draftPath: string,
+    jianyingVersion: string = "6",
+  ): Promise<{ taskId: string; status: ExportTaskStatus; draftPath?: string }> {
+    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("arcreel_start_jianying_draft_export", {
+      projectName,
+      episode,
+      draftPath,
+      jianyingVersion,
+    });
+    return ensureExportTaskStarted(result);
+  }
+
+  static async detectJianyingDraftRoot(): Promise<string> {
+    const result = await PluginSDK.callBackend<DetectJianyingDraftRootResponse>(
+      "arcreel_detect_jianying_draft_root",
+      {},
+    );
+    if (!result.ok) return "";
+    return result.path || "";
   }
 
   static async importProject(

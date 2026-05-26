@@ -48,7 +48,7 @@ export function ArchiveDiagnosticsDialog({
       open
       onClose={onClose}
       labelledBy={titleId}
-      widthClassName="w-full max-w-2xl"
+      widthClassName="w-full max-w-lg"
       hairlineTone="warm"
     >
       <div

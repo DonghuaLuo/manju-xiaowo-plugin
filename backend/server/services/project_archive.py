@@ -148,6 +148,26 @@ class ProjectArchiveValidationError(ValueError):
 
 
 class ProjectArchiveService:
+    _STORED_ARCHIVE_SUFFIXES = frozenset(
+        {
+            ".apng",
+            ".avi",
+            ".gif",
+            ".jpeg",
+            ".jpg",
+            ".m4a",
+            ".m4v",
+            ".mkv",
+            ".mov",
+            ".mp3",
+            ".mp4",
+            ".ogg",
+            ".png",
+            ".webm",
+            ".webp",
+            ".zip",
+        }
+    )
     _VERSION_HISTORY_DIRS = frozenset(
         {
             "storyboards",
@@ -192,9 +212,49 @@ class ProjectArchiveService:
         os.close(fd)
         archive_path = Path(archive_path_str)
 
+        self._write_project_archive(project_name, archive_path, scope=scope)
+        download_name = f"{project_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        return archive_path, download_name
+
+    def export_project_to_path(
+        self,
+        project_name: str,
+        target_path: Path,
+        *,
+        scope: str = "full",
+    ) -> tuple[Path, dict[str, list[dict[str, Any]]]]:
+        self._validate_scope(scope)
+        if not self.project_manager.project_exists(project_name):
+            raise FileNotFoundError(f"项目 '{project_name}' 不存在或未初始化")
+        if target_path.exists() and target_path.is_dir():
+            raise IsADirectoryError(f"导出目标不能是目录: {target_path}")
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path_str = tempfile.mkstemp(
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+            dir=str(target_path.parent),
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_path_str)
+        try:
+            diagnostics = self._write_project_archive(project_name, tmp_path, scope=scope)
+            os.replace(tmp_path, target_path)
+            return target_path, diagnostics
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+    def _write_project_archive(
+        self,
+        project_name: str,
+        archive_path: Path,
+        *,
+        scope: str,
+    ) -> dict[str, list[dict[str, Any]]]:
         temp_dir: tempfile.TemporaryDirectory[str] | None = None
         try:
-            temp_dir, snapshot_dir, manifest, _ = self._prepare_export_snapshot(
+            temp_dir, snapshot_dir, manifest, diagnostics = self._prepare_export_snapshot(
                 project_name,
                 scope=scope,
             )
@@ -225,8 +285,7 @@ class ProjectArchiveService:
             if temp_dir is not None:
                 temp_dir.cleanup()
 
-        download_name = f"{project_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
-        return archive_path, download_name
+        return diagnostics.to_export_payload()
 
     def import_project_archive(
         self,
@@ -435,7 +494,16 @@ class ProjectArchiveService:
                     )
                     continue
 
-                archive.write(source_path, arcname=archive_name)
+                archive.write(
+                    source_path,
+                    arcname=archive_name,
+                    compress_type=self._archive_compression_type(source_path),
+                )
+
+    def _archive_compression_type(self, source_path: Path) -> int:
+        if source_path.suffix.lower() in self._STORED_ARCHIVE_SUFFIXES:
+            return zipfile.ZIP_STORED
+        return zipfile.ZIP_DEFLATED
 
     @staticmethod
     def _trim_versions_payload(payload: dict[str, Any]) -> dict[str, Any]:

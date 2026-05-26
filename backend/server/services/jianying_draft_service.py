@@ -224,24 +224,43 @@ class JianyingDraftService:
     # 公开方法
     # ------------------------------------------------------------------
 
-    def export_episode_draft(
+    @staticmethod
+    def _safe_draft_name(project: dict, project_name: str, episode: int) -> str:
+        raw_title = str(project.get("title") or project_name)
+        safe_title = raw_title
+        for char in ('<', '>', ':', '"', '/', "\\", "|", "?", "*"):
+            safe_title = safe_title.replace(char, "_")
+        safe_title = safe_title.replace("..", "_").strip(" .") or project_name
+        return f"{safe_title}_第{episode}集"
+
+    @staticmethod
+    def _unique_draft_dir(draft_root: Path, draft_name: str) -> tuple[Path, str]:
+        target = draft_root / draft_name
+        if not target.exists():
+            return target, draft_name
+
+        index = 2
+        while True:
+            candidate_name = f"{draft_name}_{index}"
+            candidate = draft_root / candidate_name
+            if not candidate.exists():
+                return candidate, candidate_name
+            index += 1
+
+    @staticmethod
+    def _draft_assets_prefix(draft_path: str, draft_name: str) -> str:
+        normalized = draft_path.rstrip("/\\")
+        return f"{normalized}/{draft_name}/assets"
+
+    def _prepare_episode_draft_dir(
         self,
         project_name: str,
         episode: int,
         draft_path: str,
         *,
+        draft_name: str | None = None,
         use_draft_info_name: bool = True,
-    ) -> Path:
-        """
-        导出指定集的剪映草稿 ZIP。
-
-        Returns:
-            ZIP 文件路径（临时文件，调用方负责清理）
-
-        Raises:
-            FileNotFoundError: 项目或剧本不存在
-            ValueError: 无可导出的视频片段
-        """
+    ) -> tuple[Path, Path, str]:
         project = self.pm.load_project(project_name)
         project_dir = self.pm.get_project_path(project_name)
 
@@ -258,9 +277,7 @@ class JianyingDraftService:
         width, height = self._resolve_canvas_size(project, clips[0]["abs_path"])
 
         # 4. 创建临时目录 + 复制素材到暂存区
-        raw_title = project.get("title", project_name)
-        safe_title = raw_title.replace("/", "_").replace("\\", "_").replace("..", "_")
-        draft_name = f"{safe_title}_第{episode}集"
+        resolved_draft_name = draft_name or self._safe_draft_name(project, project_name, episode)
         tmp_dir = Path(tempfile.mkdtemp(prefix="arcreel_jy_"))
         try:
             staging_dir = tmp_dir / "staging"
@@ -277,10 +294,10 @@ class JianyingDraftService:
                 local_clips.append({**clip, "local_path": str(dst)})
 
             # 5. 生成草稿（create_draft 会重建 draft_dir）
-            draft_dir = tmp_dir / draft_name
+            draft_dir = tmp_dir / resolved_draft_name
             self._generate_draft(
                 draft_dir=draft_dir,
-                draft_name=draft_name,
+                draft_name=resolved_draft_name,
                 clips=local_clips,
                 width=width,
                 height=height,
@@ -300,14 +317,43 @@ class JianyingDraftService:
             self._replace_paths_in_draft(
                 json_path=draft_content_path,
                 tmp_prefix=str(staging_dir),
-                target_prefix=f"{draft_path}/{draft_name}/assets",
+                target_prefix=self._draft_assets_prefix(draft_path, resolved_draft_name),
             )
 
             # 8. 剪映 6+ 使用 draft_info.json，低版本使用 draft_content.json
             if use_draft_info_name:
                 draft_content_path.rename(draft_dir / "draft_info.json")
 
-            # 9. 打包 ZIP
+            return tmp_dir, draft_dir, resolved_draft_name
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+
+    def export_episode_draft(
+        self,
+        project_name: str,
+        episode: int,
+        draft_path: str,
+        *,
+        use_draft_info_name: bool = True,
+    ) -> Path:
+        """
+        导出指定集的剪映草稿 ZIP。
+
+        Returns:
+            ZIP 文件路径（临时文件，调用方负责清理）
+
+        Raises:
+            FileNotFoundError: 项目或剧本不存在
+            ValueError: 无可导出的视频片段
+        """
+        tmp_dir, draft_dir, draft_name = self._prepare_episode_draft_dir(
+            project_name,
+            episode,
+            draft_path,
+            use_draft_info_name=use_draft_info_name,
+        )
+        try:
             zip_path = tmp_dir / f"{draft_name}.zip"
             video_suffixes = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
             with zipfile.ZipFile(zip_path, "w") as zf:
@@ -321,3 +367,42 @@ class JianyingDraftService:
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
+
+    def export_episode_draft_to_directory(
+        self,
+        project_name: str,
+        episode: int,
+        draft_path: str,
+        *,
+        use_draft_info_name: bool = True,
+    ) -> Path:
+        """
+        直接在剪映草稿目录中创建草稿目录，不再生成 ZIP。
+
+        Returns:
+            已创建的剪映草稿目录路径
+        """
+        project = self.pm.load_project(project_name)
+        draft_root = Path(draft_path).expanduser()
+        draft_root.mkdir(parents=True, exist_ok=True)
+        _, draft_name = self._unique_draft_dir(
+            draft_root,
+            self._safe_draft_name(project, project_name, episode),
+        )
+        tmp_dir, draft_dir, _ = self._prepare_episode_draft_dir(
+            project_name,
+            episode,
+            str(draft_root),
+            draft_name=draft_name,
+            use_draft_info_name=use_draft_info_name,
+        )
+        target_dir = draft_root / draft_name
+        try:
+            shutil.move(str(draft_dir), str(target_dir))
+            return target_dir
+        except Exception:
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)

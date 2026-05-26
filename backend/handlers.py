@@ -101,12 +101,52 @@ async def handle_arcreel_export_project_archive(params):
     return await export_project_archive_blob(params)
 
 
+@sdk.handler("arcreel_start_project_archive_export")
+async def handle_arcreel_start_project_archive_export(params):
+    """桌面项目导出：前端选择目标路径后，后端异步直接写入 ZIP。"""
+    from utils.arcreel_ipc_bridge import start_project_archive_export
+
+    return await start_project_archive_export(params)
+
+
+@sdk.handler("arcreel_export_task_status")
+async def handle_arcreel_export_task_status(params):
+    """查询桌面导出任务状态。"""
+    from utils.arcreel_ipc_bridge import get_export_task_status
+
+    return await get_export_task_status(params)
+
+
+@sdk.handler("arcreel_open_desktop_path")
+async def handle_arcreel_open_desktop_path(params):
+    """打开本机文件或目录所在位置。"""
+    from utils.arcreel_ipc_bridge import open_desktop_path
+
+    return await open_desktop_path(params)
+
+
+@sdk.handler("arcreel_detect_jianying_draft_root")
+async def handle_arcreel_detect_jianying_draft_root(params):
+    """尝试自动探测本机剪映草稿目录。"""
+    from utils.arcreel_ipc_bridge import detect_jianying_draft_root
+
+    return await detect_jianying_draft_root(params)
+
+
 @sdk.handler("arcreel_export_jianying_draft")
 async def handle_arcreel_export_jianying_draft(params):
     """桌面剪映草稿导出：返回 ZIP 数据，不走浏览器下载 URL。"""
     from utils.arcreel_ipc_bridge import export_jianying_draft_blob
 
     return await export_jianying_draft_blob(params)
+
+
+@sdk.handler("arcreel_start_jianying_draft_export")
+async def handle_arcreel_start_jianying_draft_export(params):
+    """桌面剪映草稿导出：后端异步直接写入剪映草稿目录。"""
+    from utils.arcreel_ipc_bridge import start_jianying_draft_export
+
+    return await start_jianying_draft_export(params)
 
 
 @sdk.handler("long_task")
