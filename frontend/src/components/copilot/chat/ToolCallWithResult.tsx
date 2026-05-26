@@ -78,7 +78,7 @@ export function ToolCallWithResult({ block }: ToolCallWithResultProps) {
   const isSkill = toolName === "Skill";
   const isTodoWrite = toolName === "TodoWrite";
 
-  // ArcReel in-process MCP tool 显示名：从 mcp__arcreel__<id> 中提取 id，
+  // Manju 内置 MCP tool 显示名：从兼容前缀 mcp__arcreel__<id> 中提取 id，
   // 查 dashboard:tool_name_<id>（单一真相源 = backend ARCREEL_MCP_TOOL_IDS）。
   // 非 mcp__arcreel__ 工具（Bash / TodoWrite / Skill / ...）保留原名。
   const mcpMatch = /^mcp__arcreel__([a-z0-9_]+)$/.exec(toolName);

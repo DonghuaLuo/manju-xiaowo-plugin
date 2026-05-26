@@ -543,7 +543,7 @@ async def health_check():
 
 @app.get("/skill.md", include_in_schema=False)
 async def serve_skill_md(request: Request) -> Response:
-    """动态渲染 skill.md 模板，将 {{BASE_URL}} 替换为实际服务地址（无需认证）。"""
+    """返回 skill.md 模板；兼容旧模板中的 {{BASE_URL}} 占位符。"""
     from starlette.responses import PlainTextResponse
 
     template_path = PROJECT_ROOT / "public" / "skill.md.template"

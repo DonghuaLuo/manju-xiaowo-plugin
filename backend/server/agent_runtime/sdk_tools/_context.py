@@ -1,4 +1,4 @@
-"""Per-session context shared by ArcReel SDK MCP tool handlers."""
+"""Per-session context shared by Manju MCP tool handlers."""
 
 from __future__ import annotations
 

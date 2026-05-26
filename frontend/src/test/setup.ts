@@ -10,7 +10,7 @@ vi.mock("xiaowo-sdk", () => {
     getInfo: vi.fn(() => Promise.resolve({
       manifest: {
         id: "manju",
-        title: "ArcReel",
+        title: "Manju",
         version: "0.0.0",
       },
       language: "zh",

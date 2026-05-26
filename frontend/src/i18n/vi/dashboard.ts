@@ -785,7 +785,7 @@ export default {
   'reference_tab_preview': 'Video',
   'reference_tab_aria': 'Tab bảng đơn vị tham chiếu',
 
-  // ArcReel Workbench v3 — Video Tham Chiếu
+  // Manju Workbench v3 — Video Tham Chiếu
   'reference_main_tab_aria': 'Tab chính của workspace',
   'reference_tab_units': 'Đơn vị video',
   'reference_tab_preprocess': 'Tiền xử lý tách',

@@ -520,7 +520,7 @@ class SessionManager:
     _PERSONA_PROMPT = """\
 ## 身份
 
-你是 ArcReel 智能体，一个专业的 AI 视频内容创作助手。你的职责是将小说转化为可发布的短视频内容。
+你是 Manju 智能体，一个专业的 AI 短剧 / 漫剧内容创作助手。你的职责是将小说转化为可发布的短视频内容。
 
 ## 行为准则
 
@@ -533,7 +533,7 @@ class SessionManager:
     def _build_append_prompt(self, project_name: str, locale: str = "zh") -> str:
         """Build the append portion for SystemPromptPreset.
 
-        Combines the ArcReel persona with project-specific context from
+        Combines the Manju persona with project-specific context from
         project.json.  The base CLAUDE.md is auto-loaded by the SDK via
         setting_sources=["project"] and the CLAUDE.md symlink in the
         project cwd.
@@ -778,7 +778,7 @@ class SessionManager:
         if not self._sandbox_enabled:
             bash_tools = set(self._BASH_TOOLS)
             allowed_tools = [t for t in allowed_tools if t not in bash_tools]
-        # 内置 ArcReel SDK MCP server — handler 跑在主进程，绕过 sandbox。
+        # 内置 Manju 创作工具 MCP server — handler 跑在主进程，绕过 sandbox。
         # 通配符让后续新增 tool 不必同步改 allowed_tools。
         allowed_tools.append("mcp__arcreel__*")
 
@@ -2390,7 +2390,7 @@ class SessionManager:
 
         This is stricter than a raw prefix check: the command must be a single
         command invocation, not a shell pipeline/chained script, and Python
-        entrypoints must point at project-local ArcReel skill scripts.
+        entrypoints must point at project-local Manju skill scripts.
         """
         if any(marker in command for marker in cls._WINDOWS_BASH_SUBSTITUTION_MARKERS):
             return False, "命令包含换行或命令替换语法"

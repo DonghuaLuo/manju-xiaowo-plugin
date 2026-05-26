@@ -808,7 +808,7 @@ export default {
   'reference_tab_preview': 'Video',
   'reference_tab_aria': 'Reference unit panel tabs',
 
-  // ArcReel Workbench v3 — Reference Video
+  // Manju Workbench v3 — Reference Video
   'reference_main_tab_aria': 'Workspace main tabs',
   'grid_canvas_tab_aria': 'Grid workbench main tabs',
   'skill_content_label': 'Skill content',

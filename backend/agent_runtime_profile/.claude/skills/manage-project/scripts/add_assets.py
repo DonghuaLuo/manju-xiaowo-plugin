@@ -29,7 +29,7 @@ def _find_repo_root(start: Path) -> Path:
             return candidate
     raise RuntimeError(
         f"无法从 {start} 向上找到 pyproject.toml。"
-        "请确认脚本位于 ArcReel 仓库内（源 profile 或物化版 .claude 目录都可）。"
+        "请确认脚本位于 Manju 后端目录内（源 profile 或物化版 .claude 目录都可）。"
     )
 
 

@@ -1,4 +1,4 @@
-"""ArcReel SDK in-process MCP tools.
+"""Manju in-process MCP tools.
 
 Tools registered here run **in the server main process** (not inside the
 agent sandbox), so they can read ``projects/.arcreel.db`` and call provider
@@ -37,7 +37,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
 
 __all__ = ["build_arcreel_mcp_server", "ToolContext", "ARCREEL_MCP_TOOL_IDS"]
 
-# Single source of truth for the ArcReel in-process MCP tool catalogue.
+# Single source of truth for the Manju in-process MCP tool catalogue.
 # Each id is the **short tool name** (without the ``mcp__arcreel__`` prefix the
 # SDK adds at registration). Frontend display names live in
 # ``frontend/src/i18n/{zh,en,vi}/dashboard.ts`` under the ``tool_name_<id>``
@@ -60,7 +60,7 @@ ARCREEL_MCP_TOOL_IDS: tuple[str, ...] = (
 
 
 def build_arcreel_mcp_server(*, project_name: str, projects_root: Path) -> Any:
-    """Build the per-session in-process MCP server with all ArcReel tools."""
+    """Build the per-session in-process MCP server with all Manju tools."""
     ctx = ToolContext(project_name=project_name, projects_root=projects_root)
     return create_sdk_mcp_server(
         name="arcreel",

@@ -3,7 +3,7 @@
  *
  * Maps to backend models in:
  * - lib/generation_queue.py (GenerationQueue task schema, get_task_stats)
- * - webui/server/routers/tasks.py (API responses)
+ * - backend/server/routers/tasks.py (API responses)
  */
 
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";

@@ -10,7 +10,7 @@ const userTurn: Turn = {
 
 const assistantDraft: Turn = {
   type: "assistant",
-  content: [{ type: "text", text: "我是 ArcReel..." }],
+    content: [{ type: "text", text: "我是 Manju..." }],
   uuid: "draft-1",
 };
 

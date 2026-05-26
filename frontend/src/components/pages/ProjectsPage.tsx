@@ -48,7 +48,7 @@ import {
 } from "@/types";
 
 // 项目大厅 · Darkroom
-// 设计：导演的暗房（Claude Design 交付包 ArcReel Projects B Darkroom.html）
+// 设计：导演的暗房（Claude Design 交付包 Manju Projects B Darkroom.html）
 // 数据：仅消费 ProjectSummary 真实字段；hue 由 project.name 哈希派生
 
 type PhaseFilter = Phase | "all";

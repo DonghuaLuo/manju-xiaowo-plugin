@@ -2,9 +2,9 @@
  * Assistant / agent runtime type definitions.
  *
  * Maps to backend models in:
- * - webui/server/agent_runtime/models.py (SessionMeta, SessionStatus, AssistantSnapshotV2)
- * - webui/server/agent_runtime/turn_grouper.py (Turn, ContentBlock structure)
- * - webui/server/agent_runtime/service.py (SkillInfo, stream events)
+ * - backend/server/agent_runtime/models.py (SessionMeta, SessionStatus, AssistantSnapshotV2)
+ * - backend/server/agent_runtime/turn_grouper.py (Turn, ContentBlock structure)
+ * - backend/server/agent_runtime/service.py (SkillInfo, stream events)
  */
 
 export type SessionStatus = "idle" | "running" | "completed" | "error" | "interrupted";

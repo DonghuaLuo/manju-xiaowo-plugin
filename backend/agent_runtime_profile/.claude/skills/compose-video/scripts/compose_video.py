@@ -26,7 +26,7 @@ def _find_repo_root(start: Path) -> Path:
             return candidate
     raise RuntimeError(
         f"无法从 {start} 向上找到 pyproject.toml。"
-        "请确认脚本位于 ArcReel 仓库内（源 profile 或物化版 .claude 目录都可）。"
+        "请确认脚本位于 Manju 后端目录内（源 profile 或物化版 .claude 目录都可）。"
     )
 
 
@@ -606,7 +606,7 @@ def compose_video(
         raise RuntimeError(
             f"compose_video.py 目前仅支持 drama 模式（剧本顶层需有 scenes[]）；"
             f"当前剧本 content_mode={content_mode}, generation_mode={generation_mode}，"
-            "请使用 Web 端剪映草稿导出"
+            "请使用插件工作台的剪映草稿导出"
         )
 
     # 收集视频片段
