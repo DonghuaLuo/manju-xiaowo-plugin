@@ -105,6 +105,36 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("50%")).toBeInTheDocument();
   });
 
+  it("retries the initial projects fetch when plugin backend is still warming up", async () => {
+    vi.spyOn(API, "listProjects")
+      .mockRejectedValueOnce(new Error("backend is not ready"))
+      .mockResolvedValueOnce({
+        projects: [
+          {
+            name: "recovered-demo",
+            title: "Recovered Demo",
+            style: "Anime",
+            style_template_id: "anim_kyoto",
+            thumbnail: null,
+            status: {
+              current_phase: "production",
+              phase_progress: 0.5,
+              characters: { total: 2, completed: 2 },
+              scenes: { total: 1, completed: 1 },
+              props: { total: 1, completed: 0 },
+              episodes_summary: { total: 1, scripted: 1, in_production: 1, completed: 0 },
+            },
+          },
+        ],
+      });
+
+    renderPage();
+
+    expect(screen.getByText("加载项目列表...")).toBeInTheDocument();
+    expect((await screen.findAllByText("Recovered Demo", {}, { timeout: 2000 })).length).toBeGreaterThan(0);
+    expect(API.listProjects).toHaveBeenCalledTimes(2);
+  });
+
   it("shows 自定义风格 label when project has style_image but no template_id", async () => {
     vi.spyOn(API, "listProjects").mockResolvedValue({
       projects: [

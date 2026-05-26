@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { PluginSDK } from "xiaowo-sdk";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
@@ -58,6 +59,24 @@ type GreetingKey =
   | "lobby_hero_greeting_afternoon"
   | "lobby_hero_greeting_evening"
   | "lobby_hero_greeting_late";
+
+const PROJECTS_FETCH_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000];
+const PLUGIN_READY_WAIT_TIMEOUT_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForPluginReady(): Promise<void> {
+  try {
+    await Promise.race([
+      PluginSDK.waitReady(),
+      sleep(PLUGIN_READY_WAIT_TIMEOUT_MS),
+    ]);
+  } catch (error) {
+    console.warn("Plugin runtime waitReady failed before loading projects", error);
+  }
+}
 
 interface PhaseTone {
   dot: string;
@@ -1122,6 +1141,7 @@ export function ProjectsPage() {
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const projectsFetchSeqRef = useRef(0);
   const isConfigComplete = useConfigStatusStore((s) => s.isComplete);
 
   const phaseLabels = useMemo<Record<Phase, string>>(
@@ -1137,17 +1157,50 @@ export function ProjectsPage() {
   );
 
   const fetchProjects = useCallback(async () => {
+    const seq = (projectsFetchSeqRef.current += 1);
     setProjectsLoading(true);
-    try {
-      const res = await API.listProjects();
-      setProjects(res.projects);
-    } finally {
-      setProjectsLoading(false);
+    await waitForPluginReady();
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= PROJECTS_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        await sleep(PROJECTS_FETCH_RETRY_DELAYS_MS[attempt - 1]);
+      }
+      if (projectsFetchSeqRef.current !== seq) return;
+
+      try {
+        const res = await API.listProjects();
+        if (projectsFetchSeqRef.current !== seq) return;
+        setProjects(res.projects);
+        setProjectsLoading(false);
+        return;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `Failed to load projects, retry ${attempt + 1}/${PROJECTS_FETCH_RETRY_DELAYS_MS.length + 1}`,
+          error,
+        );
+      }
     }
-  }, [setProjects, setProjectsLoading]);
+
+    if (projectsFetchSeqRef.current !== seq) return;
+    setProjectsLoading(false);
+    useAppStore
+      .getState()
+      .pushToast(t("dashboard:load_failed", { message: errMsg(lastError) }), "warning");
+  }, [setProjects, setProjectsLoading, t]);
 
   useEffect(() => {
     void fetchProjects();
+  }, [fetchProjects]);
+
+  useEffect(() => {
+    const unsubscribe = PluginSDK.onBackendReady(() => {
+      void fetchProjects();
+    });
+    return () => {
+      unsubscribe?.();
+    };
   }, [fetchProjects]);
 
   useEffect(() => {
