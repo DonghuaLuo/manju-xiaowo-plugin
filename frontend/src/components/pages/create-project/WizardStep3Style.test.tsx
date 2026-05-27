@@ -9,10 +9,23 @@ const baseValue = {
   activeCategory: "live" as const,
   uploadedFile: null,
   uploadedPreview: null,
+  stylePrompt: "画风：真人电视剧风格，精品短剧画风，大师级构图",
 };
 
+const templatePrompts = {
+  live_premium_drama: "画风：真人电视剧风格，精品短剧画风，大师级构图",
+  live_zhang_yimou: "画风：参考张艺谋电影风格，极致用色，强烈构图，仪式感叙事",
+  anim_ghibli: "画风：参考吉卜力动画电影风格，宫崎骏动画风格",
+};
+
+const templates = [
+  { id: "live_premium_drama", category: "live" as const, thumbnailFile: "live_premium_drama.png" },
+  { id: "live_zhang_yimou", category: "live" as const, thumbnailFile: "live_zhang_yimou.png" },
+  { id: "anim_ghibli", category: "anim" as const, thumbnailFile: "anim_ghibli.png" },
+];
+
 const noop = () => {};
-const commonProps = { onBack: noop, onCreate: noop, onCancel: noop, creating: false };
+const commonProps = { onBack: noop, onCreate: noop, onCancel: noop, creating: false, templates, templatePrompts };
 
 describe("WizardStep3Style", () => {
   it("renders live templates in default live tab with default one selected", () => {
@@ -30,6 +43,18 @@ describe("WizardStep3Style", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
       mode: "template",
       templateId: "live_zhang_yimou",
+      stylePrompt: expect.stringContaining("张艺谋"),
+    }));
+  });
+
+  it("shows and edits the final style prompt under preset cards", () => {
+    const onChange = vi.fn();
+    render(<WizardStep3Style value={baseValue} onChange={onChange} {...commonProps} />);
+    const promptBox = screen.getByLabelText(/风格提示词|Style prompt/);
+    expect(promptBox).toHaveValue(baseValue.stylePrompt);
+    fireEvent.change(promptBox, { target: { value: "项目专用风格提示词" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      stylePrompt: "项目专用风格提示词",
     }));
   });
 
@@ -40,6 +65,27 @@ describe("WizardStep3Style", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
       mode: "custom",
       templateId: baseValue.templateId,   // 原 template 保留，回切时恢复
+      stylePrompt: baseValue.stylePrompt,
+    }));
+  });
+
+  it("keeps an edited final prompt when switching tabs", () => {
+    const onChange = vi.fn();
+    const editedValue = { ...baseValue, stylePrompt: "项目最终采用的提示词" };
+    const { rerender } = render(<WizardStep3Style value={editedValue} onChange={onChange} {...commonProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /自定义|Custom/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: "custom",
+      stylePrompt: "项目最终采用的提示词",
+    }));
+
+    const customValue = { ...editedValue, mode: "custom" as const };
+    rerender(<WizardStep3Style value={customValue} onChange={onChange} {...commonProps} />);
+    fireEvent.click(screen.getByRole("button", { name: /真人剧|Live/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: "template",
+      stylePrompt: "项目最终采用的提示词",
     }));
   });
 

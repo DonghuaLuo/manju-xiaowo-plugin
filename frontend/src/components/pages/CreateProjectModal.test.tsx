@@ -100,6 +100,23 @@ describe("CreateProjectModal", () => {
     vi.spyOn(API, "getSystemConfig").mockResolvedValue(mockSysConfig as never);
     vi.spyOn(API, "getProviders").mockResolvedValue(mockProviders as never);
     vi.spyOn(API, "listCustomProviders").mockResolvedValue({ providers: [] });
+    vi.spyOn(API, "getStyleTemplates").mockResolvedValue({
+      success: true,
+      templates: [
+        {
+          id: "live_premium_drama",
+          category: "live",
+          prompt: "画风：真人电视剧风格，精品短剧画风，大师级构图",
+          thumbnail_file: "live_premium_drama.png",
+        },
+        {
+          id: "live_zhang_yimou",
+          category: "live",
+          prompt: "画风：参考张艺谋电影风格，极致用色，强烈构图，仪式感叙事",
+          thumbnail_file: "live_zhang_yimou.png",
+        },
+      ],
+    });
     vi.spyOn(API, "createProject").mockResolvedValue({
       success: true,
       name: "demo-proj",
@@ -110,6 +127,10 @@ describe("CreateProjectModal", () => {
       style_image: "",
       style_description: "",
       url: "",
+    });
+    vi.spyOn(API, "analyzeStyleImage").mockResolvedValue({
+      success: true,
+      style_description: "cinematic custom prompt",
     });
   });
 
@@ -155,6 +176,9 @@ describe("CreateProjectModal", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /创建项目/ })).toBeInTheDocument()
     );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/风格提示词|Style prompt/)).toHaveValue("画风：真人电视剧风格，精品短剧画风，大师级构图")
+    );
     fireEvent.click(screen.getByRole("button", { name: /创建项目/ }));
     await waitFor(() => expect(API.createProject).toHaveBeenCalled());
     expect(API.createProject).toHaveBeenCalledWith(
@@ -164,6 +188,7 @@ describe("CreateProjectModal", () => {
         aspect_ratio: "9:16",
         generation_mode: "storyboard",
         style_template_id: "live_premium_drama",
+        style: "画风：真人电视剧风格，精品短剧画风，大师级构图",
         video_backend: null,
         image_provider_t2i: null,
         image_provider_i2i: null,
@@ -224,7 +249,55 @@ describe("CreateProjectModal", () => {
     expect(API.createProject).toHaveBeenCalledWith(expect.objectContaining({
       style_template_id: null,
     }));
-    await waitFor(() => expect(API.uploadStyleImage).toHaveBeenCalledWith("demo-proj", file));
+    await waitFor(() => expect(API.uploadStyleImage).toHaveBeenCalledWith("demo-proj", file, {
+      styleDescription: undefined,
+    }));
+  });
+
+  it("uses the edited template prompt when creating from a preset", async () => {
+    render(<CreateProjectModal />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /创建项目/ })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /张艺谋/ }));
+    const promptBox = screen.getByLabelText(/风格提示词|Style prompt/);
+    await waitFor(() => expect((promptBox as HTMLTextAreaElement).value).toContain("张艺谋"));
+    fireEvent.change(promptBox, { target: { value: "自定义张艺谋电影质感" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建项目/ }));
+
+    await waitFor(() => expect(API.createProject).toHaveBeenCalled());
+    expect(API.createProject).toHaveBeenCalledWith(expect.objectContaining({
+      style_template_id: "live_zhang_yimou",
+      style: "自定义张艺谋电影质感",
+    }));
+  });
+
+  it("can analyze a custom reference before create and pass the editable prompt to upload", async () => {
+    render(<CreateProjectModal />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /创建项目/ })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /自定义|Custom/ }));
+    const file = desktopImageRef("style-analyze.png");
+    desktopFileMock.pickDesktopFile.mockResolvedValueOnce(file);
+    fireEvent.click(screen.getByRole("button", { name: /上传风格参考图|Upload reference/ }));
+    await waitFor(() => expect(screen.getByAltText(/上传风格参考图|Upload reference/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /分析风格|Analyze/ }));
+    const promptBox = screen.getByLabelText(/风格提示词|Style prompt/);
+    await waitFor(() => expect(promptBox).toHaveValue("cinematic custom prompt"));
+    fireEvent.change(promptBox, { target: { value: "edited analyzed prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建项目/ }));
+
+    await waitFor(() => expect(API.uploadStyleImage).toHaveBeenCalledWith("demo-proj", file, {
+      styleDescription: "edited analyzed prompt",
+    }));
   });
 
   it("允许在 custom tab 未上传文件时创建项目（风格为可选）", async () => {

@@ -199,6 +199,22 @@ class TestFilesRouter:
             # 否则生成链路会把模板 prompt 与 style_description 一起喂给 LLM。
             assert after.get("style", "") == ""
 
+            manual_style = client.post(
+                "/api/v1/projects/demo/style-image",
+                data={"style_description": "manual noir lighting"},
+                files={"file": ("style.png", _img_bytes("PNG"), "image/png")},
+            )
+            assert manual_style.status_code == 200
+            assert manual_style.json()["style_description"] == "manual noir lighting"
+            assert pm.load_project("demo")["style_description"] == "manual noir lighting"
+
+            analyze_style = client.post(
+                "/api/v1/style-image/analyze",
+                files={"file": ("style.jpg", _img_bytes("JPEG"), "image/jpeg")},
+            )
+            assert analyze_style.status_code == 200
+            assert analyze_style.json()["style_description"] == "cinematic, high contrast"
+
             bad_style_ext = client.post(
                 "/api/v1/projects/demo/style-image",
                 files={"file": ("style.gif", b"gif", "image/gif")},

@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
-import { DEFAULT_TEMPLATE_ID } from "@/data/style-templates";
+import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
@@ -16,6 +16,7 @@ import { WizardStep1Basics, type WizardStep1Value } from "./create-project/Wizar
 import { WizardStep2Models, type WizardStep2Data } from "./create-project/WizardStep2Models";
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
+import type { UploadFileInput } from "@/utils/desktop-file";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -169,9 +170,13 @@ export function CreateProjectModal() {
     activeCategory: "live",
     uploadedFile: null,
     uploadedPreview: null,
+    stylePrompt: "",
   });
 
   const [creating, setCreating] = useState(false);
+  const [analyzingStyle, setAnalyzingStyle] = useState(false);
+  const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
+  const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
 
   // Step2 的远端数据 hoist 到此处：只在 modal 挂载时 fetch 一次，
   // 前进/后退切 step 时 Step2 unmount/mount 不再触发 HTTP。
@@ -214,6 +219,35 @@ export function CreateProjectModal() {
         });
       } catch (err) {
         if (!cancelled) setStep2Error(errMsg(err));
+      }
+    })());
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    voidCall((async () => {
+      try {
+        const result = await API.getStyleTemplates();
+        if (cancelled) return;
+        const prompts = Object.fromEntries(
+          result.templates.map((tpl) => [tpl.id, tpl.prompt]),
+        );
+        setStyleTemplates(result.templates.map((tpl) => ({
+          id: tpl.id,
+          category: tpl.category,
+          thumbnailFile: tpl.thumbnail_file,
+        })));
+        setStyleTemplatePrompts(prompts);
+        setStyle((prev) => {
+          if (prev.mode !== "template" || !prev.templateId || prev.stylePrompt.trim()) return prev;
+          const prompt = prompts[prev.templateId];
+          return prompt ? { ...prev, stylePrompt: prompt } : prev;
+        });
+      } catch {
+        // 创建仍可继续；后端会在未传 style 时按 style_template_id 展开默认 prompt。
       }
     })());
     return () => {
@@ -265,9 +299,11 @@ export function CreateProjectModal() {
       if (effectiveImageT2I && models.imageResolution) {
         modelSettings[effectiveImageT2I] = { resolution: models.imageResolution };
       }
+      const stylePrompt = style.stylePrompt.trim();
 
       const resp = await API.createProject({
         title: basics.title.trim(),
+        ...(stylePrompt ? { style: stylePrompt } : {}),
         content_mode: basics.contentMode,
         aspect_ratio: basics.aspectRatio,
         generation_mode: basics.generationMode,
@@ -285,7 +321,9 @@ export function CreateProjectModal() {
       // Upload style image if in custom mode
       if (style.mode === "custom" && style.uploadedFile) {
         try {
-          await API.uploadStyleImage(resp.name, style.uploadedFile);
+          await API.uploadStyleImage(resp.name, style.uploadedFile, {
+            styleDescription: stylePrompt || undefined,
+          });
         } catch {
           useAppStore.getState().pushToast(
             t("dashboard:style_upload_failed_hint"),
@@ -303,6 +341,22 @@ export function CreateProjectModal() {
       );
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleAnalyzeCustomStyle = async (file: UploadFileInput): Promise<string> => {
+    setAnalyzingStyle(true);
+    try {
+      const result = await API.analyzeStyleImage(file);
+      return result.style_description;
+    } catch (err) {
+      useAppStore.getState().pushToast(
+        t("templates:analyze_style_failed", { message: errMsg(err) }),
+        "error",
+      );
+      return style.stylePrompt;
+    } finally {
+      setAnalyzingStyle(false);
     }
   };
 
@@ -417,6 +471,10 @@ export function CreateProjectModal() {
               onCreate={voidPromise(handleCreate)}
               onCancel={handleClose}
               creating={creating}
+              templates={styleTemplates}
+              templatePrompts={styleTemplatePrompts}
+              onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
+              analyzingCustomStyle={analyzingStyle}
             />
           )}
         </div>

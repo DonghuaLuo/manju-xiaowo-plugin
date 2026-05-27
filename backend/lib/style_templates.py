@@ -125,10 +125,23 @@ def is_known_template(template_id: str) -> bool:
     return template_id in STYLE_TEMPLATES
 
 
+def _template_payload(tpl_id: str, data: dict) -> dict:
+    return {
+        "id": tpl_id,
+        "category": data["category"],
+        "prompt": data["prompt"],
+        "thumbnail_file": data.get("thumbnail_file") or f"{tpl_id}.png",
+    }
+
+
+def list_style_templates() -> list[dict]:
+    """返回前端可展示的预设风格清单，顺序保持注册表定义顺序。"""
+    return [_template_payload(tpl_id, data) for tpl_id, data in STYLE_TEMPLATES.items()]
+
+
 def list_templates_by_category() -> dict[str, list[dict]]:
-    """按 category 分组，返回列表保持定义顺序。
-    每项形如 {'id': 'live_xxx', 'prompt': '...'}。"""
+    """按 category 分组，返回列表保持定义顺序。"""
     grouped: dict[str, list[dict]] = {"live": [], "anim": []}
-    for tpl_id, data in STYLE_TEMPLATES.items():
-        grouped[data["category"]].append({"id": tpl_id, "prompt": data["prompt"]})
+    for item in list_style_templates():
+        grouped[item["category"]].append(item)
     return grouped

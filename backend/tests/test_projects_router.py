@@ -181,6 +181,19 @@ def _client(monkeypatch, fake_pm, fake_calc):
 
 
 class TestProjectsRouter:
+    def test_list_style_templates_endpoint(self, tmp_path, monkeypatch):
+        client = _client(monkeypatch, _FakePM(tmp_path), _FakeCalc())
+        with client:
+            resp = client.get("/api/v1/style-templates")
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["success"] is True
+            assert len(payload["templates"]) == 36
+            default_tpl = [tpl for tpl in payload["templates"] if tpl["id"] == "live_premium_drama"][0]
+            assert default_tpl["category"] == "live"
+            assert "精品短剧" in default_tpl["prompt"]
+            assert default_tpl["thumbnail_file"] == "live_premium_drama.png"
+
     def test_list_and_create_and_delete(self, tmp_path, monkeypatch):
         client = _client(monkeypatch, _FakePM(tmp_path), _FakeCalc())
         with client:
@@ -499,6 +512,25 @@ class TestProjectsRouter:
             assert data["style_template_id"] == "live_premium_drama"
             assert "真人电视剧" in data["style"] or "精品短剧" in data["style"]
 
+    def test_create_project_with_style_template_id_accepts_prompt_override(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        client = _client(monkeypatch, fake_pm, _FakeCalc())
+
+        with client:
+            resp = client.post(
+                "/api/v1/projects",
+                json={
+                    "title": "模版项目",
+                    "name": "tpl-custom",
+                    "style_template_id": "live_premium_drama",
+                    "style": "用户编辑后的最终风格提示词",
+                },
+            )
+            assert resp.status_code == 200
+            data = fake_pm.project_data["tpl-custom"]
+            assert data["style_template_id"] == "live_premium_drama"
+            assert data["style"] == "用户编辑后的最终风格提示词"
+
     def test_create_project_with_unknown_template_id_returns_400(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path)
         client = _client(monkeypatch, fake_pm, _FakeCalc())
@@ -605,6 +637,22 @@ class TestProjectsRouter:
             assert "style_image" not in data
             assert "style_description" not in data
 
+    def test_update_project_with_style_template_id_accepts_prompt_override(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        client = _client(monkeypatch, fake_pm, _FakeCalc())
+        with client:
+            resp = client.patch(
+                "/api/v1/projects/ready",
+                json={
+                    "style_template_id": "live_zhang_yimou",
+                    "style": "项目专用张艺谋提示词",
+                },
+            )
+            assert resp.status_code == 200
+            data = fake_pm.project_data["ready"]
+            assert data["style_template_id"] == "live_zhang_yimou"
+            assert data["style"] == "项目专用张艺谋提示词"
+
     def test_update_project_with_unknown_template_id_returns_400(self, tmp_path, monkeypatch):
         client = _client(monkeypatch, _FakePM(tmp_path), _FakeCalc())
         with client:
@@ -642,6 +690,23 @@ class TestProjectsRouter:
             resp = client.patch(
                 "/api/v1/projects/ready",
                 json={"clear_style_image": True},
+            )
+            assert resp.status_code == 200
+            data = fake_pm.project_data["ready"]
+            assert "style_image" not in data
+            assert "style_description" not in data
+
+    def test_update_project_clear_style_image_ignores_description(self, tmp_path, monkeypatch):
+        """clear_style_image 优先生效，避免同请求写回孤立 style_description。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"]["style_image"] = "style_reference.png"
+        fake_pm.project_data["ready"]["style_description"] = "some desc"
+
+        client = _client(monkeypatch, fake_pm, _FakeCalc())
+        with client:
+            resp = client.patch(
+                "/api/v1/projects/ready",
+                json={"clear_style_image": True, "style_description": "orphan desc"},
             )
             assert resp.status_code == 200
             data = fake_pm.project_data["ready"]

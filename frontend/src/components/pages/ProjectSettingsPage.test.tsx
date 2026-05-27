@@ -51,6 +51,23 @@ describe("ProjectSettingsPage – style picker", () => {
     useAppStore.setState(useAppStore.getInitialState(), true);
     vi.restoreAllMocks();
     vi.spyOn(API, "getSystemConfig").mockResolvedValue(FAKE_CONFIG as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getStyleTemplates").mockResolvedValue({
+      success: true,
+      templates: [
+        {
+          id: "live_premium_drama",
+          category: "live",
+          prompt: "画风：真人电视剧风格，精品短剧画风，大师级构图",
+          thumbnail_file: "live_premium_drama.png",
+        },
+        {
+          id: "live_zhang_yimou",
+          category: "live",
+          prompt: "画风：参考张艺谋电影风格，极致用色，强烈构图，仪式感叙事",
+          thumbnail_file: "live_zhang_yimou.png",
+        },
+      ],
+    });
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });
@@ -117,7 +134,7 @@ describe("ProjectSettingsPage – style picker", () => {
     renderAt("/app/projects/demo/settings");
 
     await waitFor(() => screen.getByAltText(/上传风格参考图|Upload style reference/));
-    const removeBtn = screen.getByRole("button", { name: /^remove$/i });
+    const removeBtn = screen.getByRole("button", { name: /^(remove|移除)$/i });
     fireEvent.click(removeBtn);
 
     // 移除自定义图后 save 应可点：保存即清除后端残留 style_image / description
@@ -238,7 +255,10 @@ describe("ProjectSettingsPage – style picker", () => {
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith("demo", { style_template_id: "live_zhang_yimou" });
+      expect(updateSpy).toHaveBeenCalledWith("demo", {
+        style_template_id: "live_zhang_yimou",
+        style: expect.stringContaining("张艺谋"),
+      });
     });
   });
 
@@ -279,6 +299,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true);
     vi.restoreAllMocks();
+    vi.spyOn(API, "getStyleTemplates").mockResolvedValue({ success: true, templates: [] });
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });

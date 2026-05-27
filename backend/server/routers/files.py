@@ -13,7 +13,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from lib.app_data_dir import app_data_dir
@@ -780,8 +780,78 @@ async def delete_draft(project_name: str, episode: int, step_num: int, _user: Cu
 # ==================== 风格参考图管理 ====================
 
 
+STYLE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _validate_style_image(file: UploadFile, _t: Callable[..., str]) -> str:
+    original_filename = _require_filename(file, _t)
+    ext = Path(original_filename).suffix.lower()
+    if ext not in STYLE_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=_t("unsupported_image_type", ext=ext, allowed=".png, .jpg, .jpeg, .webp"),
+        )
+    return original_filename
+
+
+def _normalize_style_image(content: bytes, original_filename: str, _t: Callable[..., str]) -> tuple[bytes, str]:
+    try:
+        return normalize_uploaded_image(content, Path(original_filename).suffix.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
+
+
+async def _analyze_style_image(output_path: Path, project_name: str | None) -> str:
+    from lib.text_backends.base import ImageInput, TextGenerationRequest, TextTaskType
+    from lib.text_backends.prompts import STYLE_ANALYSIS_PROMPT
+    from lib.text_generator import TextGenerator
+
+    generator = await TextGenerator.create(TextTaskType.STYLE_ANALYSIS, project_name)
+    result = await generator.generate(
+        TextGenerationRequest(prompt=STYLE_ANALYSIS_PROMPT, images=[ImageInput(path=output_path)]),
+        project_name=project_name,
+    )
+    return result.text
+
+
+@router.post("/style-image/analyze")
+async def analyze_style_image(_user: CurrentUser, _t: Translator, file: UploadFile = File(...)):
+    """临时分析风格参考图，不写入项目。"""
+    original_filename = _validate_style_image(file, _t)
+    tmp_path: Path | None = None
+
+    try:
+        content = await file.read()
+
+        def _sync_prepare():
+            content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
+            with tempfile.NamedTemporaryFile(prefix="arcreel-style-analysis-", suffix=new_ext, delete=False) as tmp:
+                tmp.write(content_norm)
+                return Path(tmp.name)
+
+        tmp_path = await asyncio.to_thread(_sync_prepare)
+        style_description = await _analyze_style_image(tmp_path, None)
+        return {"success": True, "style_description": style_description}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as e:
+        logger.exception("请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
 @router.post("/projects/{project_name}/style-image")
-async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translator, file: UploadFile = File(...)):
+async def upload_style_image(
+    project_name: str,
+    _user: CurrentUser,
+    _t: Translator,
+    file: UploadFile = File(...),
+    style_description: str | None = Form(None),
+):
     """
     上传风格参考图并分析风格
 
@@ -789,25 +859,14 @@ async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translat
     2. 调用 Gemini API 分析风格
     3. 更新 project.json 的 style_image 和 style_description 字段
     """
-    original_filename = _require_filename(file, _t)
-
-    # 检查文件类型
-    ext = Path(original_filename).suffix.lower()
-    if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
-        raise HTTPException(
-            status_code=400,
-            detail=_t("unsupported_image_type", ext=ext, allowed=".png, .jpg, .jpeg, .webp"),
-        )
+    original_filename = _validate_style_image(file, _t)
 
     try:
         content = await file.read()
 
         def _sync_prepare():
             project_dir = get_project_manager().get_project_path(project_name)
-            try:
-                content_norm, new_ext = normalize_uploaded_image(content, Path(original_filename).suffix.lower())
-            except ValueError:
-                raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
+            content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
             style_filename = f"style_reference{new_ext}"
 
             output_path = project_dir / style_filename
@@ -818,29 +877,21 @@ async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translat
 
         output_path, style_filename = await asyncio.to_thread(_sync_prepare)
 
-        # 调用 TextGenerator 分析风格（自动追踪用量）
-        from lib.text_backends.base import ImageInput, TextGenerationRequest, TextTaskType
-        from lib.text_backends.prompts import STYLE_ANALYSIS_PROMPT
-        from lib.text_generator import TextGenerator
-
-        style_description = ""
+        manual_style_description = (style_description or "").strip()
+        resolved_style_description = manual_style_description
         style_analysis_error: str | None = None
-        try:
-            generator = await TextGenerator.create(TextTaskType.STYLE_ANALYSIS, project_name)
-            result = await generator.generate(
-                TextGenerationRequest(prompt=STYLE_ANALYSIS_PROMPT, images=[ImageInput(path=output_path)]),
-                project_name=project_name,
-            )
-            style_description = result.text
-        except ValueError as exc:
-            style_analysis_error = str(exc)
-            logger.warning("风格参考图已保存，但风格分析跳过: %s", exc)
+        if not resolved_style_description:
+            try:
+                resolved_style_description = await _analyze_style_image(output_path, project_name)
+            except ValueError as exc:
+                style_analysis_error = str(exc)
+                logger.warning("风格参考图已保存，但风格分析跳过: %s", exc)
 
         def _sync_save():
             # 更新 project.json：整段 RMW 在单一 _project_lock 内完成，避免覆盖并发写入的其它字段
             def _mutate(project_data: dict) -> None:
                 project_data["style_image"] = style_filename
-                project_data["style_description"] = style_description
+                project_data["style_description"] = resolved_style_description
                 # 强互斥：自定义参考图与模版二选一。除了清 template_id，
                 # 还需清掉之前由模板展开写入的 `style` prompt，否则生成链路会把
                 # 模板 prompt 与 style_description 同时喂给 LLM，破坏二选一语义。
@@ -855,7 +906,7 @@ async def upload_style_image(project_name: str, _user: CurrentUser, _t: Translat
         response = {
             "success": True,
             "style_image": style_filename,
-            "style_description": style_description,
+            "style_description": resolved_style_description,
             "url": f"/api/v1/files/{project_name}/{style_filename}",
         }
         if style_analysis_error:

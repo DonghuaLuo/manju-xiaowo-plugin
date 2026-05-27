@@ -5,6 +5,7 @@ import pytest
 from lib.style_templates import (
     LEGACY_STYLE_MAP,
     STYLE_TEMPLATES,
+    list_style_templates,
     list_templates_by_category,
     resolve_template_prompt,
 )
@@ -49,3 +50,12 @@ def test_list_templates_by_category():
     assert len(grouped["live"]) == 18
     assert len(grouped["anim"]) == 18
     assert grouped["live"][0]["id"].startswith("live_")
+    assert grouped["live"][0]["thumbnail_file"].endswith(".png")
+
+
+def test_list_style_templates_exposes_frontend_payload():
+    templates = list_style_templates()
+    assert len(templates) == 36
+    first = templates[0]
+    assert set(first) == {"id", "category", "prompt", "thumbnail_file"}
+    assert first["thumbnail_file"] == f"{first['id']}.png"

@@ -3,13 +3,13 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Loader2 } from "lucide-react";
-import { API } from "@/api";
+import { API, type StyleTemplateInfo } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { getProviderModels, getCustomProviderModels } from "@/utils/provider-models";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
-import { DEFAULT_TEMPLATE_ID, STYLE_TEMPLATES } from "@/data/style-templates";
+import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import type { CustomProviderInfo, ProviderInfo } from "@/types";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS, radioCardClass } from "@/components/ui/darkroom-tokens";
@@ -17,8 +17,14 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { normalizeMode, type GenerationMode } from "@/utils/generation-mode";
 import { getProjectDisplayName } from "@/utils/project-display";
+import type { UploadFileInput } from "@/utils/desktop-file";
 
-function deriveStyleValue(project: Record<string, unknown>, projectName: string): StylePickerValue {
+function deriveStyleValue(
+  project: Record<string, unknown>,
+  projectName: string,
+  templates: StyleTemplate[],
+  templatePrompts: Record<string, string>,
+): StylePickerValue {
   const styleImage = project.style_image as string | undefined;
   const templateId = (project.style_template_id as string | undefined) ?? null;
   if (styleImage) {
@@ -28,16 +34,19 @@ function deriveStyleValue(project: Record<string, unknown>, projectName: string)
       activeCategory: "live",
       uploadedFile: null,
       uploadedPreview: API.getFileUrl(projectName, styleImage),
+      stylePrompt: (project.style_description as string | undefined) ?? "",
     };
   }
   const effectiveId = templateId ?? DEFAULT_TEMPLATE_ID;
-  const tpl = STYLE_TEMPLATES.find((x) => x.id === effectiveId);
+  const tpl = templates.find((x) => x.id === effectiveId);
+  const existingStyle = typeof project.style === "string" ? project.style : "";
   return {
     mode: "template",
     templateId: effectiveId,
     activeCategory: tpl?.category ?? "live",
     uploadedFile: null,
     uploadedPreview: null,
+    stylePrompt: existingStyle.trim() ? existingStyle : (templatePrompts[effectiveId] ?? ""),
   };
 }
 
@@ -134,6 +143,9 @@ export function ProjectSettingsPage() {
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
   const [savingStyle, setSavingStyle] = useState(false);
+  const [analyzingStyle, setAnalyzingStyle] = useState(false);
+  const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
+  const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
   const initialRef = useRef({
     videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null as boolean | null,
     textScript: "", textOverview: "", textStyle: "",
@@ -151,10 +163,21 @@ export function ProjectSettingsPage() {
     voidCall(Promise.all([
       API.getSystemConfig(),
       API.getProject(projectName),
+      API.getStyleTemplates().catch(() => ({ success: false, templates: [] as StyleTemplateInfo[] })),
       getProviderModels().catch(() => [] as ProviderInfo[]),
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
-    ]).then(([configRes, projectRes, providerList, customProviderList]) => {
+    ]).then(([configRes, projectRes, styleTemplatesRes, providerList, customProviderList]) => {
       if (disposed) return;
+      const templatePrompts = Object.fromEntries(
+        styleTemplatesRes.templates.map((tpl) => [tpl.id, tpl.prompt]),
+      );
+      const templates = styleTemplatesRes.templates.map((tpl) => ({
+        id: tpl.id,
+        category: tpl.category,
+        thumbnailFile: tpl.thumbnail_file,
+      }));
+      setStyleTemplates(templates);
+      setStyleTemplatePrompts(templatePrompts);
 
       setOptions({
         video_backends: configRes.options?.video_backends ?? [],
@@ -230,7 +253,7 @@ export function ProjectSettingsPage() {
       setImageResolution(iRes);
       setModelSettings(ms);
 
-      const derivedStyle = deriveStyleValue(project, projectName);
+      const derivedStyle = deriveStyleValue(project, projectName, templates, templatePrompts);
       setStyleValue(derivedStyle);
       initialStyleRef.current = derivedStyle;
       initialRef.current = {
@@ -261,6 +284,7 @@ export function ProjectSettingsPage() {
     const init = initialStyleRef.current;
     if (!styleValue || !init) return false;
     if (styleValue.mode !== init.mode) return true;
+    if (styleValue.stylePrompt !== init.stylePrompt) return true;
     if (styleValue.mode === "template") return styleValue.templateId !== init.templateId;
     // custom 模式：新上传文件、或既有图被用户清空（preview 从 URL 变为 null）
     return styleValue.uploadedFile !== null || styleValue.uploadedPreview !== init.uploadedPreview;
@@ -270,10 +294,12 @@ export function ProjectSettingsPage() {
   const isStyleCleared = !!styleValue
     && styleValue.templateId === null
     && styleValue.uploadedFile === null
-    && !styleValue.uploadedPreview;
+    && !styleValue.uploadedPreview
+    && !styleValue.stylePrompt.trim();
   const hasInitialStyle = !!initialStyleRef.current
     && (initialStyleRef.current.templateId !== null
-      || initialStyleRef.current.uploadedPreview !== null);
+      || initialStyleRef.current.uploadedPreview !== null
+      || !!initialStyleRef.current.stylePrompt.trim());
 
   const isDirty =
     videoBackend !== initialRef.current.videoBackend ||
@@ -325,10 +351,27 @@ export function ProjectSettingsPage() {
     if (!styleValue) return;
     setSavingStyle(true);
     try {
+      const stylePrompt = styleValue.stylePrompt.trim();
       if (styleValue.mode === "template" && styleValue.templateId) {
-        await API.updateProject(projectName, { style_template_id: styleValue.templateId });
+        await API.updateProject(projectName, {
+          style_template_id: styleValue.templateId,
+          ...(stylePrompt ? { style: stylePrompt } : {}),
+        });
       } else if (styleValue.mode === "custom" && styleValue.uploadedFile) {
-        await API.uploadStyleImage(projectName, styleValue.uploadedFile);
+        await API.uploadStyleImage(projectName, styleValue.uploadedFile, {
+          styleDescription: stylePrompt || undefined,
+        });
+      } else if (styleValue.mode === "custom" && styleValue.uploadedPreview) {
+        await API.updateProject(projectName, {
+          style_template_id: null,
+          style_description: stylePrompt,
+        });
+      } else if (stylePrompt) {
+        await API.updateProject(projectName, {
+          style_template_id: null,
+          clear_style_image: true,
+          style: stylePrompt,
+        });
       } else {
         // 取消风格：显式清掉模板 ID 与自定义图
         await API.updateProject(projectName, {
@@ -338,7 +381,12 @@ export function ProjectSettingsPage() {
       }
       // Refetch project to reset styleValue from canonical server state
       const refreshed = await API.getProject(projectName);
-      const nextStyle = deriveStyleValue(refreshed.project as unknown as Record<string, unknown>, projectName);
+      const nextStyle = deriveStyleValue(
+        refreshed.project as unknown as Record<string, unknown>,
+        projectName,
+        styleTemplates,
+        styleTemplatePrompts,
+      );
       setStyleValue(nextStyle);
       initialStyleRef.current = nextStyle;
       useAppStore.getState().pushToast(t("saved"), "success");
@@ -347,7 +395,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSavingStyle(false);
     }
-  }, [styleValue, projectName, t]);
+  }, [styleValue, projectName, styleTemplates, styleTemplatePrompts, t]);
 
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
@@ -356,8 +404,22 @@ export function ProjectSettingsPage() {
       templateId: null,
       uploadedFile: null,
       uploadedPreview: null,
+      stylePrompt: "",
     });
   }, [styleValue]);
+
+  const handleAnalyzeCustomStyle = useCallback(async (file: UploadFileInput): Promise<string> => {
+    setAnalyzingStyle(true);
+    try {
+      const result = await API.analyzeStyleImage(file);
+      return result.style_description;
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(t("templates:analyze_style_failed", { message: errMsg(e) }), "error");
+      return styleValue?.stylePrompt ?? "";
+    } finally {
+      setAnalyzingStyle(false);
+    }
+  }, [styleValue?.stylePrompt, t]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -507,7 +569,14 @@ export function ProjectSettingsPage() {
                 </div>
               }
             >
-              <StylePicker value={styleValue} onChange={setStyleValue} />
+              <StylePicker
+                value={styleValue}
+                onChange={setStyleValue}
+                templates={styleTemplates}
+                templatePrompts={styleTemplatePrompts}
+                onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
+                analyzingCustomStyle={analyzingStyle}
+              />
             </SectionCard>
           )}
 

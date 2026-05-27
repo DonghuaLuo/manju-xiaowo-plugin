@@ -36,7 +36,7 @@ from lib.profile_manifest import ContentMode
 from lib.project_change_hints import project_change_source
 from lib.project_manager import ProjectManager
 from lib.status_calculator import StatusCalculator
-from lib.style_templates import is_known_template, resolve_template_prompt
+from lib.style_templates import is_known_template, list_style_templates, resolve_template_prompt
 from server.auth import CurrentUser, create_download_token, verify_download_token
 from server.routers._validators import validate_backend_value
 from server.services.project_archive import (
@@ -106,6 +106,7 @@ class EpisodePatch(BaseModel):
 class UpdateProjectRequest(BaseModel):
     title: str | None = None
     style: str | None = None
+    style_description: str | None = None
     content_mode: ContentMode | None = None
     aspect_ratio: str | None = None
     default_duration: int | None = None
@@ -122,6 +123,12 @@ class UpdateProjectRequest(BaseModel):
     clear_style_image: bool | None = None
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
+
+
+@router.get("/style-templates")
+async def get_style_templates(_user: CurrentUser):
+    """返回后端注册的预设风格清单，prompt 以后端为唯一来源。"""
+    return {"success": True, "templates": list_style_templates()}
 
 
 def _cleanup_temp_file(path: str) -> None:
@@ -448,14 +455,14 @@ async def create_project(
                 raise HTTPException(status_code=400, detail=_t("title_required"))
             project_name = manual_name or manager.generate_project_name(title)
 
-            style_prompt = req.style or ""
+            style_prompt = (req.style or "").strip()
             if req.style_template_id:
                 if not is_known_template(req.style_template_id):
                     raise HTTPException(
                         status_code=400,
                         detail=_t("unknown_style_template", template_id=req.style_template_id),
                     )
-                style_prompt = resolve_template_prompt(req.style_template_id)
+                style_prompt = style_prompt or resolve_template_prompt(req.style_template_id)
 
             # legacy image_backend 已退役（拆为 image_provider_t2i/i2i）；写路径直接拒绝，
             # 避免迁移后再写时被解析链忽略、静默落到全局默认的另一供应商。
@@ -622,8 +629,9 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                 # 整段 read-modify-write 在单一 _project_lock 内完成，避免并发 PATCH / 任务回写丢更新
                 if req.title is not None:
                     project["title"] = req.title
-                if req.style is not None:
-                    project["style"] = req.style
+                style_override = (req.style or "").strip() if req.style is not None else None
+                if "style" in req.model_fields_set and "style_template_id" not in req.model_fields_set:
+                    project["style"] = style_override or ""
                 for field in (
                     "video_backend",
                     "image_provider_t2i",
@@ -662,7 +670,7 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                     if req.style_template_id is None:
                         # 取消模版选择：同时清掉展开的 style prompt，避免遗留孤儿文本
                         project.pop("style_template_id", None)
-                        project["style"] = ""
+                        project["style"] = style_override or ""
                     else:
                         if not is_known_template(req.style_template_id):
                             raise HTTPException(
@@ -670,7 +678,7 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                                 detail=_t("unknown_style_template", template_id=req.style_template_id),
                             )
                         project["style_template_id"] = req.style_template_id
-                        project["style"] = resolve_template_prompt(req.style_template_id)
+                        project["style"] = style_override or resolve_template_prompt(req.style_template_id)
                         # 强互斥:模版与参考图二选一
                         project.pop("style_image", None)
                         project.pop("style_description", None)
@@ -679,6 +687,16 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                     # 显式清除自定义参考图，用于"取消风格"流程
                     project.pop("style_image", None)
                     project.pop("style_description", None)
+
+                if "style_description" in req.model_fields_set and not req.clear_style_image:
+                    if req.style_description is None:
+                        project.pop("style_description", None)
+                    elif project.get("style_image"):
+                        project["style_description"] = req.style_description.strip()
+                        project.pop("style_template_id", None)
+                        project["style"] = ""
+                    else:
+                        project.pop("style_description", None)
 
                 if "model_settings" in req.model_fields_set:
                     if req.model_settings is None:

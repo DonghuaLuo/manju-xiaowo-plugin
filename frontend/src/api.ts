@@ -43,6 +43,7 @@ import type {
   TransitionType,
 } from "@/types";
 import type { GenerationMode } from "@/utils/generation-mode";
+import type { StyleCategory } from "@/data/style-templates";
 import type { GridGeneration } from "@/types/grid";
 import type { Asset, AssetType, AssetCreatePayload, AssetUpdatePayload } from "@/types/asset";
 import type {
@@ -182,6 +183,7 @@ export interface SegmentUpdatePayload {
 export interface CreateProjectPayload {
   title: string;
   name?: string;
+  style?: string | null;
   content_mode?: "narration" | "drama";
   aspect_ratio?: "9:16" | "16:9";
   generation_mode?: GenerationMode;
@@ -195,6 +197,13 @@ export interface CreateProjectPayload {
   text_backend_overview?: string | null;
   text_backend_style?: string | null;
   model_settings?: Record<string, { resolution?: string | null }>;
+}
+
+export interface StyleTemplateInfo {
+  id: string;
+  category: StyleCategory;
+  prompt: string;
+  thumbnail_file: string;
 }
 
 /** Draft metadata returned by listDrafts. */
@@ -696,6 +705,10 @@ class API {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
+  }
+
+  static async getStyleTemplates(): Promise<{ success: boolean; templates: StyleTemplateInfo[] }> {
+    return this.request("/style-templates");
   }
 
 
@@ -1666,11 +1679,13 @@ class API {
    * 上传风格参考图
    * @param projectName - 项目名称
    * @param file - 图片文件
+   * @param options.styleDescription - 手动填写或预分析得到的风格提示词；为空则后端自动分析
    * @returns 包含 style_image, style_description, url 的结果
    */
   static async uploadStyleImage(
     projectName: string,
-    file: UploadFileInput
+    file: UploadFileInput,
+    options: { styleDescription?: string | null } = {},
   ): Promise<{
     success: boolean;
     style_image: string;
@@ -1679,9 +1694,10 @@ class API {
     style_analysis_error?: string;
   }> {
     const url = `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-image`;
+    const styleDescription = options.styleDescription?.trim();
     const response = await requestWithLocalFiles(
       url,
-      {},
+      styleDescription ? { style_description: styleDescription } : {},
       [{ fieldName: "file", file }],
     );
 
@@ -1699,6 +1715,19 @@ class API {
       ...result,
       url: resolveLocalMediaUrl(result.url) ?? result.url,
     };
+  }
+
+  static async analyzeStyleImage(
+    file: UploadFileInput,
+  ): Promise<{ success: boolean; style_description: string }> {
+    const url = `${API_BASE}/style-image/analyze`;
+    const response = await requestWithLocalFiles(
+      url,
+      {},
+      [{ fieldName: "file", file }],
+    );
+    await throwIfNotOk(response, "风格分析失败");
+    return response.json() as Promise<{ success: boolean; style_description: string }>;
   }
 
   // ==================== 助手会话 API ====================

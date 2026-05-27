@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS } from "@/components/ui/darkroom-tokens";
+import type { UploadFileInput } from "@/utils/desktop-file";
+import type { StyleTemplate } from "@/data/style-templates";
 
 export type WizardStep3Value = StylePickerValue;
 
@@ -12,6 +14,10 @@ export interface WizardStep3StyleProps {
   onCreate: () => void;
   onCancel: () => void;
   creating: boolean;
+  templates?: StyleTemplate[];
+  templatePrompts?: Record<string, string>;
+  onAnalyzeCustomStyle?: (file: UploadFileInput) => Promise<string>;
+  analyzingCustomStyle?: boolean;
 }
 
 export function WizardStep3Style({
@@ -21,6 +27,10 @@ export function WizardStep3Style({
   onCreate,
   onCancel,
   creating,
+  templates,
+  templatePrompts,
+  onAnalyzeCustomStyle,
+  analyzingCustomStyle,
 }: WizardStep3StyleProps) {
   const { t } = useTranslation(["common", "dashboard", "templates"]);
 
@@ -29,8 +39,17 @@ export function WizardStep3Style({
   const isCreateDisabled = creating;
 
   return (
-    <div className="space-y-5">
-      <StylePicker value={value} onChange={onChange} />
+    <div className="flex min-h-[560px] flex-col">
+      <div className="min-h-0 flex-1">
+        <StylePicker
+          value={value}
+          onChange={onChange}
+          templates={templates}
+          templatePrompts={templatePrompts}
+          onAnalyzeCustomStyle={onAnalyzeCustomStyle}
+          analyzingCustomStyle={analyzingCustomStyle}
+        />
+      </div>
 
       <div className="mt-7 flex items-center justify-between border-t border-hairline-soft pt-5">
         <button
