@@ -45,7 +45,7 @@
   },
   "extmodels": {
     "check_files": [
-      "python310\\python.exe"
+      "python313\\python.exe"
     ],
     "download_url": "https://www.xiaowoai.com/ask/info/1249"
 },
