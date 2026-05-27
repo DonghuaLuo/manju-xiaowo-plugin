@@ -657,7 +657,9 @@ def _detect_jianying_draft_root() -> str:
     if system == "Windows":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
+            candidates.extend(_detect_jianying_custom_draft_paths(Path(local_app_data) / "JianyingPro" / "User Data"))
             candidates.append(Path(local_app_data) / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
+        candidates.extend(_detect_jianying_custom_draft_paths(home / "AppData" / "Local" / "JianyingPro" / "User Data"))
         candidates.append(home / "AppData" / "Local" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
     elif system == "Darwin":
         candidates.append(home / "Movies" / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft")
@@ -673,6 +675,30 @@ def _detect_jianying_draft_root() -> str:
         if candidate.is_dir():
             return key
     return ""
+
+
+def _detect_jianying_custom_draft_paths(user_data_dir: Path) -> list[Path]:
+    import configparser
+
+    config_path = user_data_dir / "Config" / "globalSetting"
+    if not config_path.is_file():
+        return []
+
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(config_path, encoding="utf-8")
+    except configparser.Error:
+        _log_exception()
+        return []
+
+    raw_path = parser.get("General", "currentCustomDraftPath", fallback="").strip()
+    if not raw_path:
+        return []
+
+    normalized = raw_path.strip("\"'")
+    if "\\\\" in normalized:
+        normalized = normalized.replace("\\\\", "\\")
+    return [Path(os.path.expandvars(normalized)).expanduser()]
 
 
 def _open_desktop_path(raw_path: Any) -> dict[str, str]:

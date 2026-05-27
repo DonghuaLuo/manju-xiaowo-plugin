@@ -1,6 +1,56 @@
 from utils import arcreel_ipc_bridge, common
 
 
+def _set_fake_windows_home(monkeypatch, home):
+    monkeypatch.setattr(
+        arcreel_ipc_bridge.Path,
+        "home",
+        classmethod(lambda cls: home),
+    )
+
+
+def test_detect_jianying_draft_root_prefers_custom_global_setting(tmp_path, monkeypatch):
+    local_app_data = tmp_path / "LocalAppData"
+    configured_draft_root = tmp_path / "D" / "program files" / "JianyingPro Drafts"
+    default_draft_root = local_app_data / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft"
+    configured_draft_root.mkdir(parents=True)
+    default_draft_root.mkdir(parents=True)
+
+    global_setting = local_app_data / "JianyingPro" / "User Data" / "Config" / "globalSetting"
+    global_setting.parent.mkdir(parents=True)
+    escaped_path = str(configured_draft_root).replace("\\", "\\\\")
+    global_setting.write_text(
+        f"[General]\ncurrentCustomDraftPath={escaped_path}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(arcreel_ipc_bridge.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    _set_fake_windows_home(monkeypatch, tmp_path / "Home")
+
+    assert arcreel_ipc_bridge._detect_jianying_draft_root() == str(configured_draft_root)
+
+
+def test_detect_jianying_draft_root_falls_back_to_default_when_custom_missing(tmp_path, monkeypatch):
+    local_app_data = tmp_path / "LocalAppData"
+    missing_custom_root = tmp_path / "missing-custom"
+    default_draft_root = local_app_data / "JianyingPro" / "User Data" / "Projects" / "com.lveditor.draft"
+    default_draft_root.mkdir(parents=True)
+
+    global_setting = local_app_data / "JianyingPro" / "User Data" / "Config" / "globalSetting"
+    global_setting.parent.mkdir(parents=True)
+    global_setting.write_text(
+        f"[General]\ncurrentCustomDraftPath={missing_custom_root}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(arcreel_ipc_bridge.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    _set_fake_windows_home(monkeypatch, tmp_path / "Home")
+
+    assert arcreel_ipc_bridge._detect_jianying_draft_root() == str(default_draft_root)
+
+
 def test_open_desktop_path_reveals_file_in_explorer(tmp_path, monkeypatch):
     target_file = tmp_path / "demo-current.zip"
     target_file.write_text("zip", encoding="utf-8")
