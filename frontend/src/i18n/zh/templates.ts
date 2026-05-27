@@ -3,8 +3,8 @@ export default {
     custom: "自定义",
     live: "AI 真人剧",
     anim: "AI 漫剧",
-  },
-  name: {
+  }
+,  name: {
     live_cinematic_ancient: "精品古装",
     live_zhang_yimou: "张艺谋风格",
     live_ancient_xianxia: "古装仙侠",
@@ -41,8 +41,8 @@ export default {
     anim_bloodborne: "血源克苏鲁",
     anim_itojunji: "伊藤润二",
     anim_90s_retro: "90 年代日漫",
-  },
-  tagline: {
+  }
+,  tagline: {
     live_cinematic_ancient: "专业打光 · 电视剧质感",
     live_zhang_yimou: "极致用色 · 仪式感",
     live_ancient_xianxia: "临江仙 · 美白滤镜",
@@ -79,8 +79,8 @@ export default {
     anim_bloodborne: "哥特 · 阴冷雾气",
     anim_itojunji: "惊悚诡异 · 线条锐利",
     anim_90s_retro: "渡边信一郎 · 神山健治",
-  },
-  default_hint: "默认模型可在「项目大厅 → 设置 → 模型选择」中调整",
+  }
+,  default_hint: "默认模型可在「项目大厅 → 设置 → 模型选择」中调整",
   current_global_default: "当前全局默认：{{value}}",
   use_global_default: "使用全局默认",
   model_video: "视频模型",

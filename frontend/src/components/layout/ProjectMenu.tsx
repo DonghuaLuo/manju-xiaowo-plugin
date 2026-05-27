@@ -30,7 +30,7 @@ export function ProjectMenu() {
 
   const fallbackLabel = currentProjectName
     ? t("dashboard:untitled_project")
-    : t("no_project_selected");
+    : t("common:no_project_selected");
   const projectTitle = getProjectDisplayName(currentProjectData?.title, fallbackLabel);
   const initial = (projectTitle || "?").slice(0, 1).toUpperCase();
   const contentMode = currentProjectData?.content_mode;

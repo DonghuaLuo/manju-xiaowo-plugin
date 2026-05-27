@@ -63,7 +63,6 @@ const HOST_LANGUAGE_MAP: Record<string, SupportedLanguage> = {
 export const I18N_NAMESPACES = [
   'common',
   'dashboard',
-  'errors',
   'templates',
   'assets',
 ] as const;

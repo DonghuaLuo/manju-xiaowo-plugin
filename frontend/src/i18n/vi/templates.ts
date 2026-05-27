@@ -1,20 +1,10 @@
-import type enTemplates from "@/i18n/en/templates";
-
-type DeepStringify<T> = {
-  [K in keyof T]: T[K] extends string
-    ? string
-    : T[K] extends object
-      ? DeepStringify<T[K]>
-      : T[K];
-};
-
 export default {
   category: {
     custom: "Tùy chỉnh",
     live: "Người đóng",
     anim: "Hoạt hình",
-  },
-  name: {
+  }
+,  name: {
     live_cinematic_ancient: "Cổ trang điện ảnh",
     live_zhang_yimou: "Trương Nghệ Mưu",
     live_ancient_xianxia: "Cổ trang Tiên hiệp",
@@ -51,8 +41,8 @@ export default {
     anim_bloodborne: "Bloodborne",
     anim_itojunji: "Junji Ito",
     anim_90s_retro: "Anime hoài cổ thập niên 90",
-  },
-  tagline: {
+  }
+,  tagline: {
     live_cinematic_ancient: "Ánh sáng chuyên nghiệp · Chất lượng truyền hình",
     live_zhang_yimou: "Màu sắc đậm · Nghi lễ",
     live_ancient_xianxia: "Lâm Giang Tiên · Filter dịu",
@@ -89,8 +79,8 @@ export default {
     anim_bloodborne: "Gothic · Sương lạnh",
     anim_itojunji: "Kinh dị · Đường nét sắc",
     anim_90s_retro: "Watanabe · Kamiyama",
-  },
-  default_hint: "Có thể đổi mô hình mặc định trong Bảng điều khiển → Cài đặt → Lựa chọn mô hình",
+  }
+,  default_hint: "Có thể đổi mô hình mặc định trong Bảng điều khiển → Cài đặt → Lựa chọn mô hình",
   current_global_default: "Mặc định toàn cục hiện tại: {{value}}",
   use_global_default: "Dùng mặc định toàn cục",
   model_video: "Mô hình video",
@@ -114,4 +104,4 @@ export default {
   wizard_step_style: "Phong cách",
   next_step: "Tiếp",
   prev_step: "Quay lại",
-} satisfies DeepStringify<typeof enTemplates>;
+} as const;

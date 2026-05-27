@@ -3,8 +3,8 @@ export default {
     custom: "Custom",
     live: "Live Action",
     anim: "Animation",
-  },
-  name: {
+  }
+,  name: {
     live_cinematic_ancient: "Cinematic Historical",
     live_zhang_yimou: "Zhang Yimou",
     live_ancient_xianxia: "Ancient Xianxia",
@@ -41,8 +41,8 @@ export default {
     anim_bloodborne: "Bloodborne",
     anim_itojunji: "Junji Ito",
     anim_90s_retro: "90s Retro Anime",
-  },
-  tagline: {
+  }
+,  tagline: {
     live_cinematic_ancient: "Pro lighting · TV quality",
     live_zhang_yimou: "Bold colors · Ritual",
     live_ancient_xianxia: "Linjiangxian · Soft filter",
@@ -79,8 +79,8 @@ export default {
     anim_bloodborne: "Gothic · Cold mist",
     anim_itojunji: "Horror · Sharp lines",
     anim_90s_retro: "Watanabe · Kamiyama",
-  },
-  default_hint: "Default models can be changed in Dashboard → Settings → Model Selection",
+  }
+,  default_hint: "Default models can be changed in Dashboard → Settings → Model Selection",
   current_global_default: "Current global default: {{value}}",
   use_global_default: "Use global default",
   model_video: "Video model",

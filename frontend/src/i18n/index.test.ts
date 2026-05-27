@@ -31,8 +31,7 @@ const ADDED_LANGUAGE_SET = [
 
 const LOCALIZED_SAMPLES = [
   { ns: "common", key: "settings" },
-  { ns: "dashboard", key: "project_list" },
-  { ns: "errors", key: "unknown_error" },
+  { ns: "dashboard", key: "projects" },
   { ns: "assets", key: "library_title" },
   { ns: "templates", key: "default_hint" },
 ] as const;
@@ -68,7 +67,6 @@ describe("manju i18n language support", () => {
 
       expect(i18n.exists("settings", { ns: "common" })).toBe(true);
       expect(i18n.exists("projects", { ns: "dashboard" })).toBe(true);
-      expect(i18n.exists("unknown_error", { ns: "errors" })).toBe(true);
       expect(i18n.exists("library_title", { ns: "assets" })).toBe(true);
       expect(i18n.exists("category.live", { ns: "templates" })).toBe(true);
     }
