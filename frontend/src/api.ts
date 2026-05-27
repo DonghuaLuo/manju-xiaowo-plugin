@@ -11,7 +11,6 @@ import type {
   ProjectSummary,
   ImportConflictPolicy,
   ImportProjectResponse,
-  ExportDiagnostics,
   ImportFailureDiagnostics,
   EpisodeScript,
   TaskItem,
@@ -234,15 +233,6 @@ function normalizeImportFailureDiagnostics(value: unknown): ImportFailureDiagnos
   };
 }
 
-function normalizeExportDiagnostics(value: unknown): ExportDiagnostics {
-  const payload = (value && typeof value === "object") ? value as Record<string, unknown> : {};
-  return {
-    blocking: normalizeDiagnosticsBucket(payload.blocking),
-    auto_fixed: normalizeDiagnosticsBucket(payload.auto_fixed),
-    warnings: normalizeDiagnosticsBucket(payload.warnings),
-  };
-}
-
 // ==================== API class ====================
 
 const API_BASE = "/api/v1";
@@ -443,15 +433,6 @@ type DesktopContent =
   | { kind: "text"; text: string; mimeType?: string }
   | { kind: "binary"; base64: string; mimeType?: string };
 
-type DesktopBinaryPayload = {
-  ok?: boolean;
-  detail?: string;
-  filename?: string;
-  mimeType?: string;
-  base64?: string;
-  diagnostics?: unknown;
-};
-
 export type ExportTaskKind = "project_archive" | "jianying_draft";
 export type ExportTaskStatus = "queued" | "running" | "completed" | "failed";
 
@@ -495,6 +476,13 @@ export interface OpenDesktopPathResponse {
   ok?: boolean;
   path?: string;
   openedPath?: string;
+  detail?: string;
+}
+
+export interface SaveDiagnosticsResponse {
+  ok?: boolean;
+  path?: string;
+  filename?: string;
   detail?: string;
 }
 
@@ -569,22 +557,6 @@ function desktopResultToResponse(result: DesktopResourceResult): Response {
     status: success ? (empty ? 204 : 200) : statusFromDesktopError(result.error?.code),
     headers: { "content-type": mimeType },
   });
-}
-
-function desktopBinaryPayloadToBlob(result: DesktopBinaryPayload, fallbackFilename: string): {
-  blob: Blob;
-  filename: string;
-} {
-  if (!result.ok || !result.base64) {
-    throw new Error(result.detail || "导出失败");
-  }
-  const bytes = base64ToBytes(result.base64);
-  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(arrayBuffer).set(bytes);
-  return {
-    blob: new Blob([arrayBuffer], { type: result.mimeType || "application/octet-stream" }),
-    filename: result.filename || fallbackFilename,
-  };
 }
 
 function ensureExportTaskStarted(result: ExportTaskStartResponse): {
@@ -792,20 +764,6 @@ class API {
     return this.request(`/projects/${encodeURIComponent(name)}/video-capabilities`);
   }
 
-  static async exportProjectArchive(
-    projectName: string,
-    scope: "full" | "current" = "full"
-  ): Promise<{ blob: Blob; filename: string; diagnostics: ExportDiagnostics }> {
-    const result = await PluginSDK.callBackend<DesktopBinaryPayload>("arcreel_export_project_archive", {
-      projectName,
-      scope,
-    });
-    return {
-      ...desktopBinaryPayloadToBlob(result, `${projectName}-${scope}.zip`),
-      diagnostics: normalizeExportDiagnostics(result.diagnostics),
-    };
-  }
-
   static async startProjectArchiveExport(
     projectName: string,
     scope: "full" | "current",
@@ -836,19 +794,14 @@ class API {
     }
   }
 
-  static async exportJianyingDraft(
-    projectName: string,
-    episode: number,
-    draftPath: string,
-    jianyingVersion: string = "6",
-  ): Promise<{ blob: Blob; filename: string }> {
-    const result = await PluginSDK.callBackend<DesktopBinaryPayload>("arcreel_export_jianying_draft", {
-      projectName,
-      episode,
-      draftPath,
-      jianyingVersion,
+  static async saveDiagnosticsArchive(exportPath: string): Promise<{ path: string; filename?: string }> {
+    const result = await PluginSDK.callBackend<SaveDiagnosticsResponse>("arcreel_save_diagnostics", {
+      exportPath,
     });
-    return desktopBinaryPayloadToBlob(result, `${projectName}-jianying-draft.zip`);
+    if (!result.ok || !result.path) {
+      throw new Error(result.detail || "诊断包保存失败");
+    }
+    return { path: result.path, filename: result.filename };
   }
 
   static async startJianyingDraftExport(

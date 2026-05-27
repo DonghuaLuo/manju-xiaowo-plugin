@@ -29,6 +29,12 @@ type PluginStreamPayload = {
   data?: unknown;
 };
 
+type MediaPathResult = {
+  ok?: boolean;
+  path?: string;
+  detail?: string;
+};
+
 const originalFetch = globalThis.fetch.bind(globalThis);
 let installed = false;
 
@@ -396,6 +402,8 @@ type ApiImageCacheEntry = {
 const apiImageCache = new Map<string, ApiImageCacheEntry>();
 const apiImageInflight = new Map<string, Promise<ApiImageCacheEntry>>();
 const apiImageCachedObjectUrls = new Set<string>();
+const apiMediaLocalUrls = new Map<string, string>();
+const apiMediaLocalInflight = new Map<string, Promise<string | null>>();
 let apiImageCacheBytes = 0;
 let mediaAdaptersInstalled = false;
 
@@ -414,6 +422,10 @@ function apiMediaCacheKey(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isBlobObjectUrl(value: string): boolean {
+  return value.startsWith("blob:");
 }
 
 function getCachedApiImage(cacheKey: string): ApiImageCacheEntry | null {
@@ -488,10 +500,64 @@ function loadApiImage(cacheKey: string, value: string): Promise<ApiImageCacheEnt
   return request;
 }
 
+function appendApiMediaSearch(localUrl: string, value: string): string {
+  try {
+    const search = new URL(value, window.location.href).search;
+    if (!search) return localUrl;
+    return `${localUrl}${localUrl.includes("?") ? "&" : "?"}${search.slice(1)}`;
+  } catch {
+    return localUrl;
+  }
+}
+
+function cacheApiLocalMedia(cacheKey: string, path: string, sourceUrl: string): string {
+  const localUrl = appendApiMediaSearch(PluginSDK.convertFileSrc(path), sourceUrl);
+  apiMediaLocalUrls.set(cacheKey, localUrl);
+  return localUrl;
+}
+
+function resolveApiLocalMedia(cacheKey: string, value: string): Promise<string | null> {
+  const cached = apiMediaLocalUrls.get(cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  const inflight = apiMediaLocalInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const request = PluginSDK.callBackend<MediaPathResult>("arcreel_resolve_media_path", apiResourceFromUrl(value))
+    .then((result) => {
+      if (!result.ok || !result.path) return null;
+      return cacheApiLocalMedia(cacheKey, result.path, value);
+    })
+    .catch(() => null)
+    .finally(() => {
+      apiMediaLocalInflight.delete(cacheKey);
+    });
+
+  apiMediaLocalInflight.set(cacheKey, request);
+  return request;
+}
+
+function loadApiMediaUrl(cacheKey: string, value: string, cacheImage: boolean): Promise<string> {
+  return resolveApiLocalMedia(cacheKey, value).then((localUrl) => {
+    if (localUrl) return localUrl;
+    if (cacheImage) {
+      return loadApiImage(cacheKey, value).then((entry) => entry.objectUrl);
+    }
+    return pluginFetch(value)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(response.statusText || "Resource request failed");
+        }
+        return response.blob();
+      })
+      .then((blob) => URL.createObjectURL(blob));
+  });
+}
+
 function releaseApiMediaObjectUrl(element: Element): void {
   const previous = apiMediaObjectUrls.get(element);
   if (!previous) return;
-  if (!apiImageCachedObjectUrls.has(previous)) {
+  if (isBlobObjectUrl(previous) && !apiImageCachedObjectUrls.has(previous)) {
     URL.revokeObjectURL(previous);
   }
   apiMediaObjectUrls.delete(element);
@@ -516,14 +582,31 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
 
   const previousObjectUrl = apiMediaObjectUrls.get(element);
   const currentSrc = element instanceof HTMLImageElement ? element.getAttribute("src") : null;
-  const imageCacheKey = element instanceof HTMLImageElement ? apiMediaCacheKey(value) : null;
-  const cachedImage = imageCacheKey ? getCachedApiImage(imageCacheKey) : null;
+  const mediaCacheKey = apiMediaCacheKey(value);
+  const cachedLocalUrl = mediaCacheKey ? apiMediaLocalUrls.get(mediaCacheKey) : null;
+  if (cachedLocalUrl) {
+    apiMediaObjectUrls.set(element, cachedLocalUrl);
+    applyNative(cachedLocalUrl);
+    if (
+      previousObjectUrl &&
+      previousObjectUrl !== cachedLocalUrl &&
+      isBlobObjectUrl(previousObjectUrl) &&
+      !apiImageCachedObjectUrls.has(previousObjectUrl)
+    ) {
+      URL.revokeObjectURL(previousObjectUrl);
+    }
+    refreshParentMedia(element);
+    return;
+  }
+
+  const cachedImage = element instanceof HTMLImageElement && mediaCacheKey ? getCachedApiImage(mediaCacheKey) : null;
   if (cachedImage) {
     apiMediaObjectUrls.set(element, cachedImage.objectUrl);
     applyNative(cachedImage.objectUrl);
     if (
       previousObjectUrl &&
       previousObjectUrl !== cachedImage.objectUrl &&
+      isBlobObjectUrl(previousObjectUrl) &&
       !apiImageCachedObjectUrls.has(previousObjectUrl)
     ) {
       URL.revokeObjectURL(previousObjectUrl);
@@ -536,8 +619,8 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
     applyNative(TRANSPARENT_IMAGE_SRC);
   }
 
-  const mediaRequest = imageCacheKey
-    ? loadApiImage(imageCacheKey, value).then((entry) => entry.objectUrl)
+  const mediaRequest = mediaCacheKey
+    ? loadApiMediaUrl(mediaCacheKey, value, element instanceof HTMLImageElement)
     : pluginFetch(value)
       .then((response) => {
         if (!response.ok) {
@@ -555,6 +638,7 @@ function setApiAwareMediaSrc(element: Element, value: string, applyNative: (next
       if (
         previousObjectUrl &&
         previousObjectUrl !== objectUrl &&
+        isBlobObjectUrl(previousObjectUrl) &&
         !apiImageCachedObjectUrls.has(previousObjectUrl)
       ) {
         URL.revokeObjectURL(previousObjectUrl);

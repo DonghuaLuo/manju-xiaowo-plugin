@@ -436,32 +436,65 @@ def read_local_file_base64(params: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "code": "backend_error", "detail": str(exc)}
 
 
-def _zip_blob_result(
-    *,
-    path: Path,
-    filename: str,
-    diagnostics: dict[str, Any] | None = None,
-    cleanup_parent: bool = False,
-) -> dict[str, Any]:
-    try:
-        content = path.read_bytes()
-        result = {
-            "ok": True,
-            "filename": filename,
-            "mimeType": "application/zip",
-            "base64": base64.b64encode(content).decode("ascii"),
-        }
-        if diagnostics is not None:
-            result["diagnostics"] = diagnostics
-        return result
-    finally:
-        if cleanup_parent:
-            import shutil
+def _clean_relative_parts(parts: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for raw_part in parts:
+        decoded = unquote(str(raw_part or "")).replace("\\", "/")
+        for part in decoded.split("/"):
+            if not part:
+                continue
+            if part in {".", ".."}:
+                raise ValueError("Invalid media path")
+            cleaned.append(part)
+    if not cleaned:
+        raise ValueError("Missing media path")
+    return cleaned
 
-            shutil.rmtree(path.parent, ignore_errors=True)
+
+def _safe_child_path(root: Path, *parts: str) -> Path:
+    root_resolved = root.resolve()
+    path = root_resolved.joinpath(*parts).resolve()
+    if path != root_resolved and root_resolved not in path.parents:
+        raise ValueError("Invalid media path")
+    return path
+
+
+def resolve_media_path(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        resource = _desktop_resource_name(params)
+        parts = resource.split("/")
+        from lib.app_data_dir import app_data_dir
+
+        projects_root = app_data_dir()
+        if len(parts) >= 3 and parts[0] == "files":
+            project_name = unquote(parts[1])
+            if (
+                not project_name
+                or project_name in {".", ".."}
+                or "/" in project_name
+                or "\\" in project_name
+            ):
+                raise ValueError("Invalid project name")
+            path = _safe_child_path(projects_root / project_name, *_clean_relative_parts(parts[2:]))
+        elif len(parts) >= 3 and parts[0] == "global-assets":
+            asset_type = unquote(parts[1])
+            if (
+                not asset_type
+                or asset_type in {".", ".."}
+                or "/" in asset_type
+                or "\\" in asset_type
+            ):
+                raise ValueError("Invalid asset type")
+            path = _safe_child_path(projects_root / "_global_assets" / asset_type, *_clean_relative_parts(parts[2:]))
         else:
-            with suppress(FileNotFoundError):
-                path.unlink()
+            return {"ok": False, "detail": "Unsupported media resource"}
+
+        if not path.is_file():
+            return {"ok": False, "detail": f"Media file does not exist: {path}"}
+        return {"ok": True, "path": str(path)}
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
 
 
 def _validate_desktop_path(raw_path: Any, *, field_name: str, max_length: int = 4096) -> Path:
@@ -774,126 +807,46 @@ async def detect_jianying_draft_root(params: dict[str, Any] | None = None) -> di
         return {"ok": False, "detail": str(exc), "path": ""}
 
 
-async def _download_diagnostics_blob() -> dict[str, Any]:
+def _write_diagnostics_archive(target_path: Path) -> Path:
+    import zipfile
+
+    from lib.logging_config import resolve_log_dir
+    from server.services.diagnostics import collect_diagnostics
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    max_file_bytes = 100 * 1024 * 1024
+    log_dir = resolve_log_dir()
+    diagnostics_lines: list[str] = []
+
+    with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if log_dir.exists():
+            for path in sorted(log_dir.glob("arcreel.log*")):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                size = path.stat().st_size
+                if size > max_file_bytes:
+                    diagnostics_lines.append(f"[skipped: too large: {path.name} ({size} bytes)]")
+                    continue
+                zf.write(path, arcname=f"logs/{path.name}")
+
+        diagnostics_text = collect_diagnostics()
+        if diagnostics_lines:
+            diagnostics_text += "\n" + "\n".join(diagnostics_lines) + "\n"
+        zf.writestr("diagnostics.txt", diagnostics_text)
+
+    return target_path
+
+
+async def _save_diagnostics_archive(params: dict[str, Any]) -> dict[str, Any]:
     await _ensure_runtime()
-
-    def _sync() -> tuple[bytes, str]:
-        import io
-        import zipfile
-
-        from lib.logging_config import resolve_log_dir
-        from server.services.diagnostics import collect_diagnostics
-
-        max_file_bytes = 100 * 1024 * 1024
-        log_dir = resolve_log_dir()
-        diagnostics_lines: list[str] = []
-        buffer = io.BytesIO()
-
-        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            if log_dir.exists():
-                for path in sorted(log_dir.glob("arcreel.log*")):
-                    if path.is_symlink() or not path.is_file():
-                        continue
-                    size = path.stat().st_size
-                    if size > max_file_bytes:
-                        diagnostics_lines.append(f"[skipped: too large: {path.name} ({size} bytes)]")
-                        continue
-                    zf.write(path, arcname=f"logs/{path.name}")
-
-            diagnostics_text = collect_diagnostics()
-            if diagnostics_lines:
-                diagnostics_text += "\n" + "\n".join(diagnostics_lines) + "\n"
-            zf.writestr("diagnostics.txt", diagnostics_text)
-
-        ts = datetime.now(UTC).strftime("%Y-%m-%d-%H%MZ")
-        return buffer.getvalue(), f"arcreel-diagnostics-{ts}.zip"
-
-    content, filename = await asyncio.to_thread(_sync)
-    return {
-        "ok": True,
-        "filename": filename,
-        "mimeType": "application/zip",
-        "base64": base64.b64encode(content).decode("ascii"),
-    }
+    target_path = _normalize_zip_export_path(params.get("exportPath") or params.get("path"))
+    saved_path = await asyncio.to_thread(_write_diagnostics_archive, target_path)
+    return {"ok": True, "path": str(saved_path), "filename": saved_path.name}
 
 
-async def download_diagnostics_blob(params: dict[str, Any] | None = None) -> dict[str, Any]:
+async def save_diagnostics_archive(params: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
-        return await _download_diagnostics_blob()
-    except Exception as exc:  # noqa: BLE001
-        _log_exception()
-        return {"ok": False, "detail": str(exc)}
-
-
-async def _export_project_archive_blob(params: dict[str, Any]) -> dict[str, Any]:
-    await _ensure_runtime()
-    project_name = str(params.get("projectName") or "").strip()
-    scope = str(params.get("scope") or "full")
-    if not project_name:
-        raise ValueError("Missing projectName")
-    if scope not in {"full", "current"}:
-        raise ValueError("Invalid export scope")
-
-    def _sync() -> tuple[dict[str, Any], Path, str]:
-        from lib.app_data_dir import app_data_dir
-        from lib.project_manager import ProjectManager
-        from server.services.project_archive import ProjectArchiveService
-
-        service = ProjectArchiveService(ProjectManager(app_data_dir()))
-        diagnostics = service.get_export_diagnostics(project_name, scope=scope)
-        archive_path, filename = service.export_project(project_name, scope=scope)
-        return diagnostics, archive_path, filename
-
-    diagnostics, archive_path, filename = await asyncio.to_thread(_sync)
-    return _zip_blob_result(path=Path(archive_path), filename=filename, diagnostics=diagnostics)
-
-
-async def export_project_archive_blob(params: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return await _export_project_archive_blob(params)
-    except Exception as exc:  # noqa: BLE001
-        _log_exception()
-        return {"ok": False, "detail": str(exc)}
-
-
-async def _export_jianying_draft_blob(params: dict[str, Any]) -> dict[str, Any]:
-    await _ensure_runtime()
-    project_name = str(params.get("projectName") or "").strip()
-    draft_path = str(params.get("draftPath") or "").strip()
-    jianying_version = str(params.get("jianyingVersion") or "6")
-    try:
-        episode = int(params.get("episode"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Invalid episode") from exc
-
-    if not project_name:
-        raise ValueError("Missing projectName")
-    if not draft_path:
-        raise ValueError("Missing draftPath")
-    if len(draft_path) > 1024 or any(ord(char) < 32 for char in draft_path):
-        raise ValueError("Invalid draftPath")
-
-    def _sync() -> Path:
-        from lib.app_data_dir import app_data_dir
-        from lib.project_manager import ProjectManager
-        from server.services.jianying_draft_service import JianyingDraftService
-
-        service = JianyingDraftService(ProjectManager(app_data_dir()))
-        return service.export_episode_draft(
-            project_name=project_name,
-            episode=episode,
-            draft_path=draft_path,
-            use_draft_info_name=(jianying_version != "5"),
-        )
-
-    zip_path = Path(await asyncio.to_thread(_sync))
-    filename = f"{project_name}_episode_{episode}_jianying_draft.zip"
-    return _zip_blob_result(path=zip_path, filename=filename, cleanup_parent=True)
-
-
-async def export_jianying_draft_blob(params: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return await _export_jianying_draft_blob(params)
+        return await _save_diagnostics_archive(params or {})
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"ok": False, "detail": str(exc)}

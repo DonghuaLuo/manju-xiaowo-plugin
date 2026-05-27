@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const callBackendMock = vi.hoisted(() => vi.fn());
+const convertFileSrcMock = vi.hoisted(() => vi.fn());
 
 vi.mock("xiaowo-sdk", () => ({
   PluginSDK: {
     callBackend: callBackendMock,
+    convertFileSrc: convertFileSrcMock,
     onBackendEvent: vi.fn(),
     offBackendEvent: vi.fn(),
   },
@@ -31,13 +33,20 @@ describe("plugin runtime media adapter", () => {
     originalSourceSrc = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, "src");
     vi.resetModules();
     callBackendMock.mockReset();
-    callBackendMock.mockResolvedValue({
-      success: true,
-      content: {
-        kind: "binary",
-        base64: btoa("image"),
-        mimeType: "image/png",
-      },
+    convertFileSrcMock.mockReset();
+    convertFileSrcMock.mockImplementation((path: string) => `asset://localhost/${encodeURIComponent(path)}`);
+    callBackendMock.mockImplementation((method: string) => {
+      if (method === "arcreel_resolve_media_path") {
+        return Promise.resolve({ ok: false });
+      }
+      return Promise.resolve({
+        success: true,
+        content: {
+          kind: "binary",
+          base64: btoa("image"),
+          mimeType: "image/png",
+        },
+      });
     });
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:http://localhost/ipc-media");
     await import("./plugin-runtime");
@@ -61,6 +70,25 @@ describe("plugin runtime media adapter", () => {
     image.src = "/api/v1/files/蛇瞳/characters/苏婉.png?v=1";
 
     expect(image.getAttribute("src")).toMatch(/^data:image\/gif;base64,/);
+  });
+
+  it("uses a local file URL when the backend resolves an API image path", async () => {
+    callBackendMock.mockImplementation((method: string) => {
+      if (method === "arcreel_resolve_media_path") {
+        return Promise.resolve({ ok: true, path: "D:\\ArcReel\\demo\\cover.png" });
+      }
+      return Promise.reject(new Error("resource fallback should not run"));
+    });
+    const { installPluginRuntimeAdapters } = await import("./plugin-runtime");
+    installPluginRuntimeAdapters();
+
+    const image = document.createElement("img");
+    image.src = "/api/v1/files/demo/cover.png?v=1";
+    await flushPromises();
+
+    expect(image.getAttribute("src")).toBe("asset://localhost/D%3A%5CArcReel%5Cdemo%5Ccover.png?v=1");
+    expect(convertFileSrcMock).toHaveBeenCalledWith("D:\\ArcReel\\demo\\cover.png");
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
   it("keeps the current blob visible while replacing it with another API image", async () => {
@@ -87,7 +115,17 @@ describe("plugin runtime media adapter", () => {
 
     expect(first.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
     expect(second.getAttribute("src")).toBe("blob:http://localhost/ipc-media");
-    expect(callBackendMock).toHaveBeenCalledTimes(1);
+    expect(callBackendMock).toHaveBeenCalledTimes(2);
+    expect(callBackendMock).toHaveBeenNthCalledWith(
+      1,
+      "arcreel_resolve_media_path",
+      expect.objectContaining({ resource: "files/%E8%9B%87%E7%9E%B3/characters/%E8%8B%8F%E5%A9%89.png" }),
+    );
+    expect(callBackendMock).toHaveBeenNthCalledWith(
+      2,
+      "arcreel_resource_request",
+      expect.objectContaining({ resource: "files/%E8%9B%87%E7%9E%B3/characters/%E8%8B%8F%E5%A9%89.png" }),
+    );
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
   });
 

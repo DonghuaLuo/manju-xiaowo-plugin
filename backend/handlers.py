@@ -85,20 +85,20 @@ def handle_arcreel_asset_roots(params):
     }
 
 
-@sdk.handler("arcreel_download_diagnostics")
-async def handle_arcreel_download_diagnostics(params):
-    """桌面诊断包导出：返回 ZIP 数据，不走旧 Web 下载端点。"""
-    from utils.arcreel_ipc_bridge import download_diagnostics_blob
+@sdk.handler("arcreel_resolve_media_path")
+def handle_arcreel_resolve_media_path(params):
+    """解析 /api/files 等媒体资源到本地文件路径，避免经 IPC 传输二进制。"""
+    from utils.arcreel_ipc_bridge import resolve_media_path
 
-    return await download_diagnostics_blob(params)
+    return resolve_media_path(params)
 
 
-@sdk.handler("arcreel_export_project_archive")
-async def handle_arcreel_export_project_archive(params):
-    """桌面项目导出：返回 ZIP 数据和诊断信息，不暴露浏览器下载 token。"""
-    from utils.arcreel_ipc_bridge import export_project_archive_blob
+@sdk.handler("arcreel_save_diagnostics")
+async def handle_arcreel_save_diagnostics(params):
+    """桌面诊断包导出：前端选择目标路径后，后端直接写入 ZIP。"""
+    from utils.arcreel_ipc_bridge import save_diagnostics_archive
 
-    return await export_project_archive_blob(params)
+    return await save_diagnostics_archive(params)
 
 
 @sdk.handler("arcreel_start_project_archive_export")
@@ -131,14 +131,6 @@ async def handle_arcreel_detect_jianying_draft_root(params):
     from utils.arcreel_ipc_bridge import detect_jianying_draft_root
 
     return await detect_jianying_draft_root(params)
-
-
-@sdk.handler("arcreel_export_jianying_draft")
-async def handle_arcreel_export_jianying_draft(params):
-    """桌面剪映草稿导出：返回 ZIP 数据，不走浏览器下载 URL。"""
-    from utils.arcreel_ipc_bridge import export_jianying_draft_blob
-
-    return await export_jianying_draft_blob(params)
 
 
 @sdk.handler("arcreel_start_jianying_draft_export")
