@@ -16,7 +16,6 @@ import {
   ACCENT_BUTTON_STYLE,
   ICON_BTN_FILLED_CLS,
   INPUT_CLS,
-  ambientGlowStyle,
 } from "@/components/ui/darkroom-tokens";
 import type { Asset, AssetType } from "@/types/asset";
 import type { UploadFileInput } from "@/utils/desktop-file";
@@ -46,8 +45,6 @@ const EMPTY_KEY: Record<AssetType, string> = {
   scene: "library_empty_scene",
   prop: "library_empty_prop",
 };
-
-const HEADER_GLOW_STYLE = ambientGlowStyle({ at: "30% 0%", intensity: 0.08 });
 
 type Navigate = ReturnType<typeof useLocation>[1];
 
@@ -165,17 +162,46 @@ export function AssetLibraryPage() {
   const [deleting, setDeleting] = useState(false);
 
   const byType = useAssetsStore((s) => s.byType);
-  const loadList = useAssetsStore((s) => s.loadList);
+  const totalByType = useAssetsStore((s) => s.totalByType);
+  const loadingByType = useAssetsStore((s) => s.loadingByType);
+  const loadAllLists = useAssetsStore((s) => s.loadAllLists);
+  const loadMore = useAssetsStore((s) => s.loadMore);
   const addAsset = useAssetsStore((s) => s.addAsset);
   const updateAssetLocal = useAssetsStore((s) => s.updateAsset);
   const deleteAssetLocal = useAssetsStore((s) => s.deleteAsset);
 
   useEffect(() => {
-    void loadList(activeTab, debouncedQ || undefined);
-  }, [activeTab, debouncedQ, loadList]);
+    void loadAllLists(debouncedQ || undefined);
+  }, [debouncedQ, loadAllLists]);
 
   const assets = byType[activeTab];
+  const activeTotal = totalByType[activeTab];
+  const activeLoading = loadingByType[activeTab];
+  const hasMore = assets.length < activeTotal;
+  const listViewportRef = useRef<HTMLDivElement>(null);
   const ActiveIcon = TABS.find((tab) => tab.type === activeTab)!.icon;
+
+  const loadMoreActiveTab = useCallback(() => {
+    if (!hasMore || activeLoading) return;
+    void loadMore(activeTab, debouncedQ || undefined);
+  }, [activeLoading, activeTab, debouncedQ, hasMore, loadMore]);
+
+  const handleListScroll = useCallback(() => {
+    const el = listViewportRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceToBottom <= 180) {
+      loadMoreActiveTab();
+    }
+  }, [loadMoreActiveTab]);
+
+  useEffect(() => {
+    const el = listViewportRef.current;
+    if (!el || !hasMore || activeLoading || el.clientHeight === 0) return;
+    if (el.scrollHeight <= el.clientHeight + 120) {
+      loadMoreActiveTab();
+    }
+  }, [activeLoading, activeTab, assets.length, hasMore, loadMoreActiveTab]);
 
   const handleSubmit = async (payload: {
     name: string; description: string; voice_style: string; image?: UploadFileInput | null;
@@ -222,11 +248,8 @@ export function AssetLibraryPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-bg text-text">
-      {/* Decorative ambient glow */}
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-72" style={HEADER_GLOW_STYLE} />
-
-      <header className="sticky top-0 z-30 border-b border-hairline bg-bg/85 backdrop-blur-[28px]">
+    <div className="relative flex h-screen min-h-0 flex-col overflow-hidden bg-bg text-text">
+      <header className="sticky top-0 z-30 shrink-0 border-b border-hairline bg-bg/85 backdrop-blur-[28px]">
         <div className="mx-auto flex max-w-6xl items-start justify-between gap-6 px-6 py-6">
           <div className="flex items-start gap-4">
             <button
@@ -285,7 +308,7 @@ export function AssetLibraryPage() {
         >
           {TABS.map(({ type, icon: Icon }) => {
             const active = activeTab === type;
-            const count = byType[type].length;
+            const count = totalByType[type];
             const cls = active
               ? "border-accent/45 bg-accent-dim text-text shadow-[inset_0_1px_0_oklch(1_0_0_/_0.05),0_0_22px_-10px_var(--color-accent-glow)]"
               : "border-hairline-soft bg-bg-grad-a/40 text-text-2 hover:border-hairline hover:text-text";
@@ -321,16 +344,22 @@ export function AssetLibraryPage() {
         </div>
       </header>
 
-      <main className="relative mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      <main className="relative mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-6 py-6">
         <div
           role="tabpanel"
           id="asset-panel"
           aria-labelledby={`asset-tab-${activeTab}`}
           tabIndex={0}
-          className="rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          ref={listViewportRef}
+          onScroll={handleListScroll}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-        {assets.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-hairline bg-bg-grad-a/30 py-24 text-center">
+        {assets.length === 0 && activeLoading ? (
+          <div className="flex min-h-full items-center justify-center text-[12px] text-text-4">
+            {t("loading")}
+          </div>
+        ) : assets.length === 0 ? (
+          <div className="flex min-h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-hairline bg-bg-grad-b/30 px-6 py-24 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-dim text-accent-2">
               <ActiveIcon className="h-5 w-5" />
             </div>
@@ -347,11 +376,28 @@ export function AssetLibraryPage() {
             </button>
           </div>
         ) : (
-          <AssetGrid
-            assets={assets}
-            onEdit={handleEditAsset}
-            onDelete={handleDeleteAsset}
-          />
+          <>
+            <AssetGrid
+              assets={assets}
+              onEdit={handleEditAsset}
+              onDelete={handleDeleteAsset}
+            />
+            <div className="flex h-14 items-center justify-center text-[12px] text-text-4">
+              {activeLoading ? (
+                t("loading")
+              ) : hasMore ? (
+                <button
+                  type="button"
+                  onClick={loadMoreActiveTab}
+                  className="rounded-[8px] border border-hairline-soft bg-bg-grad-b/60 px-3 py-1.5 text-text-3 transition-colors hover:border-hairline hover:text-text"
+                >
+                  {t("load_more")}
+                </button>
+              ) : activeTotal > 0 ? (
+                <span className="font-mono tabular-nums">{assets.length}/{activeTotal}</span>
+              ) : null}
+            </div>
+          </>
         )}
         </div>
       </main>

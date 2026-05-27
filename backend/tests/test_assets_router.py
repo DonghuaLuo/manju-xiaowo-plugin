@@ -50,7 +50,20 @@ class TestAssetsCRUD:
         r2 = client.get("/api/v1/assets?type=character")
         assert r2.status_code == 200
         assert len(r2.json()["items"]) == 1
+        assert r2.json()["total"] == 1
         assert r2.json()["items"][0]["id"] == asset_id
+
+    def test_list_returns_total_for_paginated_assets(self, _assets_env):
+        client = _assets_env["client"]
+        for name in ("A", "B", "C"):
+            r = client.post("/api/v1/assets", data={"type": "scene", "name": name})
+            assert r.status_code == 200, r.text
+
+        r = client.get("/api/v1/assets?type=scene&limit=2&offset=1")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["items"]) == 2
+        assert body["total"] == 3
 
     def test_duplicate_type_name_returns_409(self, _assets_env):
         client = _assets_env["client"]

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -34,10 +35,12 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
   const debouncedQ = useDebouncedValue(q, 250);
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map());
   const [previewAsset, setPreviewAsset] = useState<{ src: string; alt: string } | null>(null);
-  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const titleId = useId();
+  const gridRef = useRef<HTMLDivElement>(null);
   const loadMoreCtrlRef = useRef<AbortController | null>(null);
+  const hasMore = assets.length < total;
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -50,7 +53,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
         );
         if (!ctrl.signal.aborted) {
           setAssets(res.items);
-          setHasMore(res.items.length === PAGE_SIZE);
+          setTotal(res.total ?? res.items.length);
           setLoading(false);
         }
       } catch (err) {
@@ -70,19 +73,21 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
     [assets],
   );
 
-  const loadMore = async () => {
+  const loadMore = useCallback(async () => {
+    if (loading || !hasMore) return;
     loadMoreCtrlRef.current?.abort();
     const ctrl = new AbortController();
     loadMoreCtrlRef.current = ctrl;
+    const offset = assets.length;
     setLoading(true);
     try {
       const res = await API.listAssets(
-        { type, q: debouncedQ || undefined, limit: PAGE_SIZE, offset: assets.length },
+        { type, q: debouncedQ || undefined, limit: PAGE_SIZE, offset },
         { signal: ctrl.signal },
       );
       if (!ctrl.signal.aborted) {
-        setAssets((prev) => [...prev, ...res.items]);
-        setHasMore(res.items.length === PAGE_SIZE);
+        setAssets((prev) => [...prev, ...res.items.filter((asset) => !prev.some((item) => item.id === asset.id))]);
+        setTotal(res.total ?? offset + res.items.length);
         setLoading(false);
       }
     } catch (err) {
@@ -90,7 +95,16 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
         setLoading(false);
       }
     }
-  };
+  }, [assets.length, debouncedQ, hasMore, loading, type]);
+
+  const handleGridScroll = useCallback(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceToBottom <= 160) {
+      void loadMore();
+    }
+  }, [loadMore]);
 
   const toggle = (a: Asset, disabled: boolean) => {
     if (disabled) return;
@@ -185,7 +199,12 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
         </div>
 
         {/* Grid */}
-        <div className="grid flex-1 grid-cols-4 gap-2 overflow-y-auto p-3">
+        <div
+          ref={gridRef}
+          data-testid="asset-picker-grid"
+          onScroll={handleGridScroll}
+          className="grid flex-1 grid-cols-4 gap-2 overflow-y-auto p-3"
+        >
           {assetsWithUrl.length === 0 && !loading && (
             <div
               className="col-span-4 px-4 py-12 text-center text-[12px]"

@@ -2131,7 +2131,7 @@ class API {
     if (params.q) usp.set("q", params.q);
     if (params.limit) usp.set("limit", String(params.limit));
     if (params.offset) usp.set("offset", String(params.offset));
-    return this.request<{ items: Asset[] }>(`/assets?${usp.toString()}`, options);
+    return this.request<{ items: Asset[]; total?: number }>(`/assets?${usp.toString()}`, options);
   }
 
   static async getAsset(id: string) {

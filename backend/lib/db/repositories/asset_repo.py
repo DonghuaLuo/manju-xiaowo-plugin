@@ -5,13 +5,20 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from lib.db.models.asset import Asset
 from lib.db.repositories.base import BaseRepository
 
 
 class AssetRepository(BaseRepository):
+    def _apply_list_filters(self, stmt, *, type: str | None, q: str | None):
+        if type:
+            stmt = stmt.where(Asset.type == type)
+        if q:
+            stmt = stmt.where(Asset.name.contains(q))
+        return stmt
+
     async def create(
         self,
         *,
@@ -56,13 +63,13 @@ class AssetRepository(BaseRepository):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Asset]:
-        stmt = select(Asset)
-        if type:
-            stmt = stmt.where(Asset.type == type)
-        if q:
-            stmt = stmt.where(Asset.name.contains(q))
+        stmt = self._apply_list_filters(select(Asset), type=type, q=q)
         stmt = stmt.order_by(Asset.updated_at.desc()).limit(limit).offset(offset)
         return list((await self.session.execute(stmt)).scalars())
+
+    async def count(self, *, type: str | None, q: str | None) -> int:
+        stmt = self._apply_list_filters(select(func.count()).select_from(Asset), type=type, q=q)
+        return int((await self.session.execute(stmt)).scalar_one())
 
     async def update(self, asset_id: str, **fields: Any) -> Asset:
         asset = await self.get_by_id(asset_id)

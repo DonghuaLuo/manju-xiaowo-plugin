@@ -23,6 +23,20 @@ const fixtures = [
   { id: "1", type: "character" as const, name: "王小明", description: "", voice_style: "", image_path: null, source_project: null, updated_at: null },
   { id: "2", type: "character" as const, name: "小师妹", description: "", voice_style: "", image_path: null, source_project: null, updated_at: null },
 ];
+const PAGE_SIZE = 50;
+
+function makeAssets(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: String(offset + index + 1),
+    type: "character" as const,
+    name: `资产${offset + index + 1}`,
+    description: "",
+    voice_style: "",
+    image_path: null,
+    source_project: null,
+    updated_at: null,
+  }));
+}
 
 describe("AssetPickerModal", () => {
   beforeEach(() => {
@@ -92,5 +106,53 @@ describe("AssetPickerModal", () => {
     expect(
       screen.getByRole("dialog", { name: "小师妹 全屏预览" }),
     ).toBeInTheDocument();
+  });
+
+  it("uses total to hide load more when the first page is complete", async () => {
+    vi.spyOn(API, "listAssets").mockResolvedValue({
+      total: PAGE_SIZE,
+      items: makeAssets(PAGE_SIZE),
+    });
+
+    render(
+      <AssetPickerModal type="character" existingNames={new Set()}
+        onClose={() => {}} onImport={vi.fn()} />
+    );
+
+    await waitFor(() => screen.getByText("资产50"));
+
+    expect(screen.queryByText("load_more")).not.toBeInTheDocument();
+  });
+
+  it("loads more assets when scrolling near the bottom", async () => {
+    vi.spyOn(API, "listAssets").mockImplementation((async (params = {}) => {
+      const offset = params.offset ?? 0;
+      return {
+        total: PAGE_SIZE + 1,
+        items: offset === 0 ? makeAssets(PAGE_SIZE) : makeAssets(1, offset),
+      };
+    }) satisfies typeof API.listAssets);
+
+    render(
+      <AssetPickerModal type="character" existingNames={new Set()}
+        onClose={() => {}} onImport={vi.fn()} />
+    );
+
+    const grid = await screen.findByTestId("asset-picker-grid");
+    await waitFor(() => screen.getByText("资产50"));
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 460 },
+    });
+    fireEvent.scroll(grid);
+
+    await waitFor(() => {
+      expect(API.listAssets).toHaveBeenCalledWith(
+        { type: "character", q: undefined, limit: PAGE_SIZE, offset: PAGE_SIZE },
+        expect.any(Object),
+      );
+      expect(screen.getByText("资产51")).toBeInTheDocument();
+    });
   });
 });

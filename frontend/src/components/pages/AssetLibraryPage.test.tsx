@@ -4,7 +4,8 @@ import { Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { memoryLocation } from "wouter/memory-location";
 import { API } from "@/api";
-import { useAssetsStore } from "@/stores/assets-store";
+import { ASSET_LIBRARY_PAGE_SIZE, useAssetsStore } from "@/stores/assets-store";
+import type { AssetType } from "@/types/asset";
 import { AssetLibraryPage } from "./AssetLibraryPage";
 
 vi.mock("@/components/assets/AssetFormModal", () => ({
@@ -58,6 +59,85 @@ describe("AssetLibraryPage tablist (issue #488)", () => {
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
     expect(tabs[1]).toHaveAttribute("aria-selected", "false");
     expect(tabs[2]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("loads every asset type on first render so inactive tab counts are correct", async () => {
+    vi.spyOn(API, "listAssets").mockImplementation((async (params = {}) => {
+      const type = params.type ?? "character";
+      const countByType: Record<AssetType, number> = { character: 1, scene: 2, prop: 3 };
+      return Promise.resolve({
+        total: countByType[type],
+        items: Array.from({ length: countByType[type] }, (_, index) => ({
+          id: `${type}-${index}`,
+          type,
+          name: `${type}-${index}`,
+          description: "",
+          voice_style: "",
+          image_path: null,
+          source_project: null,
+          updated_at: null,
+        })),
+      });
+    }) satisfies typeof API.listAssets);
+
+    renderPage();
+
+    await waitFor(() => {
+      const [character, scene, prop] = screen.getAllByRole("tab");
+      expect(character).toHaveTextContent("人物");
+      expect(character).toHaveTextContent("1");
+      expect(scene).toHaveTextContent("场景");
+      expect(scene).toHaveTextContent("2");
+      expect(prop).toHaveTextContent("道具");
+      expect(prop).toHaveTextContent("3");
+    });
+    expect(API.listAssets).toHaveBeenCalledWith({ type: "character", q: undefined, limit: ASSET_LIBRARY_PAGE_SIZE, offset: 0 });
+    expect(API.listAssets).toHaveBeenCalledWith({ type: "scene", q: undefined, limit: ASSET_LIBRARY_PAGE_SIZE, offset: 0 });
+    expect(API.listAssets).toHaveBeenCalledWith({ type: "prop", q: undefined, limit: ASSET_LIBRARY_PAGE_SIZE, offset: 0 });
+  });
+
+  it("loads the next page when the asset panel scrolls near the bottom", async () => {
+    vi.spyOn(API, "listAssets").mockImplementation((async (params = {}) => {
+      const type = params.type ?? "character";
+      const offset = params.offset ?? 0;
+      const total = type === "character" ? ASSET_LIBRARY_PAGE_SIZE + 1 : 0;
+      const pageSize = type === "character" && offset === 0 ? ASSET_LIBRARY_PAGE_SIZE : 1;
+      return Promise.resolve({
+        total,
+        items: Array.from({ length: type === "character" ? pageSize : 0 }, (_, index) => ({
+          id: `${type}-${offset + index}`,
+          type,
+          name: `${type}-${offset + index}`,
+          description: "",
+          voice_style: "",
+          image_path: null,
+          source_project: null,
+          updated_at: null,
+        })),
+      });
+    }) satisfies typeof API.listAssets);
+
+    renderPage();
+
+    const panel = screen.getByRole("tabpanel");
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /人物/ })).toHaveTextContent(String(ASSET_LIBRARY_PAGE_SIZE + 1));
+    });
+    Object.defineProperties(panel, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 460 },
+    });
+    fireEvent.scroll(panel);
+
+    await waitFor(() => {
+      expect(API.listAssets).toHaveBeenCalledWith({
+        type: "character",
+        q: undefined,
+        limit: ASSET_LIBRARY_PAGE_SIZE,
+        offset: ASSET_LIBRARY_PAGE_SIZE,
+      });
+    });
   });
 
   it("applies roving tabindex (active=0, others=-1)", () => {

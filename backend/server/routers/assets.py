@@ -97,8 +97,10 @@ async def list_assets(
     offset: int = 0,
 ):
     async with async_session_factory() as s:
-        items = await AssetRepository(s).list(type=type, q=q, limit=limit, offset=offset)
-        return {"items": [_serialize(a) for a in items]}
+        repo = AssetRepository(s)
+        items = await repo.list(type=type, q=q, limit=limit, offset=offset)
+        total = await repo.count(type=type, q=q)
+        return {"items": [_serialize(a) for a in items], "total": total}
 
 
 @router.get("/{asset_id}")

@@ -45,12 +45,15 @@ async def test_list_filters_by_type_and_name_fuzzy(repo):
 
     chars = await repo.list(type="character", q=None, limit=10, offset=0)
     assert len(chars) == 2
+    assert await repo.count(type="character", q=None) == 2
 
     fuzzy = await repo.list(type="character", q="小", limit=10, offset=0)
     assert len(fuzzy) == 2
+    assert await repo.count(type="character", q="小") == 2
 
     scenes = await repo.list(type="scene", q=None, limit=10, offset=0)
     assert len(scenes) == 1
+    assert await repo.count(type="scene", q=None) == 1
 
 
 async def test_update_patch_fields(repo):
