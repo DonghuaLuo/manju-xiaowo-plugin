@@ -72,6 +72,7 @@ describe("ProjectsPage", () => {
 
     // 0 项目时仅渲染 NewProjectTile 占位卡（lobby_new_project_title）
     expect(await screen.findByText("新建项目")).toBeInTheDocument();
+    expect(API.listProjects).toHaveBeenCalledWith({ check_extmodel: true });
   });
 
   it("renders project cards when data exists", async () => {

@@ -10,6 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
     base: "./",
     plugins: [react(), tailwindcss(), viteSingleFile()],
+    server: {
+        port: 5174,
+    },
     resolve: {
         alias: { "@": path.resolve(__dirname, "src") },
         extensions: [".mjs", ".mts", ".ts", ".tsx", ".js", ".jsx", ".json"],

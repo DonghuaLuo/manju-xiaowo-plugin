@@ -77,6 +77,10 @@ function apiResourceFromUrl(url: string): {
   return { resource: resource || "root", query };
 }
 
+function shouldCheckExtmodel(query: Record<string, string[]>): boolean {
+  return (query.check_extmodel ?? []).some((value) => value === "true" || value === "1");
+}
+
 function operationFromMethod(method: string): string {
   switch (method.toUpperCase()) {
     case "POST":
@@ -217,11 +221,13 @@ async function pluginFetch(input: RequestInfo | URL, init: RequestInit = {}): Pr
   const requestBody = init.body ?? null;
   const body = await bodyToDesktopBody(requestBody, headers);
   const resource = apiResourceFromUrl(url);
+  const checkExtmodel = shouldCheckExtmodel(resource.query);
 
   try {
     const result = await PluginSDK.callBackend<DesktopResult>("arcreel_resource_request", {
       operation: operationFromMethod(method),
       ...resource,
+      ...(checkExtmodel ? { check_extmodel: true } : {}),
       locale: headers.get("accept-language") || navigator.language,
       body,
     });

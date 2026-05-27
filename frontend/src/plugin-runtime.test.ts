@@ -129,6 +129,22 @@ describe("plugin runtime media adapter", () => {
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
   });
 
+  it("lifts check_extmodel query to the Tauri backend params", async () => {
+    const { installPluginRuntimeAdapters } = await import("./plugin-runtime");
+    installPluginRuntimeAdapters();
+
+    await fetch("/api/v1/projects?check_extmodel=true");
+
+    expect(callBackendMock).toHaveBeenCalledWith(
+      "arcreel_resource_request",
+      expect.objectContaining({
+        resource: "projects",
+        query: { check_extmodel: ["true"] },
+        check_extmodel: true,
+      }),
+    );
+  });
+
   it("shares one in-flight backend request for simultaneous API image loads", async () => {
     let resolveBackend: (value: unknown) => void = () => {};
     callBackendMock.mockReturnValue(

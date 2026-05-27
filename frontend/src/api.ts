@@ -701,9 +701,18 @@ class API {
 
   // ==================== 项目管理 ====================
 
-  static async listProjects(): Promise<{ projects: ProjectSummary[] }> {
+  static async listProjects(
+    params: { check_extmodel?: boolean } = {},
+  ): Promise<{ projects: ProjectSummary[] }> {
     await ensureLocalAssetRoots();
-    const result = await this.request<{ projects: ProjectSummary[] }>("/projects");
+    const searchParams = new URLSearchParams();
+    if (params.check_extmodel !== undefined) {
+      searchParams.set("check_extmodel", String(params.check_extmodel));
+    }
+    const query = searchParams.toString();
+    const result = await this.request<{ projects: ProjectSummary[] }>(
+      `/projects${query ? `?${query}` : ""}`,
+    );
     return {
       ...result,
       projects: result.projects.map(normalizeProjectSummaryUrls),

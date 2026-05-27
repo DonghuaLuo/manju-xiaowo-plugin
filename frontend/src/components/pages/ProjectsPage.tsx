@@ -1169,7 +1169,7 @@ export function ProjectsPage() {
       if (projectsFetchSeqRef.current !== seq) return;
 
       try {
-        const res = await API.listProjects();
+        const res = await API.listProjects({ check_extmodel: true });
         if (projectsFetchSeqRef.current !== seq) return;
         setProjects(res.projects);
         setProjectsLoading(false);
