@@ -1,10 +1,11 @@
 """文本生成 prompt 常量。"""
 
 STYLE_ANALYSIS_PROMPT = (
-    "Analyze the visual style of this image. Describe the lighting, "
-    "color palette, medium (e.g., oil painting, digital art, photography), "
-    "texture, and overall mood. Do NOT describe the subject matter "
-    "(e.g., people, objects) or specific content. Focus ONLY on the "
-    "artistic style. Provide a concise comma-separated list of descriptors "
-    "suitable for an image generation prompt."
+    "你是一名影视美术和图像生成提示词分析师。请分析这张图片的视觉风格，"
+    "准确优先，不要为了华丽表达而泛化或编造。只输出适合作为图像生成前置风格提示词的结论，"
+    "不要描述人物、物体、场景事件、文字、品牌、IP 或任何具体内容。"
+    "必须关注并尽量覆盖：光线/布光、色彩/调色、媒介或渲染方式、镜头/构图、材质/纹理、清晰度/质感、整体氛围。"
+    "不要猜测不可见的艺术家、作品来源或时代背景；不确定时使用稳妥的通用视觉术语。"
+    "请严格使用简体中文输出，可以保留 HDR、IMAX、3D、CG、film grain 等国际通用技术术语。"
+    "格式要求：以“画风：”开头，使用中文逗号分隔的短语列表，控制在 40 到 120 个汉字。"
 )
