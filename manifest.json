@@ -4,7 +4,6 @@
   "version": "1.00",
   "description": "剧本拆解、角色设计、分镜到成片一键合成。",
   "author": "小蜗工具（封装）",
-
   "icon": "frontend/public/logo.png",
   "dev_mode": true,
   "frontend": {
@@ -18,6 +17,7 @@
   },
   "backend": {
     "type": "python",
+    "python_version": "313",
     "runtime": "",
     "use_local_runtime": true,
     "fallback_runtime": true,
@@ -43,6 +43,12 @@
       ]
     }
   },
+  "extmodels": {
+    "check_files": [
+      "python310\\python.exe"
+    ],
+    "download_url": "https://www.xiaowoai.com/ask/info/1249"
+},
     "open_source": {
     "upstream_name": "ArcReel",
     "upstream_author": "ArcReel contributors",
