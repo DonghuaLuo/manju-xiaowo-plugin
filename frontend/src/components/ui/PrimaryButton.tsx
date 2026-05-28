@@ -25,7 +25,7 @@ export const PrimaryButton = forwardRef<HTMLButtonElement, PrimaryButtonProps>(
         ref={ref}
         type={type}
         data-tone={tone}
-        className={`arc-btn-primary focus-ring inline-flex items-center justify-center gap-1.5 rounded-md font-medium ${SIZE_CLS[size]} ${className}`.trim()}
+        className={`arc-btn-primary focus-ring inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium disabled:cursor-not-allowed ${SIZE_CLS[size]} ${className}`.trim()}
         {...rest}
       >
         {leadingIcon}

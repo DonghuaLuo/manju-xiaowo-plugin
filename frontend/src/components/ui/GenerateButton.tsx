@@ -39,7 +39,7 @@ export function GenerateButton({
       onClick={onClick}
       disabled={isDisabled}
       className={`focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-transform ${
-        isDisabled ? "cursor-not-allowed opacity-60" : ""
+        isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
       } ${className ?? ""}`}
       style={{
         color: "oklch(0.14 0 0)",

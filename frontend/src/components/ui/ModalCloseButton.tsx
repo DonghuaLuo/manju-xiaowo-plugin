@@ -16,7 +16,7 @@ export const ModalCloseButton = forwardRef<HTMLButtonElement, ModalCloseButtonPr
         ref={ref}
         type={type}
         aria-label={ariaLabel ?? t("close")}
-        className={`arc-close-btn focus-ring grid h-7 w-7 place-items-center rounded-md ${className}`.trim()}
+        className={`arc-close-btn focus-ring grid h-7 w-7 cursor-pointer place-items-center rounded-md disabled:cursor-not-allowed ${className}`.trim()}
         {...rest}
       >
         <X className="h-4 w-4" aria-hidden="true" />
