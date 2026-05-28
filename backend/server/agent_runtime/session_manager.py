@@ -334,7 +334,7 @@ class SessionManager:
 
     _BASH_TOOLS: tuple[str, ...] = ("Bash", "BashOutput", "KillBash")
 
-    # Windows 回退（_sandbox_enabled=False）的 Bash 命令白名单：等价于 PR 沙箱化前
+    # Windows 回退（_sandbox_enabled=False）的 shell 命令白名单：等价于 PR 沙箱化前
     # main 分支 settings.json permissions.allow 段。也是 _can_use_tool deny hint
     # 文案的单一真相源（_format_bash_whitelist_deny_message 从此派生）。
     _WINDOWS_BASH_PREFIX_WHITELIST: tuple[str, ...] = (
@@ -782,6 +782,8 @@ class SessionManager:
 
         # Windows 回退：sandbox 关闭时把 Bash 系列从 allowed_tools 剥离，
         # 让 _can_use_tool 接管 prefix 白名单匹配（_WINDOWS_BASH_PREFIX_WHITELIST）。
+        # 新版 Claude Code SDK 在 Windows 也可能发出 PowerShell 工具调用；
+        # PowerShell 不放入 allowed_tools，而是在 can_use_tool 里走同一套白名单。
         allowed_tools = list(self.DEFAULT_ALLOWED_TOOLS)
         if not self._sandbox_enabled:
             bash_tools = set(self._BASH_TOOLS)
@@ -865,6 +867,29 @@ class SessionManager:
         """
         unset_flags = " ".join(f"-u {key}" for key in cls._collect_env_keys_to_scrub())
         return f"env {unset_flags} sh -c "
+
+    @staticmethod
+    def _powershell_single_quote(value: str) -> str:
+        """Return a PowerShell single-quoted literal."""
+        return "'" + value.replace("'", "''") + "'"
+
+    @classmethod
+    @functools.cache
+    def _powershell_env_scrub_names_literal(cls) -> str:
+        return ", ".join(cls._powershell_single_quote(key) for key in cls._collect_env_keys_to_scrub())
+
+    @classmethod
+    def _powershell_env_scrub_wrap_command(cls, command: str) -> str:
+        """Wrap a validated PowerShell command so sensitive env vars are removed first."""
+        command_literal = cls._powershell_single_quote(command)
+        names_literal = cls._powershell_env_scrub_names_literal()
+        return (
+            f"$__xw_cmd = {command_literal}; "
+            f"foreach ($__xw_name in @({names_literal})) {{ "
+            'Remove-Item -LiteralPath "Env:$__xw_name" -ErrorAction SilentlyContinue '
+            "}; "
+            "Invoke-Expression $__xw_cmd"
+        )
 
     @classmethod
     async def _bash_env_scrub_hook(
@@ -2161,7 +2186,7 @@ class SessionManager:
         filesystem 子结构，但 CLI 运行时透传 JSON 接受）。
 
         - ``_sandbox_enabled=False``（Windows 回退）：仅返回 ``{"enabled": False}``，
-          Bash 工具改走 ``_WINDOWS_BASH_PREFIX_WHITELIST`` 代码白名单。
+          Bash/PowerShell 工具改走 ``_WINDOWS_BASH_PREFIX_WHITELIST`` 代码白名单。
         - ``filesystem.denyRead``：内核级文件读拒绝（macOS Seatbelt / Linux
           bwrap profile），对 sandbox 内所有子进程生效。
         - ``allowUnsandboxedCommands=False``：禁止 agent 在 sandbox 失败时
@@ -2429,7 +2454,7 @@ class SessionManager:
         if executable in {"ffmpeg", "ffprobe"}:
             return True, None
 
-        return False, f"命令不在 Windows Bash 白名单内: {tokens[0]}"
+        return False, f"命令不在 Windows shell 白名单内: {tokens[0]}"
 
     async def _build_can_use_tool_callback(
         self,
@@ -2475,16 +2500,22 @@ class SessionManager:
                     input_data,
                 )
 
-            # Windows 回退：sandbox 关闭时 Bash 系列不在 allowed_tools，
+            # Windows 回退：sandbox 关闭时 Bash/PowerShell 不在 allowed_tools，
             # 落到这里走 _WINDOWS_BASH_PREFIX_WHITELIST 代码白名单。
-            if not self._sandbox_enabled and tool_name == "Bash":
+            if not self._sandbox_enabled and tool_name in ("Bash", "PowerShell"):
                 cmd = str((input_data or {}).get("command") or "").strip()
                 allowed, deny_reason = self._is_windows_bash_command_allowed(cmd)
                 if allowed:
-                    return PermissionResultAllow(updated_input=input_data)
+                    updated_input = input_data
+                    if tool_name == "PowerShell":
+                        updated_input = {
+                            **(input_data or {}),
+                            "command": self._powershell_env_scrub_wrap_command(cmd),
+                        }
+                    return PermissionResultAllow(updated_input=updated_input)
                 if PermissionResultDeny is not None:
                     return PermissionResultDeny(
-                        message=self._format_bash_whitelist_deny_message(cmd, deny_reason),
+                        message=self._format_bash_whitelist_deny_message(tool_name, cmd, deny_reason),
                     )
             # BashOutput / KillBash 是 Bash 管理类工具，回退模式直接放行。
             if not self._sandbox_enabled and tool_name in ("BashOutput", "KillBash"):
@@ -2508,15 +2539,20 @@ class SessionManager:
         return _can_use_tool
 
     @classmethod
-    def _format_bash_whitelist_deny_message(cls, command: str, reason: str | None = None) -> str:
-        """Windows 回退 Bash 白名单拒绝文案。从 _WINDOWS_BASH_PREFIX_WHITELIST
+    def _format_bash_whitelist_deny_message(
+        cls,
+        tool_name: str,
+        command: str,
+        reason: str | None = None,
+    ) -> str:
+        """Windows 回退 shell 白名单拒绝文案。从 _WINDOWS_BASH_PREFIX_WHITELIST
         派生 allowed 列表，避免常量与文案双份漂移。"""
         allowed_lines = "\n".join(f"  - {prefix}" for prefix in cls._WINDOWS_BASH_PREFIX_WHITELIST)
         reason_line = f"拒绝原因: {reason}\n" if reason else ""
         return (
-            f"未授权的 Bash 命令: {command[:200]}\n"
+            f"未授权的 {tool_name} 命令: {command[:200]}\n"
             f"{reason_line}"
-            "当前 Bash 白名单仅允许以下前缀:\n"
+            "当前 Windows shell 白名单仅允许以下前缀:\n"
             f"{allowed_lines}\n"
             "并且必须是单条命令，禁止 shell 链接、管道、重定向或命令替换。"
         )

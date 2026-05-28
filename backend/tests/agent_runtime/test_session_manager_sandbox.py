@@ -86,6 +86,7 @@ def test_default_allowed_tools_includes_bash() -> None:
     assert "Bash" in SessionManager.DEFAULT_ALLOWED_TOOLS
     assert "BashOutput" in SessionManager.DEFAULT_ALLOWED_TOOLS
     assert "KillBash" in SessionManager.DEFAULT_ALLOWED_TOOLS
+    assert "PowerShell" not in SessionManager.DEFAULT_ALLOWED_TOOLS
 
 
 @pytest.mark.asyncio
@@ -143,6 +144,7 @@ def test_bash_env_scrub_collects_pattern_matched_keys(monkeypatch: pytest.Monkey
     finally:
         SessionManager._collect_env_keys_to_scrub.cache_clear()
         SessionManager._env_scrub_wrap_prefix.cache_clear()
+        SessionManager._powershell_env_scrub_names_literal.cache_clear()
 
 
 def test_build_sensitive_abs_paths_includes_existing_files(tmp_path: Path) -> None:
@@ -342,6 +344,19 @@ async def test_bash_env_scrub_hook_passthrough_when_no_command() -> None:
     assert result == {"continue_": True}
 
 
+def test_powershell_env_scrub_wrap_command_escapes_single_quotes() -> None:
+    """PowerShell 包装必须先清理 env，再按原命令字符串执行。"""
+    command = 'python .claude/skills/manage-project/scripts/peek_split_point.py --anchor "it\'s ok"'
+
+    wrapped = SessionManager._powershell_env_scrub_wrap_command(command)
+
+    assert wrapped.startswith("$__xw_cmd = ")
+    assert "it''s ok" in wrapped
+    assert 'Remove-Item -LiteralPath "Env:$__xw_name" -ErrorAction SilentlyContinue' in wrapped
+    assert "Invoke-Expression $__xw_cmd" in wrapped
+    assert "'ANTHROPIC_API_KEY'" in wrapped
+
+
 # ============================================================
 # Windows 沙箱回退：sandbox_enabled=False 分支
 # ============================================================
@@ -417,17 +432,25 @@ async def test_build_options_bash_in_allowed_tools_by_sandbox(
         ("python ../outside.py", "PermissionResultDeny"),
     ],
 )
-async def test_windows_bash_whitelist_matches_main_behavior(tmp_path: Path, command: str, expected: str) -> None:
-    """sandbox 关闭时白名单单命令放行，其余拒；deny 文案派生自 _WINDOWS_BASH_PREFIX_WHITELIST。"""
+async def test_windows_shell_whitelist_matches_main_behavior(tmp_path: Path, command: str, expected: str) -> None:
+    """sandbox 关闭时 Windows shell 白名单单命令放行，其余拒；deny 文案派生自单一常量。"""
     sm = _make_session_manager(tmp_path, sandbox_enabled=False)
     callback = await sm._build_can_use_tool_callback("test_sid", [None])
-    result = await callback("Bash", {"command": command}, None)
-    assert type(result).__name__ == expected
-    if expected == "PermissionResultDeny":
-        assert "Bash 白名单" in result.message
-        # deny 文案必须包含所有白名单 prefix（单一真相源）
-        for prefix in SessionManager._WINDOWS_BASH_PREFIX_WHITELIST:
-            assert prefix in result.message
+    for tool_name in ("Bash", "PowerShell"):
+        result = await callback(tool_name, {"command": command}, None)
+        assert type(result).__name__ == expected
+        if expected == "PermissionResultAllow" and tool_name == "PowerShell":
+            updated_command = result.updated_input["command"]
+            assert updated_command.startswith("$__xw_cmd = ")
+            assert "Invoke-Expression $__xw_cmd" in updated_command
+        elif expected == "PermissionResultAllow":
+            assert result.updated_input == {"command": command}
+        if expected == "PermissionResultDeny":
+            assert "Windows shell 白名单" in result.message
+            assert f"未授权的 {tool_name} 命令" in result.message
+            # deny 文案必须包含所有白名单 prefix（单一真相源）
+            for prefix in SessionManager._WINDOWS_BASH_PREFIX_WHITELIST:
+                assert prefix in result.message
 
 
 @pytest.mark.asyncio

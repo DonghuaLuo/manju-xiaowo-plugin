@@ -23,6 +23,32 @@
 
 本地先行修复验证：`2026-05-26` 使用插件 manifest 中 dev 后端 Python `D:\ProgramData\miniconda3\envs\manju\python.exe` 运行 `tests\test_generation_worker_module.py`、`tests\test_generation_queue.py`、`tests\test_generation_tasks_service.py`、`tests\test_grid_executor.py`，结果 `107 passed`。
 
+## Claude Agent SDK 官网对照记录
+
+记录时间：`2026-05-28`
+
+本节不是 ArcReel 同步项，而是 manju agent runtime 与 Claude Agent SDK 官方方案的差异账本。后续升级 `claude-agent-sdk`、Claude Code CLI 或对照官网文档时，应先看这里：如果官网提供了更稳、更窄、更可维护的方案，则采纳官网方案；如果官网仍只是通用权限能力，继续保留 manju 的桌面插件约束。
+
+参考官网页面：
+
+- `https://code.claude.com/docs/en/agent-sdk/permissions`
+- `https://code.claude.com/docs/en/agent-sdk/user-input`
+- `https://platform.claude.com/docs/en/agent-sdk/python`
+
+| 项目 | 官网方案 / 事实 | manju 当前做法 | 当前判断 | 后续对照重点 |
+| --- | --- | --- | --- | --- |
+| 权限链顺序 | 工具调用按 Hooks → deny rules → permission mode → allow rules → `canUseTool` callback 处理；未被 `allowed_tools` 预批准的工具仍可落到 `canUseTool`。 | Windows sandbox 不可用时，不把 shell 类工具作为泛用自动批准入口；`Bash` / `PowerShell` 落到 `_build_can_use_tool_callback()` 的白名单。 | 采纳官网权限链，但保留 manju 的运行时白名单。 | 若官网新增更细的 shell scoped allow / deny API，可评估替换自维护解析器。 |
+| `allowed_tools` 语义 | `allowed_tools` 是自动批准列表，不是工具能力边界；真正要硬限制需配合 `dontAsk` 或 deny。 | `PowerShell` 不加入 `DEFAULT_ALLOWED_TOOLS`；避免 Windows 正式环境中把任意 PowerShell 自动批准。 | 保持。 | 若将来有人把 `PowerShell` 写入 settings allow，应重新审查，避免绕过 env scrub 与白名单。 |
+| `canUseTool` 返回值 | `PermissionResultAllow(updated_input=...)` 可允许并修改工具输入；`PermissionResultDeny(message=...)` 可拒绝并把原因反馈给 agent。 | 对白名单通过的 `PowerShell` 命令，用 `updated_input` 包装命令：先清理敏感环境变量，再执行原命令。 | 采纳官网能力，作为当前最贴合的修复。 | 若官网提供官方 shell env scrub / sandbox wrapper，优先评估替换本地 wrapper。 |
+| Python SDK hooks | Python `can_use_tool` 场景需要保留 `PreToolUse` keep-alive hook；hooks 可在 `canUseTool` 前运行并阻断请求。 | manju 已保留 `_keep_stream_open_hook`；文件访问、JSON 校验等继续走 hooks；PowerShell env scrub 放在 `canUseTool` 的 `updated_input`，避免泛用 hook 自动放大权限面。 | 保持。 | 每次 SDK 升级确认 keep-alive hook 是否仍必要、hook 返回结构是否变化。 |
+| 自定义业务能力 | 官网支持 `create_sdk_mcp_server()` 创建进程内 MCP，并通过 `mcp__server__tool` 放入 `allowed_tools`。 | manju 业务优先走 `mcp__arcreel__*` 进程内工具；只有 `.claude/skills/*.py`、`ffmpeg`、`ffprobe` 这类受控本地命令才走 shell 白名单。 | 保持。 | 若官网 MCP 工具 schema / annotations 有更好安全标注，可优先补到 `arcreel` MCP 工具层。 |
+
+当前结论：
+
+- 不采用“把 `PowerShell` 加入 `allowed_tools`”的简单方案，因为这会把自动批准面放大到任意 PowerShell 调用。
+- 不采用纯交互审批方案，因为小蜗 Tauri 正式环境中 agent 子进程不应依赖终端式人工 y/n。
+- 采用官网推荐的 `canUseTool + updated_input` 能力，但在 manju 内部叠加桌面插件自己的命令白名单、env scrub、跨项目读写限制。
+
 ## 项目差异
 
 | 项目 | 定位 | 前后端通信 | 运行方式 | 同步时的判断重点 |
