@@ -1,0 +1,6 @@
+{
+  "project_exclude": [
+    "arcreel-sync-guide.md",
+    "backend/projects"
+  ]
+}
