@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lib.db.base import Base
 from server.agent_runtime import session_manager as sm_mod
-from server.agent_runtime.session_actor import SessionActor
+from server.agent_runtime.session_actor import SessionActor, SessionCommand
 from server.agent_runtime.session_manager import ManagedSession
 from server.agent_runtime.session_store import SessionMetaStore
 from tests.fakes import FakeSDKClient
@@ -147,6 +147,7 @@ class TestSessionManagerMore:
             # Let the actor enter the async-context (connect).
             await asyncio.sleep(0)
             assert created_clients and created_clients[0].connected
+            assert created_clients[0].options.kwargs["max_buffer_size"] == sm_mod._SDK_MAX_BUFFER_SIZE_DEFAULT
             assert managed is await session_manager.get_or_connect(meta.id)
             # Graceful teardown so the actor task doesn't leak.
             await session_manager.close_session(meta.id)
@@ -204,6 +205,7 @@ class TestSessionManagerMore:
             assert (await meta_store.get(meta.id)).status == "error"
         finally:
             # send_query failure raised inside actor → actor task already done.
+            await actor.wait()
             session_manager.sessions.pop(meta.id, None)
 
         with pytest.raises(FileNotFoundError):
@@ -227,6 +229,60 @@ class TestSessionManagerMore:
             assert await session_manager.interrupt_session(meta3.id) == "completed"
         finally:
             await session_manager.close_session(meta3.id)
+
+    @pytest.mark.asyncio
+    async def test_get_or_connect_replaces_dead_actor(self, session_manager, meta_store, tmp_path, monkeypatch):
+        async def _fake_env(_self):
+            return {}
+
+        monkeypatch.setattr(sm_mod.SessionManager, "_build_provider_env_overrides", _fake_env)
+        (tmp_path / "projects" / "demo").mkdir(parents=True)
+        meta = await meta_store.create("demo", "sdk-dead-reconnect")
+
+        dead_client = FakeSDKClient()
+
+        async def _boom_receive_response():
+            raise RuntimeError("JSON message exceeded maximum buffer size of 1048576 bytes")
+            if False:
+                yield None
+
+        dead_client.receive_response = _boom_receive_response  # type: ignore[method-assign]
+
+        @asynccontextmanager
+        async def _dead_factory():
+            async with dead_client as c:
+                yield c
+
+        old_actor = SessionActor(client_factory=_dead_factory, on_message=lambda m: None)
+        await old_actor.start()
+        cmd = SessionCommand(type="query", prompt="first", session_id=meta.id)
+        await old_actor.enqueue(cmd)
+        await cmd.done.wait()
+        await asyncio.sleep(0)
+        assert old_actor.task is not None and old_actor.task.done()
+        await old_actor.wait()
+
+        old_managed = ManagedSession(session_id=meta.id, actor=old_actor, status="error", project_name="demo")
+        session_manager.sessions[meta.id] = old_managed
+
+        created_clients: list[_FakeClaudeClient] = []
+
+        def _track_client(*, options):
+            c = _FakeClaudeClient(options=options)
+            created_clients.append(c)
+            return c
+
+        with monkeypatch.context() as m:
+            m.setattr(sm_mod, "SDK_AVAILABLE", True)
+            m.setattr(sm_mod, "ClaudeAgentOptions", _FakeOptions)
+            m.setattr(sm_mod, "ClaudeSDKClient", _track_client)
+            m.setattr(sm_mod, "HookMatcher", None)
+            new_managed = await session_manager.get_or_connect(meta.id)
+
+        assert new_managed is not old_managed
+        assert session_manager.sessions[meta.id] is new_managed
+        assert created_clients and created_clients[0].connected
+        await session_manager.close_session(meta.id)
 
     @pytest.mark.asyncio
     async def test_process_inbox_cancel_marks_interrupted_when_running(self, session_manager, meta_store):
@@ -470,6 +526,55 @@ class TestSessionManagerMore:
             None,
         )
         assert result.get("continue_") is True
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_file_access_hook_blocks_large_direct_read(self, tmp_path):
+        own_project = tmp_path / "projects" / "alpha"
+        own_project.mkdir(parents=True)
+        big_file = own_project / "source" / "episode_1.txt"
+        big_file.parent.mkdir()
+        big_file.write_text("x\n" * 100, encoding="utf-8")
+        huge_line_file = own_project / "source" / "single_line.json"
+        huge_line_file.write_text("x" * 100, encoding="utf-8")
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        meta_store = SessionMetaStore(session_factory=factory)
+
+        mgr = sm_mod.SessionManager(
+            project_root=tmp_path,
+            data_dir=tmp_path,
+            meta_store=meta_store,
+        )
+        mgr.read_tool_max_bytes = 80
+        hook = mgr._build_file_access_hook(own_project)
+
+        result = await hook(
+            {"tool_name": "Read", "tool_input": {"file_path": str(big_file)}},
+            None,
+            None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "文件过大" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+        result = await hook(
+            {"tool_name": "Read", "tool_input": {"file_path": str(big_file), "limit": 20}},
+            None,
+            None,
+        )
+        assert result.get("continue_") is True
+
+        result = await hook(
+            {"tool_name": "Read", "tool_input": {"file_path": str(huge_line_file), "limit": 1}},
+            None,
+            None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "请求片段仍超过安全字节上限" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
         await engine.dispose()
 

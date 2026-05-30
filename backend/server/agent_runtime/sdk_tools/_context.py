@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +30,83 @@ class ToolContext:
         return self.pm.get_project_path(self.project_name)
 
 
+_TOOL_TEXT_MAX_BYTES_DEFAULT = 256 * 1024
+_TOOL_TEXT_MAX_BYTES_MIN = 32 * 1024
+_TOOL_TEXT_MAX_BYTES_MAX = 1024 * 1024
+
+
+def _bounded_int_env(name: str, default: int, min_value: int, max_value: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return min(max(value, min_value), max_value)
+
+
+def _format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def tool_text_max_bytes() -> int:
+    """Return the MCP text payload budget for a single tool response."""
+    return _bounded_int_env(
+        "ASSISTANT_MCP_TOOL_TEXT_MAX_BYTES",
+        _TOOL_TEXT_MAX_BYTES_DEFAULT,
+        _TOOL_TEXT_MAX_BYTES_MIN,
+        _TOOL_TEXT_MAX_BYTES_MAX,
+    )
+
+
+def compact_tool_text(
+    text: str,
+    *,
+    label: str = "工具输出",
+    source_path: Path | str | None = None,
+    max_bytes: int | None = None,
+) -> str:
+    """Keep tool text results below the SDK JSON transport danger zone."""
+    budget = max_bytes if max_bytes is not None else tool_text_max_bytes()
+    encoded = text.encode("utf-8")
+    if len(encoded) <= budget:
+        return text
+
+    preview = encoded[:budget].decode("utf-8", errors="ignore").rstrip()
+    source_note = (
+        f"完整内容已保存: {source_path}"
+        if source_path is not None
+        else "完整内容未随工具结果返回；请查看后端日志或对应项目文件。"
+    )
+    return (
+        f"{label}过大，已截断显示，避免 agent JSON 传输超限。\n"
+        f"原始大小: {_format_bytes(len(encoded))}; 预览上限: {_format_bytes(budget)}。\n"
+        f"{source_note}\n\n"
+        f"--- 预览开始 ---\n{preview}\n--- 预览结束 ---"
+    )
+
+
+def tool_result_text(
+    text: str,
+    *,
+    label: str = "工具输出",
+    source_path: Path | str | None = None,
+) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": compact_tool_text(text, label=label, source_path=source_path)}]}
+
+
 def tool_error(name: str, exc: BaseException, log: list[str] | None = None) -> dict[str, Any]:
     """Build the ``{"is_error": True}`` response every SDK tool handler emits on failure."""
     msg = f"{name} 失败: {exc}"
     text = "\n".join([msg, *log]) if log else msg
-    return {"content": [{"type": "text", "text": text}], "is_error": True}
+    result = tool_result_text(text, label=f"{name} 错误输出")
+    result["is_error"] = True
+    return result
 
 
 async def fetch_video_caps(project: dict[str, Any]) -> tuple[int | None, list[int]]:

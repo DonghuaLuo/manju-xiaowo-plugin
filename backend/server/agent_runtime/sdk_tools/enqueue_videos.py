@@ -24,6 +24,7 @@ from lib.storyboard_sequence import get_storyboard_items
 from server.agent_runtime.sdk_tools._context import (
     ToolContext,
     tool_error,
+    tool_result_text,
     validate_script_filename,
 )
 
@@ -352,7 +353,7 @@ async def _run_reference_episode(
         log=log,
     )
     header = f"第 {episode} 集参考视频生成完成，共 {len(paths)} 个 unit"
-    return {"content": [{"type": "text", "text": "\n".join([header, *log])}]}
+    return tool_result_text("\n".join([header, *log]), label="视频生成日志")
 
 
 def generate_video_episode_tool(ctx: ToolContext):
@@ -435,7 +436,7 @@ def generate_video_episode_tool(ctx: ToolContext):
             scene_videos = [p for p in ordered_paths if p is not None]
             _clear_checkpoint_at(ckpt_path)
             header = f"第 {episode} 集视频生成完成，共 {len(scene_videos)} 个片段"
-            return {"content": [{"type": "text", "text": "\n".join([header, *log])}]}
+            return tool_result_text("\n".join([header, *log]), label="视频生成日志")
         except Exception as exc:  # noqa: BLE001
             return tool_error("generate_video_episode", exc, log)
 
@@ -568,7 +569,7 @@ def generate_video_all_tool(ctx: ToolContext):
                 log=log,
             )
             if not specs:
-                return {"content": [{"type": "text", "text": "\n".join([*log, "⚠️  没有任何可生成的视频任务"])}]}
+                return tool_result_text("\n".join([*log, "⚠️  没有任何可生成的视频任务"]), label="视频生成日志")
 
             successes, failures = await batch_enqueue_and_wait(project_name=ctx.project_name, specs=specs)
             details: list[str] = []
@@ -578,10 +579,9 @@ def generate_video_all_tool(ctx: ToolContext):
             for br in failures:
                 details.append(f"  ✗ {br.resource_id}: {br.error}")
             header = f"generate_video_all summary: {len(successes)} succeeded, {len(failures)} failed"
-            return {
-                "content": [{"type": "text", "text": "\n".join([header, *log, *details])}],
-                "is_error": bool(failures),
-            }
+            result = tool_result_text("\n".join([header, *log, *details]), label="视频生成日志")
+            result["is_error"] = bool(failures)
+            return result
         except Exception as exc:  # noqa: BLE001
             return tool_error("generate_video_all", exc, log)
 
@@ -708,7 +708,7 @@ def generate_video_selected_tool(ctx: ToolContext):
             final_results = [p for p in ordered_paths if p is not None]
             _clear_checkpoint_at(ckpt_path)
             header = f"generate_video_selected 完成：{len(final_results)} 个"
-            return {"content": [{"type": "text", "text": "\n".join([header, *log])}]}
+            return tool_result_text("\n".join([header, *log]), label="视频生成日志")
         except Exception as exc:  # noqa: BLE001
             return tool_error("generate_video_selected", exc, log)
 

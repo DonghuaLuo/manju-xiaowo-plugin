@@ -21,11 +21,24 @@ from lib.prompt_builders_script import build_normalize_prompt
 from lib.script_generator import ScriptGenerator
 from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
-from server.agent_runtime.sdk_tools._context import ToolContext, fetch_video_caps, tool_error
+from server.agent_runtime.sdk_tools._context import ToolContext, fetch_video_caps, tool_error, tool_result_text
 
 logger = logging.getLogger(__name__)
 
 _FALLBACK_SUPPORTED_DURATIONS: list[int] = [4, 6, 8]
+
+
+def _write_dry_run_prompt(project_path: Path, episode: int, name: str, prompt: str) -> Path:
+    dry_run_dir = project_path / "drafts" / f"episode_{episode}"
+    dry_run_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = dry_run_dir / f"{name}_prompt_dry_run.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    return prompt_path
+
+
+def _dry_run_tool_result(title: str, prompt: str, prompt_path: Path) -> dict[str, Any]:
+    text = f"{title}\n完整 prompt 已保存: {prompt_path}\nPrompt 长度: {len(prompt)} 字符\n\n{prompt}"
+    return tool_result_text(text, label=f"{title} prompt", source_path=prompt_path)
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +134,8 @@ def generate_episode_script_tool(ctx: ToolContext):
             if dry_run:
                 generator = ScriptGenerator(project_path)
                 prompt = await generator.build_prompt(episode)
-                return {
-                    "content": [{"type": "text", "text": f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}"}]
-                }
+                prompt_path = _write_dry_run_prompt(project_path, episode, "generate_episode_script", prompt)
+                return _dry_run_tool_result("DRY RUN — 以下是将发送给文本模型的 Prompt", prompt, prompt_path)
 
             generator = await ScriptGenerator.create(project_path)
             result_path = await generator.generate(episode=episode)
@@ -232,14 +244,8 @@ def normalize_drama_script_tool(ctx: ToolContext):
             )
 
             if dry_run:
-                return {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"DRY RUN — 以下是将发送给文本模型的 Prompt:\n\n{prompt}\n\nPrompt 长度: {len(prompt)} 字符",
-                        }
-                    ]
-                }
+                prompt_path = _write_dry_run_prompt(project_path, episode, "normalize_drama_script", prompt)
+                return _dry_run_tool_result("DRY RUN — 以下是将发送给文本模型的 Prompt", prompt, prompt_path)
 
             generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=ctx.project_name)
             result = await generator.generate(
