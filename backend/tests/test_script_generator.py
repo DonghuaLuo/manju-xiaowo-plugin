@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from lib.script_generator import ScriptGenerator
+from lib.script_structure_validator import ScriptStructureValidationError
 
 
 def _write(path: Path, text: str):
@@ -229,8 +230,8 @@ class TestScriptGenerator:
 
         fake = _FakeTextGenerator(json.dumps({"foo": "bar"}))
         generator = ScriptGenerator(project_path, generator=fake)
-        # generate 会因验证失败但 schema 已传入，检查传入的 schema 是否为类
-        await generator.generate(1)
+        with pytest.raises(ScriptStructureValidationError):
+            await generator.generate(1)
         assert fake.backend.last_request.response_schema is DramaEpisodeScript
 
     async def test_generate_sets_script_max_output_tokens(self, tmp_path):
@@ -255,10 +256,43 @@ class TestScriptGenerator:
 
         fake = _FakeTextGenerator(json.dumps({"foo": "bar"}))
         generator = ScriptGenerator(project_path, generator=fake)
-        await generator.generate(1)
+        with pytest.raises(ScriptStructureValidationError):
+            await generator.generate(1)
 
         assert fake.backend.last_request.max_output_tokens == SCRIPT_MAX_OUTPUT_TOKENS
         assert SCRIPT_MAX_OUTPUT_TOKENS >= 16000
+
+    @pytest.mark.parametrize(
+        "bad_output",
+        [
+            "../outside.json",
+            "scripts/episode_1.json",
+            "subdir/episode_1.json",
+            "a\\b.json",
+            "",
+        ],
+    )
+    async def test_generate_rejects_output_path_outside_scripts_funnel(self, tmp_path, bad_output):
+        project_path = tmp_path / "demo"
+        _write_json(
+            project_path / "project.json",
+            {
+                "title": "项目",
+                "content_mode": "narration",
+                "overview": {},
+                "characters": {"姜月茴": {}},
+                "clues": {"玉佩": {}},
+                "style": "古风",
+                "style_description": "cinematic",
+                "_supported_durations": [4, 6, 8],
+            },
+        )
+        _write(project_path / "drafts" / "episode_1" / "step1_segments.md", "E1S01 | 片段")
+
+        fake = _FakeTextGenerator(json.dumps(_valid_narration_response(), ensure_ascii=False))
+        generator = ScriptGenerator(project_path, generator=fake)
+        with pytest.raises(ValueError):
+            await generator.generate(1, output_path=bad_output)
 
     async def test_generate_without_backend_raises(self, tmp_path):
         """未注入 backend 时调用 generate() 应抛 RuntimeError。"""

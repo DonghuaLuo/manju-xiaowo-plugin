@@ -52,6 +52,29 @@ class UsageTracker:
                 segment_id=segment_id,
             )
 
+    async def finalize_pending_by_call_id(
+        self,
+        *,
+        call_id: int,
+        cost_amount: float | None = None,
+        currency: str | None = None,
+        status: str = "success",
+        service_tier: str = "default",
+        usage_tokens: int | None = None,
+        generate_audio: bool | None = None,
+    ) -> int:
+        async with self._session_factory() as session:
+            repo = UsageRepository(session)
+            return await repo.finalize_pending_by_call_id(
+                call_id=call_id,
+                cost_amount=cost_amount,
+                currency=currency,
+                status=status,
+                service_tier=service_tier,
+                usage_tokens=usage_tokens,
+                generate_audio=generate_audio,
+            )
+
     async def finish_call(
         self,
         call_id: int,

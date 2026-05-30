@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from lib.project_manager import ProjectManager
+from lib.script_editor import ScriptEditError
 from lib.script_structure_validator import ScriptStructureValidationError
 
 
@@ -126,6 +128,46 @@ class TestValidateDefaultsOn:
         assert pm.load_script("demo", "episode_1.json")["segments"][0]["video_prompt"] == "坏形状"
 
 
+def _unit(unit_id: str = "E1U1") -> dict:
+    shots = [{"duration": 3, "text": "镜头1"}, {"duration": 4, "text": "镜头2"}]
+    return {
+        "unit_id": unit_id,
+        "shots": shots,
+        "references": [],
+        "duration_seconds": sum(s["duration"] for s in shots),
+    }
+
+
+def _reference_script(units: list[dict] | None = None) -> dict:
+    return {
+        "episode": 1,
+        "title": "标题",
+        "content_mode": "narration",
+        "generation_mode": "reference_video",
+        "summary": "摘要",
+        "novel": {"title": "小说", "chapter": "第一章"},
+        "video_units": units if units is not None else [_unit("E1U1"), _unit("E1U2")],
+    }
+
+
+class TestMetadataRecompute:
+    def test_reference_video_metadata_counts_units(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        pm.save_script("demo", _reference_script(), "episode_1.json")
+
+        saved = pm.load_script("demo", "episode_1.json")
+        assert saved["metadata"]["total_scenes"] == 2
+        assert saved["metadata"]["estimated_duration_seconds"] == 14
+
+    def test_narration_metadata_unchanged(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        pm.save_script("demo", _valid_script([_segment("E1S01", 4), _segment("E1S02", 6)]), "episode_1.json")
+
+        saved = pm.load_script("demo", "episode_1.json")
+        assert saved["metadata"]["total_scenes"] == 2
+        assert saved["metadata"]["estimated_duration_seconds"] == 10
+
+
 class TestAssetWritebackExemption:
     def test_update_scene_asset_succeeds_on_invalid_script(self, tmp_path: Path):
         """资产回写（validate=False）在剧本本就非法时仍能成功写入。"""
@@ -145,3 +187,115 @@ class TestAssetWritebackExemption:
 
         saved = pm.load_script("demo", "episode_1.json")
         assert saved["segments"][0]["generated_assets"]["video_clip"] == "videos/E1S01.mp4"
+
+    def _seed_corrupted_null_segments(self, tmp_path: Path) -> None:
+        script_dir = tmp_path / "projects" / "demo" / "scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        (script_dir / "episode_1.json").write_text(
+            '{"episode": 1, "title": "x", "content_mode": "narration", "segments": null, '
+            '"novel": {"title": "n", "chapter": "c"}, "summary": ""}',
+            encoding="utf-8",
+        )
+
+    def _seed_corrupted_null_video_units(self, tmp_path: Path) -> None:
+        script_dir = tmp_path / "projects" / "demo" / "scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        (script_dir / "episode_1.json").write_text(
+            '{"episode": 1, "title": "x", "content_mode": "narration", '
+            '"generation_mode": "reference_video", "video_units": null, '
+            '"novel": {"title": "n", "chapter": "c"}, "summary": "", '
+            '"metadata": {"created_at": "2024-01-01T00:00:00+00:00", "status": "draft", '
+            '"updated_at": "2024-01-01T00:00:00+00:00", "total_scenes": 5, "estimated_duration_seconds": 40}}',
+            encoding="utf-8",
+        )
+
+    def test_update_scene_asset_fails_loud_on_corrupted_list_key(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        self._seed_corrupted_null_segments(tmp_path)
+        with pytest.raises(ScriptEditError, match="必须是列表"):
+            pm.update_scene_asset("demo", "episode_1.json", "E1S01", "storyboard_image", "x.png")
+
+    def test_batch_update_scene_assets_fails_loud_on_corrupted_list_key(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        self._seed_corrupted_null_segments(tmp_path)
+        with pytest.raises(ScriptEditError, match="必须是列表"):
+            pm.batch_update_scene_assets("demo", "episode_1.json", [("E1S01", "video_clip", "videos/E1S01.mp4")])
+
+    def test_writeback_preserves_old_metadata_on_corrupted_list_key(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        self._seed_corrupted_null_video_units(tmp_path)
+
+        with pm.locked_script("demo", "episode_1.json", validate=False) as script:
+            script["generated_assets_demo"] = "anything"
+
+        saved = pm.load_script("demo", "episode_1.json")
+        assert saved["metadata"]["total_scenes"] == 5
+        assert saved["metadata"]["estimated_duration_seconds"] == 40
+        assert saved.get("generated_assets_demo") == "anything"
+
+    def test_get_pending_scenes_warns_and_returns_empty_on_corrupted_list_key(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        pm = _pm(tmp_path)
+        self._seed_corrupted_null_segments(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="lib.project_manager"):
+            result = pm.get_pending_scenes("demo", "episode_1.json", "storyboard_image")
+        assert result == []
+        assert any("segments" in rec.message and "数据损坏" in rec.message for rec in caplog.records)
+
+    def test_get_scenes_needing_storyboard_warns_and_returns_empty_on_corrupted_list_key(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        pm = _pm(tmp_path)
+        self._seed_corrupted_null_segments(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="lib.project_manager"):
+            result = pm.get_scenes_needing_storyboard("demo", "episode_1.json")
+        assert result == []
+        assert any("segments" in rec.message and "数据损坏" in rec.message for rec in caplog.records)
+
+    def test_get_pending_scenes_handles_item_without_generated_assets(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        script_dir = tmp_path / "projects" / "demo" / "scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        (script_dir / "episode_1.json").write_text(
+            '{"episode": 1, "title": "x", "content_mode": "narration", '
+            '"segments": [{"segment_id": "E1S01", "duration_seconds": 4}], '
+            '"novel": {"title": "n", "chapter": "c"}, "summary": ""}',
+            encoding="utf-8",
+        )
+        result = pm.get_pending_scenes("demo", "episode_1.json", "storyboard_image")
+        assert len(result) == 1
+        assert result[0]["segment_id"] == "E1S01"
+
+    def test_reference_video_read_helpers_return_units(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        pm.save_script("demo", _reference_script(), "episode_1.json")
+
+        pending = pm.get_pending_scenes("demo", "episode_1.json", "storyboard_image")
+        assert [item["unit_id"] for item in pending] == ["E1U1", "E1U2"]
+
+        needing = pm.get_scenes_needing_storyboard("demo", "episode_1.json")
+        assert [item["unit_id"] for item in needing] == ["E1U1", "E1U2"]
+
+    def test_reference_video_update_scene_asset_writes_unit(self, tmp_path: Path):
+        pm = _pm(tmp_path)
+        pm.save_script("demo", _reference_script(), "episode_1.json")
+
+        pm.update_scene_asset("demo", "episode_1.json", "E1U1", "storyboard_image", "storyboards/E1U1.png")
+
+        saved = pm.load_script("demo", "episode_1.json")
+        assert saved["video_units"][0]["generated_assets"]["storyboard_image"] == "storyboards/E1U1.png"
+
+    @pytest.mark.parametrize("assets_json", ["null", '"corrupted"', "[]"], ids=["null", "string", "list"])
+    def test_get_pending_scenes_handles_non_dict_generated_assets(self, tmp_path: Path, assets_json: str):
+        pm = _pm(tmp_path)
+        script_dir = tmp_path / "projects" / "demo" / "scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        (script_dir / "episode_1.json").write_text(
+            '{"episode": 1, "title": "x", "content_mode": "narration", '
+            f'"segments": [{{"segment_id": "E1S01", "duration_seconds": 4, "generated_assets": {assets_json}}}], '
+            '"novel": {"title": "n", "chapter": "c"}, "summary": ""}',
+            encoding="utf-8",
+        )
+        assert len(pm.get_pending_scenes("demo", "episode_1.json", "storyboard_image")) == 1
+        assert len(pm.get_scenes_needing_storyboard("demo", "episode_1.json")) == 1

@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from lib.script_editor import ScriptEditError
 from lib.storyboard_sequence import (
     build_storyboard_dependency_plan,
     get_storyboard_items,
@@ -27,6 +30,21 @@ class TestStoryboardSequence:
             "scenes",
             "props",
         )
+
+    def test_get_storyboard_items_supports_legacy_narration_scenes(self):
+        script = {"content_mode": "narration", "scenes": [{"scene_id": "E1S01"}]}
+
+        items, id_field, char_field, *_ = get_storyboard_items(script)
+
+        assert items == [{"scene_id": "E1S01"}]
+        assert id_field == "scene_id"
+        assert char_field == "characters_in_scene"
+
+    def test_get_storyboard_items_fail_loud_for_corrupted_list_key(self):
+        script = {"content_mode": "narration", "segments": None}
+
+        with pytest.raises(ScriptEditError, match="segments 必须是列表"):
+            get_storyboard_items(script)
 
     def test_resolve_previous_storyboard_path_respects_first_item_and_segment_break(self, tmp_path: Path):
         project_path = tmp_path / "demo"

@@ -18,6 +18,7 @@ from lib.i18n import Translator
 from lib.project_change_hints import project_change_source
 from lib.project_manager import ProjectManager
 from lib.resource_paths import resource_relative_path
+from lib.script_editor import ScriptEditError
 from lib.version_manager import VersionManager
 from server.auth import CurrentUser
 
@@ -81,8 +82,11 @@ def _sync_storyboard_metadata(
                 )
         except KeyError:
             continue
-        except Exception as exc:
-            logger.warning("同步分镜元数据失败: %s", exc)
+        except ScriptEditError as exc:
+            logger.warning("跨集同步元数据跳过脏脚本 %s: %s", script_file.name, exc)
+            continue
+        except OSError as exc:
+            logger.warning("跨集同步元数据 sibling 集 %s IO 失败: %s", script_file.name, exc)
             continue
 
 

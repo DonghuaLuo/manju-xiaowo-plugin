@@ -186,6 +186,8 @@ export interface CreateProjectPayload {
   style?: string | null;
   content_mode?: "narration" | "drama";
   aspect_ratio?: "9:16" | "16:9";
+  source_language?: "zh" | "en" | "vi";
+  episode_target_units?: number | null;
   generation_mode?: GenerationMode;
   default_duration?: number | null;
   style_template_id?: string | null;

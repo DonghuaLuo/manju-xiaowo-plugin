@@ -135,7 +135,7 @@ def _patch_sysctls(
             "/proc/sys/kernel/unprivileged_userns_clone": userns_clone,
             "/proc/sys/user/max_user_namespaces": max_user_ns,
         }
-        val = mapping.get(str(self))
+        val = mapping.get(str(self).replace("\\", "/"))
         if val is None:
             raise OSError("simulated missing sysctl")
         return val

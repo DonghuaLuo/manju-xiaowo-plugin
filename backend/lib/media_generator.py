@@ -339,6 +339,7 @@ class MediaGenerator:
         aspect_ratio: str = "9:16",
         duration_seconds: str | int = "8",
         resolution: str | None = None,
+        task_id: str | None = None,
         **version_metadata,
     ) -> tuple[Path, int, Any, str | None]:
         """
@@ -362,6 +363,16 @@ class MediaGenerator:
         output_path = self._get_output_path(resource_type, resource_id)
         self._ensure_parent_dir(output_path)
 
+        # 先把 duration 归一为 int：上游可能传 "8.0" 浮点字符串，直接 int("8.0") 会 ValueError
+        # 走兜底分支静默掉真实值（"10.0" 会被吞成 8）。先 float() 再 int() 保留语义。
+        # 提前到所有 ensure_current_tracked / add_version / VideoGenerationRequest 之前，
+        # 让版本元数据与 provider 请求里的 duration_seconds 类型一致（都是 int），
+        # 避免 versions.json 落字符串而 ApiCall 落 int 的类型漂移。
+        try:
+            duration_int = int(float(duration_seconds)) if duration_seconds else 8
+        except (ValueError, TypeError):
+            duration_int = 8
+
         # 1. 若已存在，确保旧文件被记录
         if output_path.exists():
             self.versions.ensure_current_tracked(
@@ -369,15 +380,9 @@ class MediaGenerator:
                 resource_id=resource_id,
                 current_file=output_path,
                 prompt=prompt,
-                duration_seconds=duration_seconds,
+                duration_seconds=duration_int,
                 **version_metadata,
             )
-
-        # 2. 记录 API 调用开始
-        try:
-            duration_int = int(duration_seconds) if duration_seconds else 8
-        except (ValueError, TypeError):
-            duration_int = 8
 
         if self._video_backend is None:
             raise RuntimeError("video_backend not configured")
@@ -407,6 +412,16 @@ class MediaGenerator:
         )
 
         try:
+            # start_call 拿到 call_id 后立即写入 task.payload["api_call_id"]，让 worker
+            # 崩溃重启后 resume 路径能精准翻这条 pending ApiCall 行（而不是按
+            # segment_id+LIMIT 1 模糊匹配）。fail-fast 抛异常会被本块 except 捕获，
+            # 走 finish_call(status="failed") 翻 pending → failed 后再 raise，避免
+            # 留下永久 pending 账目（ADR 0007）；放在 try 块内是必须的。
+            if task_id is not None:
+                from lib.video_backends.base import persist_api_call_id
+
+                await persist_api_call_id(task_id, call_id)
+
             from lib.video_backends.base import VideoGenerationRequest
 
             # Three-level fallback based on backend video capabilities
@@ -441,6 +456,7 @@ class MediaGenerator:
                 reference_images=actual_reference_images,
                 generate_audio=effective_generate_audio,
                 project_name=self.project_name,
+                task_id=task_id,
                 service_tier=version_metadata.get("service_tier", "default"),
                 seed=version_metadata.get("seed"),
             )
@@ -474,7 +490,141 @@ class MediaGenerator:
             resource_id=resource_id,
             prompt=prompt,
             source_file=output_path,
-            duration_seconds=duration_seconds,
+            duration_seconds=duration_int,
+            **version_metadata,
+        )
+
+        return output_path, new_version, video_ref, video_uri
+
+    async def resume_video_async(
+        self,
+        *,
+        job_id: str,
+        resource_type: str,
+        resource_id: str,
+        prompt: str = "",
+        aspect_ratio: str = "9:16",
+        duration_seconds: str | int = "8",
+        resolution: str | None = None,
+        task_id: str | None = None,
+        api_call_id: int | None = None,
+        **version_metadata,
+    ) -> tuple[Path, int, Any, str | None]:
+        """接续 provider 上已发起的 video job：调 backend.resume_video 而非 generate。
+
+        与 generate_video_async 的差异：
+        - 不调 usage_tracker.start_call/finish_call —— 首次 submit 已记账；ResumeExpired
+          / crash window 都不应再写 ApiCall（防双重扣费）。caller 透传 ``api_call_id``
+          时按 call_id 精准翻 pending → success/failed；不透传则 logger.warning 不阻断。
+        - resume 成功后总是 add_version 记录新版本：无论 versions.json 是否已有历史版本，
+          backend.resume_video 都会下载新视频并覆盖 output_path，必须 bump 一个新版本号
+          让 versions.json 与磁盘文件一致；否则会漏记本次重新生成的视频，回滚记录失真。
+        - prompt / start_image / reference_images 仅用于日志/版本元数据，不影响 provider 端结果。
+
+        Returns: (output_path, version_number, video_ref, video_uri) 四元组。
+        """
+        output_path = self._get_output_path(resource_type, resource_id)
+        self._ensure_parent_dir(output_path)
+
+        # 先把 duration 归一为 int：上游可能传 "8.0" 浮点字符串，直接 int("8.0") 会 ValueError
+        # 走兜底分支静默掉真实值（"10.0" 会被吞成 8）。先 float() 再 int() 保留语义。
+        # 提前到 VideoGenerationRequest / add_version 之前，让版本元数据
+        # 与 provider 请求里的 duration_seconds 类型一致（都是 int，避免 versions.json 落字符串）。
+        try:
+            duration_int = int(float(duration_seconds)) if duration_seconds else 8
+        except (ValueError, TypeError):
+            duration_int = 8
+
+        if self._video_backend is None:
+            raise RuntimeError("video_backend not configured")
+
+        if self._config is not None:
+            configured_generate_audio = await self._config.video_generate_audio(self.project_name)
+        else:
+            from lib.config.resolver import ConfigResolver
+
+            configured_generate_audio = ConfigResolver._DEFAULT_VIDEO_GENERATE_AUDIO
+        effective_generate_audio = version_metadata.get("generate_audio", configured_generate_audio)
+
+        from lib.video_backends.base import ResumeExpiredError, VideoGenerationRequest
+
+        request = VideoGenerationRequest(
+            prompt=prompt,
+            output_path=output_path,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_int,
+            resolution=resolution,
+            generate_audio=effective_generate_audio,
+            project_name=self.project_name,
+            task_id=task_id,
+            service_tier=version_metadata.get("service_tier", "default"),
+            seed=version_metadata.get("seed"),
+        )
+
+        try:
+            result = await self._video_backend.resume_video(job_id, request)
+        except ResumeExpiredError:
+            # Pending ApiCall 翻 failed 而不是留 pending：让 /api/v1/usage 报表不堆积无终态行；
+            # cost_amount=0 不增加计费（resume 不重扣，符合 "不主动扣费" 红线）。
+            # finalize 失败时不吞异常，让 worker finally 走 mark_failed 兜底，避免 ApiCall
+            # 永久卡 pending 导致 usage 报表/补账缺口（与 persist_api_call_id 的 fail-fast 一致）。
+            if api_call_id is not None:
+                await self.usage_tracker.finalize_pending_by_call_id(
+                    call_id=api_call_id,
+                    cost_amount=0.0,
+                    status="failed",
+                )
+            raise
+        except Exception:
+            logger.exception("resume 失败 (video) task_id=%s job_id=%s", task_id, job_id)
+            # Worker 会把普通 resume 异常标成 task failed；ApiCall 也必须同步终态化，
+            # 避免任务已失败但账单行永久 pending。
+            if api_call_id is not None:
+                await self.usage_tracker.finalize_pending_by_call_id(
+                    call_id=api_call_id,
+                    cost_amount=0.0,
+                    status="failed",
+                )
+            raise
+
+        video_ref = None
+        video_uri = result.video_uri
+
+        # Resume 成功：精准翻 pending → success。cost_amount=None 让 repo 按 ApiCall 行
+        # 字段（model/resolution/duration/generate_audio）调 cost_calculator 算实际 cost，
+        # 与 generate 路径 finish_call 自动算 cost 等价——避免视频已生成但账本永久漏记。
+        # service_tier 由 caller 透传（ApiCall 模型无该列），让非 default 档位按真实档计费。
+        # usage_tokens 同样透传：Ark video 按 token 计费，缺省 0 时 cost 永远为 0。
+        # generate_audio 从 backend 返回值透传：provider 在 submit 后可能降级/关闭音频，
+        # 与 generate 路径 finish_call(generate_audio=result.generate_audio) 等价，
+        # 避免按请求值误计费。
+        # finalize 失败时不吞异常，让 worker finally 兜底处理（与 ResumeExpired 分支一致）。
+        # WHERE status='pending' 仍保护幂等性，已 success 行不会被 touch。
+        if api_call_id is not None:
+            await self.usage_tracker.finalize_pending_by_call_id(
+                call_id=api_call_id,
+                status="success",
+                service_tier=version_metadata.get("service_tier", "default"),
+                usage_tokens=result.usage_tokens,
+                generate_audio=result.generate_audio,
+            )
+        else:
+            logger.warning(
+                "resume 缺 api_call_id task_id=%s job_id=%s (旧任务未持久化 payload)",
+                task_id,
+                job_id,
+            )
+
+        # backend.resume_video 已下载新视频并覆盖 output_path，必须 bump 一个新版本号：
+        # - versions.json 空时（submit→poll 中崩）add_version 直接登记 v1，避免下游 versions[-1] IndexError；
+        # - versions.json 已有 v_n（覆盖式重新生成）时 add_version 登记 v_(n+1)，避免 output_path
+        #   被新内容覆盖却仍报旧版本号导致 versions.json 与磁盘文件错位。
+        new_version = self.versions.add_version(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            prompt=prompt,
+            source_file=output_path,
+            duration_seconds=duration_int,
             **version_metadata,
         )
 

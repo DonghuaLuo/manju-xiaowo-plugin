@@ -612,13 +612,10 @@ class SessionManager:
             "- Bash 中的 `python` 已由插件注入为当前 manju 后端运行时；运行 `.claude/skills/` 脚本时直接使用 `python ...`，不要使用 `uv run`、`py` 或系统 Python。"
         )
         parts.append(
-            "- 调用 `.claude/skills/` 脚本必须使用相对路径（如 `python .claude/skills/manage-project/scripts/add_assets.py ...`），不要使用项目绝对路径。"
+            "- 调用 `.claude/skills/` 脚本必须使用相对路径（如 `python .claude/skills/manage-project/scripts/peek_split_point.py ...`），不要使用项目绝对路径。"
         )
         parts.append(
-            "- 运行 `add_assets.py` 前先确保 `project.json` 已具备必填基础字段（至少 title/style/content_mode/aspect_ratio）；缺字段时先修复 project.json，再写入资产。"
-        )
-        parts.append(
-            "- `add_assets.py` 不是验证命令，禁止用空 JSON（如 `--characters '{}' --scenes '{}' --props '{}'`）调用它做验证；需要验证时读取 project.json 或运行专门的校验逻辑。"
+            "- project.json 与 scripts/*.json 禁止用 Write/Edit/Bash/PowerShell 直接修改；资产与 settings 写入走 mcp__arcreel__patch_project，剧本编辑走 patch_episode_script / insert_segment / remove_segment / split_segment。"
         )
         parts.append("- Bash 命令必须写在单行，禁止使用 `\\` 换行，JSON 参数使用紧凑格式。")
 
@@ -778,7 +775,7 @@ class SessionManager:
             }
 
         provider_env = await self._build_provider_env_overrides()
-        sandbox_typed = self._build_sandbox_settings()
+        sandbox_typed = self._build_sandbox_settings(project_cwd)
 
         # Windows 回退：sandbox 关闭时把 Bash 系列从 allowed_tools 剥离，
         # 让 _can_use_tool 接管 prefix 白名单匹配（_WINDOWS_BASH_PREFIX_WHITELIST）。
@@ -2181,7 +2178,7 @@ class SessionManager:
         "example.com",
     )
 
-    def _build_sandbox_settings(self) -> dict[str, Any]:
+    def _build_sandbox_settings(self, project_cwd: Path | None = None) -> dict[str, Any]:
         """构造 SandboxSettings dict（SDK 0.1.80 Python TypedDict 未声明
         filesystem 子结构，但 CLI 运行时透传 JSON 接受）。
 
@@ -2189,19 +2186,34 @@ class SessionManager:
           Bash/PowerShell 工具改走 ``_WINDOWS_BASH_PREFIX_WHITELIST`` 代码白名单。
         - ``filesystem.denyRead``：内核级文件读拒绝（macOS Seatbelt / Linux
           bwrap profile），对 sandbox 内所有子进程生效。
+        - ``filesystem.denyWrite``：内核级文件写拒绝，覆盖 ``scripts/`` 目录与
+          ``project.json``。这两类项目 JSON 只能走 in-process MCP 工具。
         - ``allowUnsandboxedCommands=False``：禁止 agent 在 sandbox 失败时
           请求"重试 unsandboxed"，对红线场景不可接受。
         """
         if not self._sandbox_enabled:
             return {"enabled": False}
+        if project_cwd is None:
+            project_cwd = self.projects_root
         return {
             "enabled": True,
             "autoAllowBashIfSandboxed": True,
             "allowUnsandboxedCommands": False,
             "network": {"allowedDomains": list(self._DEFAULT_SANDBOX_ALLOWED_DOMAINS)},
             "enableWeakerNestedSandbox": bool(self._in_docker),
-            "filesystem": {"denyRead": self._build_sensitive_abs_paths()},
+            "filesystem": {
+                "denyRead": self._build_sensitive_abs_paths(),
+                "denyWrite": self._build_protected_json_abs_paths(project_cwd),
+            },
         }
+
+    @staticmethod
+    def _build_protected_json_abs_paths(project_cwd: Path) -> list[str]:
+        """项目 JSON 写禁清单：scripts/ 子树 + project.json。"""
+        return [
+            str(project_cwd / "scripts"),
+            str(project_cwd / "project.json"),
+        ]
 
     def _build_sensitive_abs_paths(self) -> list[str]:
         """构造敏感文件绝对路径列表，传给 sandbox profile 的 denyRead 字段。
@@ -2268,7 +2280,9 @@ class SessionManager:
         """
         try:
             p = Path(file_path)
-            resolved = (project_cwd / p).resolve() if not p.is_absolute() else p.resolve()
+            logical = p if p.is_absolute() else project_cwd / p
+            logical_norm = Path(os.path.normpath(str(logical)))
+            resolved = logical.resolve()
         except (ValueError, OSError):
             return False, "访问被拒绝：无效的文件路径"
 
@@ -2277,7 +2291,7 @@ class SessionManager:
             return False, f"访问被拒绝：敏感文件不可访问 ({resolved})"
 
         if tool_name in self._WRITE_TOOLS:
-            return self._check_write_access(resolved, project_cwd)
+            return self._check_write_access(resolved, project_cwd, logical_norm=logical_norm)
         return self._check_read_access(resolved, project_cwd)
 
     @functools.cached_property
@@ -2294,10 +2308,16 @@ class SessionManager:
         两种形态都列出，避免 startswith 因别名失配。
         """
         _tempdir = Path(tempfile.gettempdir())
+        _slash_tmp = Path("/tmp")
+        _private_tmp = Path("/private/tmp")
         return (
             str(_tempdir / "claude-"),
             str(_tempdir.resolve() / "claude-"),
+            str(_slash_tmp / "claude-"),
+            str(_slash_tmp.resolve(strict=False) / "claude-"),
             "/tmp/claude-",
+            str(_private_tmp / "claude-"),
+            str(_private_tmp.resolve(strict=False) / "claude-"),
             "/private/tmp/claude-",
         )
 
@@ -2337,7 +2357,10 @@ class SessionManager:
             if resolved.is_relative_to(sdk_project_dir) and "tool-results" in resolved.parts:
                 return True, None
         # SDK 后台任务输出例外（前缀计算见 _sdk_tmp_prefixes，进程内缓存一次）。
-        if str(resolved).startswith(self._sdk_tmp_prefixes) and "tasks" in resolved.parts:
+        if (
+            str(resolved).startswith(self._sdk_tmp_prefixes)
+            or self._is_sdk_tmp_task_output_path(resolved)
+        ) and "tasks" in resolved.parts:
             return True, None
         # projects_root 下：当前项目以外的子目录拒，根直放文件放行
         projects_root = self.projects_root
@@ -2354,10 +2377,36 @@ class SessionManager:
         # 其余路径（host 文件系统：~/.ssh、/etc 等）默认拒
         return False, (f"访问被拒绝：路径在项目根外 ({resolved})")
 
-    def _check_write_access(self, resolved: Path, project_cwd: Path) -> tuple[bool, str | None]:
-        """Write/Edit 的写入约束：cwd 外一律拒，cwd 内代码扩展名拒（agent 不写代码）。"""
-        if not resolved.is_relative_to(project_cwd):
+    @staticmethod
+    def _is_sdk_tmp_task_output_path(path: Path) -> bool:
+        """识别 SDK 在 Unix /tmp 下生成、但 Windows 解析成盘符路径的后台任务输出。"""
+        norm = str(path).replace("\\", "/")
+        if norm.startswith(("/tmp/claude-", "/private/tmp/claude-")):
+            return True
+        if len(norm) > 3 and norm[1:3] == ":/":
+            return norm[3:].startswith(("tmp/claude-", "private/tmp/claude-"))
+        return False
+
+    def _check_write_access(self, resolved: Path, project_cwd: Path, *, logical_norm: Path) -> tuple[bool, str | None]:
+        """Write/Edit 的写入约束：cwd 外拒，代码文件拒，项目 JSON 拒。"""
+        bases: list[Path] = [project_cwd]
+        try:
+            resolved_cwd = project_cwd.resolve(strict=False)
+            if resolved_cwd != project_cwd:
+                bases.append(resolved_cwd)
+        except (OSError, RuntimeError) as exc:
+            logger.warning("project_cwd 解析失败,write_access 检查降级为仅 raw base: %s (%s)", project_cwd, exc)
+
+        if not any(resolved.is_relative_to(base) for base in bases):
             return False, (f"访问被拒绝：不允许写入当前项目目录之外的路径 ({resolved})")
+
+        if any(self._is_protected_project_json(target, bases) for target in (resolved, logical_norm)):
+            return False, (
+                "访问被拒绝：scripts/ 与 project.json 不可用 Write/Edit 直改，"
+                "请改用 MCP 工具——剧本编辑走 mcp__arcreel__patch_episode_script / "
+                "mcp__arcreel__insert_segment / mcp__arcreel__remove_segment / mcp__arcreel__split_segment，"
+                "角色/场景/道具与 settings 走 mcp__arcreel__patch_project。"
+            )
 
         ext = resolved.suffix.lower()
         if ext in self._CODE_EXTENSIONS_FORBIDDEN:
@@ -2368,6 +2417,18 @@ class SessionManager:
             )
 
         return True, None
+
+    @staticmethod
+    def _is_protected_project_json(target: Path, bases: list[Path]) -> bool:
+        """命中受保护项目 JSON：根 project.json 或 scripts/ 子树。"""
+        target_s = str(target).casefold()
+        for base in bases:
+            if target_s == str(base / "project.json").casefold():
+                return True
+            scripts_dir = str(base / "scripts").casefold()
+            if target_s == scripts_dir or target_s.startswith(scripts_dir + os.sep):
+                return True
+        return False
 
     async def _handle_ask_user_question(
         self,

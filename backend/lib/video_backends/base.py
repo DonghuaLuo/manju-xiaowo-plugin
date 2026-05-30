@@ -6,68 +6,98 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 import httpx
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from lib.retry import BASE_RETRYABLE_ERRORS, _should_retry, with_retry_async
 
+# `_should_retry` 默认会做字符串模式兜底（"timeout"/"503" 等），
+# 而 persist 重试要严格"DB 瞬态错误"语义——业务异常（如
+# `ValueError("Connection timed out: rate")`）不该被字符串子串吞掉。
+# 显式传 `retry_if=lambda e: isinstance(e, _PERSIST_RETRYABLE_ERRORS)` 关掉兜底。
+
 logger = logging.getLogger(__name__)
 
-
-# Worker 在 _process_task / _process_resume_task 入口 set 当前 task_id；
-# backend.generate 拿到 job_id 后调 persist_provider_job_id 让 ADR 0007
-# 「重启接续轮询不重 submit」可达。非 worker 路径（测试 / grid / 直生）
-# get(None) 默认返回 None，helper 自然 no-op。
-_CURRENT_TASK_ID: ContextVar[str | None] = ContextVar("arcreel_current_task_id", default=None)
-
-# 重启自愈：worker _process_resume_task 入口 set 上轮已持久化的 job_id；
-# backend.generate 检测到该 var 时跳过 submit、直接 resume_video（接续轮询）。
-# 走完后 worker 清空 var。
-_RESUME_JOB_ID: ContextVar[str | None] = ContextVar("arcreel_resume_job_id", default=None)
-
-
-def set_current_task_id(task_id: str | None) -> object:
-    """Worker 入口 set 当前 task_id；返回 token，由 caller reset。"""
-    return _CURRENT_TASK_ID.set(task_id)
+# DB 瞬态错误集合：sqlite "database is locked"、pg "could not connect" / 连接已关闭。
+# 故意不收 DBAPIError 父类——会兜住 IntegrityError/DataError/ProgrammingError 等非瞬态
+# 错误（SQL 语法 / 约束违反），重试无意义且拖延 fail-fast。
+_PERSIST_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
+    OperationalError,
+    InterfaceError,
+    ConnectionError,
+    TimeoutError,
+)
+_PERSIST_BACKOFF_SECONDS: tuple[int, ...] = (1, 2, 4)
 
 
-def reset_current_task_id(token: object) -> None:
-    _CURRENT_TASK_ID.reset(token)  # pyright: ignore[reportArgumentType]
+@with_retry_async(
+    max_attempts=3,
+    backoff_seconds=_PERSIST_BACKOFF_SECONDS,
+    retry_if=lambda e: isinstance(e, _PERSIST_RETRYABLE_ERRORS),
+)
+async def _persist_with_retry(task_id: str, job_id: str) -> None:
+    from lib.generation_queue import get_generation_queue
+
+    await get_generation_queue().persist_provider_job_id(task_id, job_id)
 
 
-def set_resume_job_id(job_id: str | None) -> object:
-    return _RESUME_JOB_ID.set(job_id)
-
-
-def reset_resume_job_id(token: object) -> None:
-    _RESUME_JOB_ID.reset(token)  # pyright: ignore[reportArgumentType]
-
-
-def get_resume_job_id() -> str | None:
-    return _RESUME_JOB_ID.get(None)
-
-
-async def persist_job_id_if_in_task_context(job_id: str) -> None:
+async def persist_provider_job_id(task_id: str, job_id: str, *, provider: str) -> None:
     """Submit 之后立即调：把 job_id 持久化到 DB 让重启可接续。
 
-    非 worker 路径 (contextvar 未 set) → no-op；worker 路径失败抛异常，
-    由 worker finally 兜底 mark_failed（ADR 0007 fail-fast）。
+    Caller 显式传 task_id；DB 瞬态错误最多重试 3 次，业务异常立即抛。
+    重试用尽抛异常，由 worker finally 兜底 mark_failed（fail-fast）。
     """
-    tid = _CURRENT_TASK_ID.get(None)
-    if tid is None:
-        return
     try:
-        from lib.generation_queue import get_generation_queue
+        await _persist_with_retry(task_id, job_id)
+        logger.info("provider_job_id 已持久化 task_id=%s provider=%s job_id=%s", task_id, provider, job_id)
+    except Exception as exc:
+        logger.error(
+            "provider_job_id_persist_failed task_id=%s provider=%s job_id=%s error=%s",
+            task_id,
+            provider,
+            job_id,
+            exc,
+        )
+        raise
 
-        await get_generation_queue().persist_provider_job_id(tid, job_id)
-        logger.info("provider_job_id 已持久化 task_id=%s job_id=%s", tid, job_id)
-    except Exception:
-        logger.exception("provider_job_id 持久化失败 task_id=%s job_id=%s", tid, job_id)
+
+@with_retry_async(
+    max_attempts=3,
+    backoff_seconds=_PERSIST_BACKOFF_SECONDS,
+    retry_if=lambda e: isinstance(e, _PERSIST_RETRYABLE_ERRORS),
+)
+async def _persist_api_call_id_with_retry(task_id: str, call_id: int) -> None:
+    from lib.generation_queue import get_generation_queue
+
+    await get_generation_queue().persist_api_call_id(task_id, call_id)
+
+
+async def persist_api_call_id(task_id: str, call_id: int) -> None:
+    """Start_call 拿到 call_id 后立即调：把 ApiCall.id 写入 task.payload。
+
+    Resume 路径据此精准翻 pending ApiCall 行而不是按 segment_id+LIMIT 1 模糊匹配。
+    与 ``persist_provider_job_id`` 同样走 DB 瞬态错误重试；重试用尽抛异常，由
+    media_generator 的外层 try/except 走 finish_call(failed) 翻 pending ApiCall，
+    并把异常冒泡给 worker finally 兜底 mark_failed（ADR 0007 fail-fast：未持久化
+    的 submit 视为整笔失败——provider 端尚未提交，无需担心「幽灵任务」；若已提交
+    则 resume 拿不到 api_call_id 锚定将永远留 pending 账目，必须 fail-fast 让记账
+    在原地翻 failed 而不是延后到永远不会发生的 resume）。
+    """
+    try:
+        await _persist_api_call_id_with_retry(task_id, call_id)
+        logger.info("api_call_id 已持久化 task_id=%s call_id=%d", task_id, call_id)
+    except Exception as exc:
+        logger.error(
+            "api_call_id_persist_failed task_id=%s call_id=%d error=%s",
+            task_id,
+            call_id,
+            exc,
+        )
         raise
 
 
@@ -217,6 +247,11 @@ class VideoGenerationRequest:
 
     # 项目上下文（用于构建文件服务 URL 等）
     project_name: str | None = None
+
+    # Worker 路径下从 task["task_id"] 传入，让 backend submit 后能直接调
+    # `persist_provider_job_id(task_id, job_id)` 持久化。
+    # 非 worker 路径（grid / 直生 / 测试）保持 None，backend 跳过持久化。
+    task_id: str | None = None
 
     # Seedance 特有
     service_tier: str = "default"

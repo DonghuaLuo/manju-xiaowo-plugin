@@ -17,6 +17,9 @@ def _read_json(path: Path) -> dict:
 
 
 class _FakeTextBackend:
+    def __init__(self, language: str = "zh"):
+        self._language = language
+
     @property
     def name(self):
         return "fake"
@@ -39,6 +42,7 @@ class _FakeTextBackend:
                     "genre": "悬疑",
                     "theme": "真相",
                     "world_setting": "古代",
+                    "language": self._language,
                 },
                 ensure_ascii=False,
             ),
@@ -225,7 +229,7 @@ class TestProjectManagerMore:
         assert loaded["scenes"][0]["generated_assets"]["storyboard_image"] == "sb/001.png"
 
     def test_batch_update_scene_assets_persists_all(self, tmp_path):
-        """batch_update_scene_assets 单次锁内写多个场景，缺失 scene_id 静默跳过。"""
+        """batch_update_scene_assets 单次锁内写多个场景；缺失 scene_id 应显式失败。"""
         pm = ProjectManager(tmp_path / "projects")
         pm.create_project("demo")
         pm.create_project_metadata("demo", "Demo", "Anime", "drama")
@@ -253,7 +257,6 @@ class TestProjectManagerMore:
             [
                 ("001", "storyboard_image", "sb/001.png"),
                 ("002", "video_clip", "v/002.mp4"),
-                ("999", "video_clip", "ignored.mp4"),  # 不存在 → 静默跳过
             ],
         )
         loaded = pm.load_script("demo", "episode_1.json")
@@ -276,6 +279,9 @@ class TestProjectManagerMore:
         pm.batch_update_scene_assets("demo", "episode_2.json", [("E2S01", "storyboard_image", "sb/E2S01.png")])
         seg = pm.load_script("demo", "episode_2.json")["segments"][0]
         assert seg["generated_assets"]["storyboard_image"] == "sb/E2S01.png"
+
+        with pytest.raises(KeyError, match="999"):
+            pm.batch_update_scene_assets("demo", "episode_1.json", [("999", "video_clip", "ignored.mp4")])
 
     def test_update_character_sheet_success_and_missing(self, tmp_path):
         """update_character_sheet 写入 sheet 路径；角色缺失时锁内 raise 且跳过写回。"""
@@ -535,6 +541,8 @@ class TestProjectManagerMore:
         overview = await pm.generate_overview("demo")
         assert overview["genre"] == "悬疑"
         assert "generated_at" in overview
+        assert overview["language"] == "zh"
+        assert pm.load_project("demo")["source_language"] == "zh"
 
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
@@ -547,6 +555,38 @@ class TestProjectManagerMore:
         pm_empty.create_project_metadata("demo", "Demo")
         with pytest.raises(ValueError):
             await pm_empty.generate_overview("demo")
+
+    @pytest.mark.parametrize("lang", ["zh", "en", "vi"])
+    @pytest.mark.asyncio
+    async def test_generate_overview_source_language_synced(self, tmp_path, monkeypatch, lang):
+        pm = ProjectManager(tmp_path / "projects")
+        pm.create_project("demo")
+        pm.create_project_metadata("demo", "Demo")
+        _write(pm.get_project_path("demo") / "source" / "1.txt", "source body")
+
+        async def _fake_create_backend(*args, **kwargs):
+            return _FakeTextBackend(language=lang)
+
+        monkeypatch.setattr("lib.text_generator.create_text_backend_for_task", _fake_create_backend)
+        overview = await pm.generate_overview("demo")
+        assert overview["language"] == lang
+        assert pm.load_project("demo")["source_language"] == lang
+
+    @pytest.mark.asyncio
+    async def test_generate_overview_invalid_language_raises(self, tmp_path, monkeypatch):
+        from pydantic import ValidationError
+
+        pm = ProjectManager(tmp_path / "projects")
+        pm.create_project("demo")
+        pm.create_project_metadata("demo", "Demo")
+        _write(pm.get_project_path("demo") / "source" / "1.txt", "source body")
+
+        async def _fake_create_backend(*args, **kwargs):
+            return _FakeTextBackend(language="chinese")
+
+        monkeypatch.setattr("lib.text_generator.create_text_backend_for_task", _fake_create_backend)
+        with pytest.raises(ValidationError):
+            await pm.generate_overview("demo")
 
 
 class TestFromCwd:

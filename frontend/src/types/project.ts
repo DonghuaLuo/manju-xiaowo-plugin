@@ -12,6 +12,7 @@ export interface ProjectOverview {
   genre: string;
   theme: string;
   world_setting: string;
+  language?: "zh" | "en" | "vi";
   generated_at?: string;
 }
 
@@ -109,6 +110,8 @@ export interface ProjectData {
   style_image?: string;
   style_description?: string;
   overview?: ProjectOverview;
+  source_language?: "zh" | "en" | "vi";
+  episode_target_units?: number | null;
   aspect_ratio?: string | AspectRatio;  // 新项目为 string，旧项目可能为 dict
   default_duration?: number | null;     // 新增
   schema_version?: number;

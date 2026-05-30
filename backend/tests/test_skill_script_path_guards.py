@@ -1,4 +1,4 @@
-"""固化 agent_runtime_profile/.claude/skills 下 4 个脚本的 cwd 路径围栏契约。
+"""固化 agent_runtime_profile/.claude/skills 下脚本的 cwd 路径围栏契约。
 
 约束：
 - cwd 必须含 project.json，否则脚本拒绝执行
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -43,8 +44,11 @@ def _run(
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         input=stdin,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
 
 
@@ -85,19 +89,9 @@ def fake_project(tmp_path: Path) -> Path:
 # ---------- add_assets.py ----------
 
 
-def test_add_assets_rejects_non_project_cwd(tmp_path: Path) -> None:
-    """cwd 不含 project.json 时应当拒绝并提示。"""
-    result = _run(ADD_ASSETS, tmp_path, "--characters", "{}")
-    assert result.returncode != 0
-    assert "必须在项目目录内运行" in (result.stdout + result.stderr)
-
-
-def test_add_assets_rejects_non_project_cwd_stdin_mode(tmp_path: Path) -> None:
-    """stdin 模式同样必须先过 cwd 校验，不能因为有 stdin 输入就绕过。"""
-    payload = json.dumps({"characters": {"X": {"description": "y"}}})
-    result = _run(ADD_ASSETS, tmp_path, "--stdin", stdin=payload)
-    assert result.returncode != 0
-    assert "必须在项目目录内运行" in (result.stdout + result.stderr)
+def test_add_assets_removed_in_favor_of_mcp_tools() -> None:
+    """项目资产写入已收归 MCP patch_project，不再保留旧直写脚本。"""
+    assert not ADD_ASSETS.exists()
 
 
 # ---------- split_episode.py ----------

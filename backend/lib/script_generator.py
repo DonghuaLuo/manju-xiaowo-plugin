@@ -7,6 +7,7 @@ script_generator.py - 剧本生成器
 import json
 import logging
 import re
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -17,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
-from lib.project_manager import effective_mode
+from lib.project_manager import ProjectManager, effective_mode
 from lib.prompt_builders_reference import build_reference_video_prompt
 from lib.prompt_builders_script import (
     build_drama_prompt,
@@ -35,6 +36,7 @@ from lib.script_models import (
 )
 from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
+from lib.text_metrics import count_reading_units
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ _EID_PREFIX_RE = re.compile(r"^E\d+(?=[SU])")
 _QUALITY_PROBE_SCENE_MIN_LEN = 40
 _QUALITY_PROBE_ACTION_MIN_LEN = 25
 _QUALITY_PROBE_SHOT_TEXT_MIN_LEN = 15
+_NOVEL_TEXT_DRIFT_THRESHOLD = 0.10
 
 
 def _rewrite_episode_prefix(rid: object, ep: int) -> object:
@@ -105,14 +108,14 @@ class ScriptGenerator:
     async def generate(
         self,
         episode: int,
-        output_path: Path | None = None,
+        output_path: Path | str | None = None,
     ) -> Path:
         """
         异步生成剧集剧本
 
         Args:
             episode: 剧集编号
-            output_path: 输出路径，默认为 scripts/episode_{episode}.json
+            output_path: 可选纯文件名或绝对 scripts/ 下路径，默认 scripts/episode_{episode}.json
 
         Returns:
             生成的 JSON 文件路径
@@ -195,18 +198,34 @@ class ScriptGenerator:
         # 6. 补充元数据
         script_data = self._add_metadata(script_data, episode)
 
-        # 7. 保存文件
-        if output_path is None:
-            output_path = self.project_path / "scripts" / f"episode_{episode}.json"
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(script_data, f, ensure_ascii=False, indent=2)
+        # 7. 经写盘统一入口保存，继承结构校验、元数据同步、锁与路径围栏。
+        filename = self._resolve_output_filename(output_path, episode)
+        pm = ProjectManager(str(self.project_path.parent))
+        output_path = pm.save_script(self.project_path.name, script_data, filename, validate=True)
 
         self._quality_probe(script_data, episode)
 
         logger.info("剧本已保存至 %s", output_path)
         return output_path
+
+    def _resolve_output_filename(self, output_path: Path | str | None, episode: int) -> str:
+        """把兼容参数收敛成 scripts/ 下纯文件名。"""
+        if output_path is None:
+            return f"episode_{episode}.json"
+
+        candidate = Path(output_path)
+        scripts_dir = (self.project_path / "scripts").resolve()
+        if candidate.parent == Path("."):
+            filename = candidate.name
+        else:
+            resolved = candidate.resolve()
+            if resolved.parent != scripts_dir:
+                raise ValueError(f"output_path 只能是 scripts/ 下文件或纯文件名: {output_path!r}")
+            filename = resolved.name
+
+        if not filename or filename in {".", ".."} or Path(filename).name != filename or "\\" in filename:
+            raise ValueError(f"output_path 只能是纯文件名: {output_path!r}")
+        return filename
 
     async def build_prompt(self, episode: int) -> str:
         """
@@ -538,5 +557,30 @@ class ScriptGenerator:
                     episode,
                     sorted(set(short_ids)),
                 )
+
+            if self.content_mode == "narration" and gen_mode != "reference_video":
+                source_path = self.project_path / "source" / f"episode_{episode}.txt"
+                if source_path.is_file():
+                    source_lang = self.project_json.get("source_language", "zh")
+                    source_text = unicodedata.normalize("NFC", source_path.read_text(encoding="utf-8"))
+                    expected = count_reading_units(source_text, source_lang)
+                    actual = sum(
+                        count_reading_units(
+                            unicodedata.normalize("NFC", str(seg.get("novel_text") or "")),
+                            source_lang,
+                        )
+                        for seg in script_data.get("segments") or []
+                        if isinstance(seg, dict)
+                    )
+                    if expected > 0:
+                        delta_ratio = abs(actual - expected) / expected
+                        if delta_ratio > _NOVEL_TEXT_DRIFT_THRESHOLD:
+                            logger.warning(
+                                "episode %d novel_text drift: expected=%d actual=%d delta=%.1f%%",
+                                episode,
+                                expected,
+                                actual,
+                                delta_ratio * 100,
+                            )
         except Exception as exc:
             logger.warning("episode %d quality probe skipped due to unexpected data shape: %s", episode, exc)

@@ -655,7 +655,7 @@ _TASK_CHANGE_SPECS: dict[str, tuple] = {
 }
 
 
-def _emit_generation_success_batch(
+def emit_generation_success_batch(
     *,
     task_type: str,
     project_name: str,
@@ -695,7 +695,12 @@ def _emit_generation_success_batch(
 
 
 async def execute_storyboard_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     script_file = payload.get("script_file")
     if not script_file:
@@ -775,7 +780,12 @@ async def execute_storyboard_task(
 
 
 async def execute_video_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     script_file = payload.get("script_file")
     if not script_file:
@@ -871,9 +881,33 @@ async def execute_video_task(
         aspect_ratio=aspect_ratio,
         duration_seconds=duration_seconds,
         resolution=resolution,
+        task_id=task_id,
         seed=seed,
         service_tier=service_tier,
     )
+
+    return await _finalize_video_task(
+        project_name=project_name,
+        script_file=script_file,
+        project_path=project_path,
+        resource_id=resource_id,
+        version=version,
+        video_uri=video_uri,
+        generator=generator,
+    )
+
+
+async def _finalize_video_task(
+    *,
+    project_name: str,
+    script_file: str,
+    project_path: Path,
+    resource_id: str,
+    version: int,
+    video_uri: str | None,
+    generator: Any,
+) -> dict[str, Any]:
+    """Normal + resume 共用的 finalize 逻辑：写 scene asset + 抽缩略图 + 返回 result dict。"""
 
     def _update_video_metadata():
         get_project_manager().update_scene_asset(
@@ -894,7 +928,6 @@ async def execute_video_task(
 
     await asyncio.to_thread(_update_video_metadata)
 
-    # 提取视频首帧作为缩略图
     video_file = project_path / f"videos/scene_{resource_id}.mp4"
     thumbnail_file = project_path / f"thumbnails/scene_{resource_id}.jpg"
     if await extract_video_thumbnail(video_file, thumbnail_file):
@@ -924,7 +957,12 @@ async def execute_video_task(
 
 
 async def execute_character_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     prompt = str(payload.get("prompt", "") or "").strip()
     if not prompt:
@@ -1053,13 +1091,23 @@ async def execute_design_task(
 
 
 async def execute_scene_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     return await execute_design_task("scene", project_name, resource_id, payload, user_id=user_id)
 
 
 async def execute_prop_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     return await execute_design_task("prop", project_name, resource_id, payload, user_id=user_id)
 
@@ -1148,7 +1196,12 @@ def _collect_grid_reference_images(
 
 
 async def execute_grid_task(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str = DEFAULT_USER_ID
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a grid image generation task.
 
@@ -1238,7 +1291,15 @@ async def execute_grid_task(
         storyboards_dir.mkdir(parents=True, exist_ok=True)
 
         def _assign_cells():
+            from lib.script_editor import resolve_items
+
+            pm = get_project_manager()
+            script = pm.load_script(project_name, script_file)
+            items, id_field, _kind = resolve_items(script)
+            valid_ids = {str(item.get(id_field)) for item in items if isinstance(item, dict)}
+
             asset_updates: list[tuple[str, str, Any]] = []
+            missing_ids: list[str] = []
 
             # 宫格已统一走普通图生视频（不再使用 first_last 模式），cell 仅作为
             # next_scene_id 的起始分镜图，文件名与普通分镜对齐为 scene_{id}.png。
@@ -1250,6 +1311,10 @@ async def execute_grid_task(
                 if not frame.next_scene_id:
                     continue
 
+                if str(frame.next_scene_id) not in valid_ids:
+                    missing_ids.append(str(frame.next_scene_id))
+                    continue
+
                 cell_rel = f"storyboards/scene_{frame.next_scene_id}.png"
                 cell_path = storyboards_dir / f"scene_{frame.next_scene_id}.png"
                 cell.save(cell_path, format="PNG")
@@ -1258,9 +1323,17 @@ async def execute_grid_task(
                 asset_updates.append((frame.next_scene_id, "grid_id", resource_id))
                 asset_updates.append((frame.next_scene_id, "grid_cell_index", frame.index))
 
+            if missing_ids:
+                logger.warning(
+                    "grid %s: frame_chain 中以下分镜在剧本 %s 已不存在,跳过 cell 保存: %s",
+                    resource_id,
+                    script_file,
+                    sorted(set(missing_ids)),
+                )
+
             # Batch-write all asset updates in one script read+write pass
             if asset_updates:
-                get_project_manager().batch_update_scene_assets(
+                pm.batch_update_scene_assets(
                     project_name=project_name,
                     script_filename=script_file,
                     updates=asset_updates,
@@ -1298,12 +1371,17 @@ async def execute_grid_task(
 
 
 async def _execute_reference_video_task_proxy(
-    project_name: str, resource_id: str, payload: dict[str, Any], *, user_id: str
+    project_name: str,
+    resource_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Lazy proxy to avoid circular import: reference_video_tasks imports from this module."""
     from server.services.reference_video_tasks import execute_reference_video_task
 
-    return await execute_reference_video_task(project_name, resource_id, payload, user_id=user_id)
+    return await execute_reference_video_task(project_name, resource_id, payload, user_id=user_id, task_id=task_id)
 
 
 _TASK_EXECUTORS = {
@@ -1323,6 +1401,7 @@ async def execute_generation_task(task: dict[str, Any]) -> dict[str, Any]:
     resource_id = str(task.get("resource_id"))
     payload = task.get("payload") or {}
     user_id = task.get("user_id", DEFAULT_USER_ID)
+    queue_task_id = task.get("task_id")
 
     if not project_name:
         raise ValueError("task.project_name is required")
@@ -1335,13 +1414,13 @@ async def execute_generation_task(task: dict[str, Any]) -> dict[str, Any]:
 
     with project_change_source("worker"):
         try:
-            result = await executor(project_name, resource_id, payload, user_id=user_id)
+            result = await executor(project_name, resource_id, payload, user_id=user_id, task_id=queue_task_id)
         except (ImageCapabilityError, VideoCapabilityError) as err:
             # Worker 后台无 request 上下文，按 DEFAULT_LOCALE 渲染稳定的 i18n 文案
             # 落到 task.error_message，前端轮询时即可看到本地化提示
             message = i18n_translate(err.code, locale=DEFAULT_LOCALE, **err.params)
             raise RuntimeError(message) from err
-        _emit_generation_success_batch(
+        emit_generation_success_batch(
             task_type=task_type,
             project_name=project_name,
             resource_id=resource_id,

@@ -8,6 +8,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib.script_editor import resolve_items
+
 
 @dataclass(frozen=True)
 class StoryboardTaskPlan:
@@ -25,25 +27,19 @@ PREVIOUS_STORYBOARD_REFERENCE_DESCRIPTION = (
 
 
 def get_storyboard_items(script: dict) -> tuple[list[dict], str, str, str, str]:
-    # 参考视频集没有 segments / scenes，由 generation_mode 区分；这里返回空列表交给调用方处理。
-    content_mode = script.get("content_mode", "narration")
+    """返回 storyboard/grid 模式剧本的分镜列表与引用字段名。
+
+    reference_video 模式没有 storyboard 任务，调用方据此跳过。其余 narration/drama
+    路径复用 `script_editor.resolve_items`，和 MCP 编辑、结构校验、metadata 重算保持
+    同一判别；当 segments/scenes 键存在但不是 list 时让 ScriptEditError 上冒，避免
+    脏数据被 `list(None)` 之类的低质量错误掩盖。
+    """
     if script.get("generation_mode") == "reference_video":
         return ([], "unit_id", "characters_in_unit", "scenes", "props")
-    if content_mode == "narration" and "segments" in script:
-        return (
-            list(script.get("segments", [])),
-            "segment_id",
-            "characters_in_segment",
-            "scenes",
-            "props",
-        )
-    return (
-        list(script.get("scenes", [])),
-        "scene_id",
-        "characters_in_scene",
-        "scenes",
-        "props",
-    )
+
+    items, id_field, kind = resolve_items(script)
+    char_field = "characters_in_segment" if kind == "segments" else "characters_in_scene"
+    return (items, id_field, char_field, "scenes", "props")
 
 
 def find_storyboard_item(

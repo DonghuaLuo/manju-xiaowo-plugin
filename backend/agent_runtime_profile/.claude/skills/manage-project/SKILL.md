@@ -1,28 +1,25 @@
 ---
 name: manage-project
-description: 项目管理工具集。使用场景：(1) 分集切分——探测切分点并执行切分，(2) 批量添加角色/场景/道具到 project.json。提供 peek（预览）+ split（执行）的渐进式切分工作流，以及角色/场景/道具批量写入。
+description: 项目管理工具集。使用场景：(1) 分集切分——探测切分点并执行切分，(2) 新增/修改角色/场景/道具到 project.json（经 patch_project 工具，按 table+name upsert 或写顶层 settings 字段）。提供 peek（预览）+ split（执行）的渐进式切分工作流，以及角色/场景/道具与项目级 settings 写入。
 user-invocable: false
 ---
 
 # 项目管理工具集
 
-提供项目文件管理的命令行工具，主要用于分集切分和角色/场景/道具批量写入。
-
-## 通用调用约束
-
-- 必须从项目目录内执行脚本，路径使用 `.claude/skills/...` 相对路径。
-- 直接使用 `python .claude/skills/...`；运行时已由插件注入为当前 manju 后端 Python，不要使用 `uv run`、`py` 或系统 Python。
-- 不要把脚本路径转换为项目绝对路径。
-- Bash 命令必须单行，JSON 参数使用紧凑格式，不可用 `\` 换行。
+提供项目文件管理工具，主要用于分集切分和角色/场景/道具批量写入。
 
 ## 工具一览
 
-| 脚本 | 功能 | 调用者 |
+| 工具 | 功能 | 调用者 |
 |------|------|--------|
 | `peek_split_point.py` | 探测目标字数附近的上下文和自然断点 | 主 agent（阶段 2） |
 | `split_episode.py` | 执行分集切分，生成 episode_N.txt + _remaining.txt | 主 agent（阶段 2） |
-| `add_assets.py` | 批量添加角色/场景/道具到 project.json | subagent |
-| `mcp__arcreel__get_video_capabilities`（SDK tool） | 查当前项目视频模型能力（model 粒度，所有生成模式通用） | **subagent**（执行任务时自行查询） |
+| `mcp__arcreel__patch_project` | 新增/修改 project.json 的角色/场景/道具或顶层 settings 字段 | subagent / 主 agent |
+| `mcp__arcreel__patch_episode_script` | 按分镜 id 编辑剧本字段 | subagent / 主 agent |
+| `mcp__arcreel__insert_segment` | 插入分镜 | subagent / 主 agent |
+| `mcp__arcreel__remove_segment` | 删除分镜 | subagent / 主 agent |
+| `mcp__arcreel__split_segment` | 拆分分镜 | subagent / 主 agent |
+| `mcp__arcreel__get_video_capabilities` | 查询当前项目视频模型能力 | subagent |
 
 ## 分集切分工作流
 
@@ -31,73 +28,73 @@ user-invocable: false
 ### Step 1: 探测切分点
 
 ```bash
-python .claude/skills/manage-project/scripts/peek_split_point.py --source {源文件} --target {目标字数}
+python .claude/skills/manage-project/scripts/peek_split_point.py --source {源文件} --target {目标阅读单位}
 ```
 
-**参数**：
-- `--source`：源文件路径（`source/novel.txt` 或 `source/_remaining.txt`）
-- `--target`：目标有效字数
-- `--context`：上下文窗口大小（默认 200 字符）
+参数：
 
-**输出**（JSON）：
-- `total_chars`：总有效字数
-- `target_offset`：目标字数对应的原文偏移
+- `--source`：源文件路径（`source/novel.txt` 或 `source/_remaining.txt`）
+- `--target`：目标阅读单位数（按 `source_language` 解读）
+- `--context`：上下文窗口大小（默认 200 字符）
+- `--language`：可选，覆盖 `project.json` 的 `source_language`（zh/en/vi）
+
+输出 JSON：
+
+- `language`：度量语言
+- `total_units`：总阅读单位（zh 数汉字 + CJK 标点，en/vi 数 word）
+- `target_units`：目标阅读单位
+- `split_target_chars`：换算后的字符级 target，给 `split_episode.py --target` 使用
+- `target_offset`：目标对应的原文字符偏移
 - `context_before` / `context_after`：切分点前后上下文
-- `nearby_breakpoints`：附近自然断点列表（按距离排序，最多 10 个）
+- `nearby_breakpoints`：附近自然断点列表
 
 ### Step 2: 执行切分
 
 ```bash
-# Dry run（仅预览）
-python .claude/skills/manage-project/scripts/split_episode.py --source {源文件} --episode {N} --target {目标字数} --anchor "{锚点文本}" --dry-run
-
-# 实际执行
-python .claude/skills/manage-project/scripts/split_episode.py --source {源文件} --episode {N} --target {目标字数} --anchor "{锚点文本}"
+python .claude/skills/manage-project/scripts/split_episode.py --source {源文件} --episode {N} --target {split_target_chars} --anchor "{锚点文本}" --dry-run
+python .claude/skills/manage-project/scripts/split_episode.py --source {源文件} --episode {N} --target {split_target_chars} --anchor "{锚点文本}"
 ```
 
-**参数**：
-- `--source`：源文件路径
-- `--episode`：集数编号
-- `--target`：目标有效字数（与 peek 一致）
-- `--anchor`：切分点的锚点文本（10-20 字符）
-- `--context`：搜索窗口大小（默认 500 字符）
-- `--dry-run`：仅预览，不写文件
+注意：
 
-**定位机制**：target 字数计算大致偏移 → 在 ±window 范围内搜索 anchor → 使用距离最近的匹配
+- `split_episode.py --target` 是字符级目标，必须使用 peek 输出的 `split_target_chars`。
+- 不要直接复用 peek 的 `--target` 阅读单位值，否则英文/越南语或混排文本可能锚点搜索错位。
 
-**输出文件**：
-- `source/episode_{N}.txt`：前半部分
-- `source/_remaining.txt`：后半部分（下一集的源文件）
+## 角色/场景/道具与 settings 写入
 
-## 角色/场景/道具批量写入
+只能经 `mcp__arcreel__patch_project` 工具写入；项目名由 session 绑定，无需传参。
 
-从项目目录内执行，自动检测项目名称：
-
-⚠️ 写入前必须先读取 `project.json`，确认基础字段已完整（至少 `title`、`style`、`content_mode`、`aspect_ratio`）。如果缺失基础字段，先修复 `project.json`，再调用 `add_assets.py`。
-
-⚠️ `add_assets.py` 只用于写入资产，不是验证命令。禁止用空 JSON 调用它做验证，例如不要运行 `--characters '{}' --scenes '{}' --props '{}'`。需要验证时读取 `project.json` 或调用专门校验逻辑。
-
-⚠️ 必须单行，JSON 使用紧凑格式，不可用 `\` 换行：
-
-```bash
-python .claude/skills/manage-project/scripts/add_assets.py --characters '{"角色名": {"description": "...", "voice_style": "..."}}' --scenes '{"场景名": {"description": "..."}}' --props '{"道具名": {"description": "..."}}'
+```text
+mcp__arcreel__patch_project({"table": "characters", "entries": {"角色名": {"description": "...", "voice_style": "..."}}})
+mcp__arcreel__patch_project({"table": "scenes", "entries": {"场景名": {"description": "..."}}})
+mcp__arcreel__patch_project({"table": "props", "entries": {"道具名": {"description": "..."}}})
+mcp__arcreel__patch_project({"settings": {"episode_target_units": 1000}})
+mcp__arcreel__patch_project({"settings": {"source_language": "zh"}})
 ```
+
+两种调用形态二选一：
+
+- `{"table", "entries"}`：资产 upsert，按 table+name 新增或合并字段。
+- `{"settings"}`：顶层字段写入。
+
+settings 白名单字段：
+
+- `episode_target_units`：`int >= 1` 设置 / `null` 清除。
+- `source_language`：`"zh" / "en" / "vi"` 设置 / `null` 清除。
+
+**严禁**用 Write/Edit/Bash/PowerShell 直接改 `project.json` 或 `scripts/*.json`。这些项目 JSON 只能走 MCP 工具。
+
+## 剧本编辑
+
+`scripts/*.json` 的字段修改、分镜插入、删除、拆分只能走以下 MCP 工具：
+
+- `mcp__arcreel__patch_episode_script`
+- `mcp__arcreel__insert_segment`
+- `mcp__arcreel__remove_segment`
+- `mcp__arcreel__split_segment`
 
 ## 字数统计规则
 
-- 统计非空行的所有字符（包括标点）
-- 空行（仅含空白字符的行）不计入
-
-## 查视频模型能力
-
-通过 MCP 工具查询（项目名由 session 绑定，无需传参）：
-
-```text
-mcp__arcreel__get_video_capabilities({})
-```
-
-**返回**：JSON 文本，含 `provider_id` / `model` / `supported_durations[]` / `max_duration` / `max_reference_images` / `source` / `default_duration` / `content_mode` / `generation_mode`。
-
-**用途**：所有 generation_mode（storyboard / grid / reference_video）的预处理 subagent 在执行时自查，用于决定单片段 / shot 时长。**决策优先级**：若 `default_duration` 非 null，优先采用为默认值；否则或特殊情况（reference_video 多 shot 组合贴近 `max_duration`、narration 长句需要更长）按规则从 `supported_durations` 选值。
-
-**错误**：项目未找到或模型能力无法解析时返回 `is_error: true`，文本中包含原因。
+- peek 的 `--target` 是阅读单位：zh 数汉字 + CJK 标点，en/vi 数 word。
+- split 的 `--target` 是字符级非空白字符数。
+- 空白字符在字符级统计中不计入。

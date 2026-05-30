@@ -704,11 +704,65 @@ class TestGenerationWorker:
 
         monkeypatch.setattr(GenerationWorker, "_process_resume_task", _capture_resume)
         await worker._handle_orphan_tasks_on_start()
-        pool = worker._get_or_create_pool("ark")
-        assert "ark-orphan" in pool.video_inflight
-        await asyncio.gather(*pool.video_inflight.values(), return_exceptions=True)
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if dispatched:
+                break
+        for t in list(asyncio.all_tasks()):
+            name = t.get_name()
+            if (
+                name in ("orphan-dispatcher",)
+                or name.startswith("orphan-dispatch-")
+                or name.startswith("resume-video-")
+            ):
+                try:
+                    await t
+                except Exception:
+                    pass
         assert len(dispatched) == 1
         assert dispatched[0]["task_id"] == "ark-orphan"
+
+    @pytest.mark.asyncio
+    async def test_resume_orphan_dispatch_waits_for_existing_video_capacity(self, monkeypatch):
+        monkeypatch.setattr("lib.generation_worker._ORPHAN_RESUME_CAPACITY_POLL_SEC", 0.01)
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+        pool = ProviderPool(provider_id="ark", image_max=0, video_max=1)
+        worker._pools["ark"] = pool
+
+        blocker = asyncio.create_task(asyncio.sleep(60), name="live-video")
+        pool.video_inflight["live-video"] = blocker
+        dispatched: list[str] = []
+
+        async def _capture_resume(self, task):
+            dispatched.append(task["task_id"])
+
+        monkeypatch.setattr(GenerationWorker, "_process_resume_task", _capture_resume)
+        task = {
+            "task_id": "ark-orphan",
+            "status": "running",
+            "provider_id": "ark",
+            "provider_job_id": "ark-job-1",
+            "media_type": "video",
+            "task_type": "video",
+            "payload": {},
+            "project_name": "demo",
+        }
+
+        dispatcher = asyncio.create_task(worker._dispatch_provider_bucket("ark", [task]))
+        await asyncio.sleep(0.03)
+        assert dispatched == []
+        assert "ark-orphan" in pool.video_pending
+
+        pool.video_inflight.pop("live-video")
+        await dispatcher
+        assert dispatched == ["ark-orphan"]
+
+        blocker.cancel()
+        try:
+            await blocker
+        except asyncio.CancelledError:
+            pass
 
     @pytest.mark.asyncio
     async def test_process_resume_task_locks_persisted_provider_to_payload(self, monkeypatch):
@@ -716,12 +770,12 @@ class TestGenerationWorker:
         worker = GenerationWorker(queue=queue)
         captured_task: dict | None = None
 
-        async def _fake_execute(task):
+        async def _fake_execute(task, *, job_id):
             nonlocal captured_task
             captured_task = task
             return {"ok": True}
 
-        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _fake_execute)
+        monkeypatch.setattr("server.services.resume_executor.execute_resume_video_task", _fake_execute)
 
         task = {
             "task_id": "resume-locked",
@@ -744,10 +798,10 @@ class TestGenerationWorker:
         queue = _FakeQueue()
         worker = GenerationWorker(queue=queue)
 
-        async def _expire(_task):
+        async def _expire(_task, *, job_id):
             raise ResumeExpiredError(job_id="x", provider="ark")
 
-        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _expire)
+        monkeypatch.setattr("server.services.resume_executor.execute_resume_video_task", _expire)
         task = {
             "task_id": "exp",
             "task_type": "video",
@@ -766,10 +820,10 @@ class TestGenerationWorker:
         queue = _FakeQueue()
         worker = GenerationWorker(queue=queue)
 
-        async def _unsup(_task):
+        async def _unsup(_task, *, job_id):
             raise NotImplementedError("no resume_video")
 
-        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _unsup)
+        monkeypatch.setattr("server.services.resume_executor.execute_resume_video_task", _unsup)
         task = {
             "task_id": "uns",
             "task_type": "video",
@@ -788,10 +842,10 @@ class TestGenerationWorker:
         queue = _FakeQueue()
         worker = GenerationWorker(queue=queue)
 
-        async def _boom(_task):
+        async def _boom(_task, *, job_id):
             raise RuntimeError("transient backend error")
 
-        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _boom)
+        monkeypatch.setattr("server.services.resume_executor.execute_resume_video_task", _boom)
         task = {
             "task_id": "boom",
             "task_type": "video",
@@ -810,10 +864,10 @@ class TestGenerationWorker:
         queue = _FakeQueue()
         worker = GenerationWorker(queue=queue)
 
-        async def _cancel(_task):
+        async def _cancel(_task, *, job_id):
             raise asyncio.CancelledError
 
-        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _cancel)
+        monkeypatch.setattr("server.services.resume_executor.execute_resume_video_task", _cancel)
         task = {
             "task_id": "rc",
             "task_type": "video",

@@ -88,14 +88,30 @@ class TestValidScripts:
 
 
 class TestModeDetection:
-    def test_reference_video_takes_priority_over_content_mode(self):
-        """generation_mode=reference_video 即使 content_mode=narration 也走 ReferenceVideoScript。
+    def test_video_units_only_picks_reference_model(self):
+        """video_units 唯一存在时走 ReferenceVideoScript，不论 content_mode 标记是什么。
 
         reference 剧本只有 video_units、无 segments；若误判为 NarrationEpisodeScript 会因缺
         segments 而 invalid。结果 valid 证明判别走了 ReferenceVideoScript。
         """
         script = _reference(content_mode="narration")
         assert script.get("content_mode") == "narration"
+        assert validate_script_structure(script).valid
+
+    def test_partial_migration_segments_picks_narration_model(self):
+        """generation_mode=reference_video 但数据仍在 segments 时，按实际数据形状校验。
+
+        这是配置/数据中间迁移态；如果 generation_mode 单向赢，会误走 ReferenceVideoScript
+        并因 video_units 缺失 invalid，导致 MCP 编辑工具无法修复现有 segments。
+        """
+        script = _narration()
+        script["generation_mode"] = "reference_video"
+        assert validate_script_structure(script).valid
+
+    def test_stray_video_units_do_not_hijack_storyboard_script(self):
+        """narration 脚本若被误塞游离 video_units，仍按 content_mode 校验真实 segments。"""
+        script = _narration()
+        script["video_units"] = [{"unit_id": "E1U1", "generated_assets": {"status": "pending"}}]
         assert validate_script_structure(script).valid
 
     def test_drama_detected_by_scenes(self):
@@ -124,6 +140,32 @@ class TestModeDetection:
 
 
 class TestInvalidNarration:
+    def test_extra_leaf_field_rejected(self):
+        seg = _segment()
+        seg["image_prompt"]["scen"] = "拼错字段"
+        result = validate_script_structure(_narration([seg]))
+        assert not result.valid
+        assert any("scen" in e and "Extra inputs" in e for e in result.errors)
+
+    def test_video_thumbnail_runtime_field_allowed(self):
+        seg = _segment()
+        seg["generated_assets"] = {"video_thumbnail": "thumbnails/E1S01.jpg"}
+        assert validate_script_structure(_narration([seg])).valid
+
+    def test_legacy_segment_field_is_stripped(self):
+        seg = _segment()
+        seg["clues_in_segment"] = ["旧线索"]
+        assert validate_script_structure(_narration([seg])).valid
+        assert "clues_in_segment" in seg
+
+    def test_legacy_drama_fields_are_stripped(self):
+        scene = _scene()
+        scene["scene_type"] = "legacy"
+        scene["clues_in_scene"] = ["旧线索"]
+        assert validate_script_structure(_drama([scene])).valid
+        assert "scene_type" in scene
+        assert "clues_in_scene" in scene
+
     def test_missing_required_top_field(self):
         script = _narration()
         del script["title"]

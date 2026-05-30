@@ -26,7 +26,7 @@ SKILLS_ROOT = BACKEND_ROOT / "agent_runtime_profile" / ".claude" / "skills"
 DASHBOARD_TS = "src/i18n/{locale}/dashboard.ts"
 LOCALES = ("zh", "en", "vi")
 
-_SKILL_KEY_RE = re.compile(r"""['"](skill_name_[a-z0-9_]+)['"]\s*:""")
+_SKILL_KEY_RE = re.compile(r"""(?:^|[\s,{])['"]?(skill_name_[a-z0-9_]+)['"]?\s*:""", re.MULTILINE)
 _USER_INVOCABLE_RE = re.compile(r"^\s*user-invocable\s*:\s*(\S+)", re.MULTILINE)
 
 

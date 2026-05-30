@@ -500,6 +500,41 @@ class TestOpenAIVideoBackend:
         assert result.video_path == output_path
         assert output_path.read_bytes() == video_data
 
+    async def test_poll_recognizes_expired_status(self, tmp_path: Path):
+        """fix #647 #5：retrieve 返回 status='expired' → 抛 ResumeExpiredError，
+        而不是白等 max_wait。"""
+        from lib.video_backends.base import ResumeExpiredError
+
+        mock_client = AsyncMock()
+        expired_video = _make_mock_video(status="expired", video_id="vid_exp")
+        mock_client.videos.retrieve = AsyncMock(return_value=expired_video)
+
+        with (
+            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
+            patch("lib.video_backends.base.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            from lib.video_backends.openai import OpenAIVideoBackend
+
+            backend = OpenAIVideoBackend(api_key="test-key")
+            request = VideoGenerationRequest(
+                prompt="x", output_path=tmp_path / "out.mp4", aspect_ratio="9:16", duration_seconds=8
+            )
+            with pytest.raises(ResumeExpiredError) as ei:
+                await backend.resume_video("vid_exp", request)
+            assert ei.value.job_id == "vid_exp"
+            assert ei.value.provider == PROVIDER_OPENAI
+
+    async def test_is_openai_not_found_no_loose_string_match(self):
+        """fix #647 #6：移除 "not found" / "expired" 子串兜底，避免业务字符串误判。"""
+        from lib.video_backends.openai import _is_openai_not_found
+
+        assert _is_openai_not_found(RuntimeError("file not found in storage")) is False
+        assert _is_openai_not_found(RuntimeError("session expired but task is fine")) is False
+        # 仍能识别 status_code=404
+        exc = RuntimeError("any")
+        exc.status_code = 404  # type: ignore[attr-defined]
+        assert _is_openai_not_found(exc) is True
+
     async def test_resume_video_not_found_raises_resume_expired(self, tmp_path: Path):
         """job 不存在/已过期 → ResumeExpiredError(走 [resume_expired] 路径)。"""
         from openai import NotFoundError
@@ -526,3 +561,29 @@ class TestOpenAIVideoBackend:
                 await backend.resume_video("vid_expired", request)
             assert ei.value.job_id == "vid_expired"
             assert ei.value.provider == PROVIDER_OPENAI
+
+    async def test_generate_expired_status_raises_runtime_error_not_resume_expired(self, tmp_path: Path):
+        """generate 路径下 status='expired' 抛 RuntimeError 而不是 ResumeExpiredError。
+
+        fresh submit 路径不该带 [resume_expired] 语义——后者只有 worker 重启接续场景才用。
+        """
+        from lib.video_backends.base import ResumeExpiredError
+
+        mock_client = AsyncMock()
+        mock_client.videos.create = AsyncMock(return_value=_make_mock_video(status="queued", video_id="vid_new"))
+        mock_client.videos.retrieve = AsyncMock(return_value=_make_mock_video(status="expired", video_id="vid_new"))
+
+        with (
+            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
+            patch("lib.video_backends.base.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            from lib.video_backends.openai import OpenAIVideoBackend
+
+            backend = OpenAIVideoBackend(api_key="test-key")
+            request = VideoGenerationRequest(
+                prompt="x", output_path=tmp_path / "out.mp4", aspect_ratio="9:16", duration_seconds=8
+            )
+            with pytest.raises(RuntimeError) as ei:
+                await backend.generate(request)
+            assert "expired" in str(ei.value).lower()
+            assert not isinstance(ei.value, ResumeExpiredError), "generate 路径不应抛 ResumeExpiredError"

@@ -261,6 +261,13 @@ class DataValidator:
         if invalid:
             errors.append(f"{prefix}: {field_label} 引用了不存在于 project.json 的{kind_label}: {invalid}")
 
+    def validate_project_payload(self, project: dict[str, Any]) -> ValidationResult:
+        """对内存中的 project.json dict 做结构校验（不读盘）。"""
+        errors: list[str] = []
+        warnings: list[str] = []
+        self._validate_project_payload(project, errors, warnings)
+        return ValidationResult(valid=len(errors) == 0, errors=errors, warnings=warnings)
+
     def validate_project(self, project_name: str) -> ValidationResult:
         """验证 project.json"""
         return self.validate_project_dir(self.projects_root / project_name)

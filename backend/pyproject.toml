@@ -34,7 +34,7 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "lxml>=6.1.0",
     "portalocker>=2.10.1",
-    "pdf-oxide>=0.3.46",
+    "pdf-oxide>=0.3.55",
     "socksio>=1.0.0",
 ]
 

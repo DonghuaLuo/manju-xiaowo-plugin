@@ -584,9 +584,18 @@ class TestSessionManagerMore:
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-        # Write .json — allowed
+        # Write root project.json — denied; project state must go through MCP patch_project.
         result = await hook(
             {"tool_name": "Write", "tool_input": {"file_path": str(own_project / "project.json")}},
+            None,
+            None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "patch_project" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+        # Write ordinary .json — allowed
+        result = await hook(
+            {"tool_name": "Write", "tool_input": {"file_path": str(own_project / "notes.json")}},
             None,
             None,
         )

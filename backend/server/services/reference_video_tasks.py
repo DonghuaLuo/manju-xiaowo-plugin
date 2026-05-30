@@ -170,6 +170,7 @@ async def execute_reference_video_task(
     payload: dict[str, Any],
     *,
     user_id: str = DEFAULT_USER_ID,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """处理一个 reference_video unit 的生成。
 
@@ -280,6 +281,7 @@ async def execute_reference_video_task(
                 aspect_ratio=project.get("aspect_ratio", "9:16"),
                 duration_seconds=effective_duration,
                 resolution=resolution,
+                task_id=task_id,
             )
         except RequestPayloadTooLargeError:
             # 二次压缩重试（1024px/q=70）
@@ -300,26 +302,53 @@ async def execute_reference_video_task(
                 aspect_ratio=project.get("aspect_ratio", "9:16"),
                 duration_seconds=effective_duration,
                 resolution=resolution,
+                task_id=task_id,
             )
     finally:
         for p in tmp_refs:
             with contextlib.suppress(Exception):
                 p.unlink(missing_ok=True)
 
-    # 8. 首帧缩略图
     if output_path is None:
         raise RuntimeError("generate_video_async returned None output_path")
+
+    return await _finalize_reference_video_unit(
+        project_name=project_name,
+        script_file=script_file,
+        project_path=project_path,
+        resource_id=resource_id,
+        output_path=output_path,
+        version=version,
+        video_uri=video_uri,
+        generator=generator,
+        warnings=warnings,
+    )
+
+
+async def _finalize_reference_video_unit(
+    *,
+    project_name: str,
+    script_file: str,
+    project_path: Path,
+    resource_id: str,
+    output_path: Path,
+    version: int,
+    video_uri: str | None,
+    generator: Any,
+    warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Normal + resume 共用：抽缩略图、写 unit.generated_assets、返回 result dict。"""
+    warnings = warnings if warnings is not None else []
+
     thumb_dir = project_path / "reference_videos" / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_path = thumb_dir / f"{resource_id}.jpg"
     if await extract_video_thumbnail(output_path, thumb_path):
-        thumb_rel = f"reference_videos/thumbnails/{resource_id}.jpg"
+        thumb_rel: str | None = f"reference_videos/thumbnails/{resource_id}.jpg"
     else:
         thumb_path.unlink(missing_ok=True)
         thumb_rel = None
 
-    # 9. 更新 unit.generated_assets（在 locked_script 内完成 read-modify-write，
-    #    避免与并发的 PATCH / 其他 unit 回写互相覆盖）
     def _update_unit_assets():
         pm = get_project_manager()
         # 资产回写热路径：只动 unit.generated_assets，结构不可能因此变坏，豁免结构校验。

@@ -22,8 +22,9 @@ FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
 DASHBOARD_TS = "src/i18n/{locale}/dashboard.ts"
 LOCALES = ("zh", "en", "vi")
 
-# Match either single- or double-quoted keys: 'tool_name_foo' or "tool_name_foo".
-_KEY_RE = re.compile(r"""['"](tool_name_[a-z0-9_]+)['"]\s*:""")
+# Match TS object keys in either shorthand or quoted form:
+# tool_name_foo: "...", 'tool_name_foo': "...", "tool_name_foo": "..."
+_KEY_RE = re.compile(r"""(?:^|[\s,{])['"]?(tool_name_[a-z0-9_]+)['"]?\s*:""", re.MULTILINE)
 
 
 def _load_tool_name_keys(locale: str) -> set[str]:

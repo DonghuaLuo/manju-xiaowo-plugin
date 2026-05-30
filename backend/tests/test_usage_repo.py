@@ -92,6 +92,190 @@ class TestUsageRepository:
         assert len(page2["items"]) == 2
 
 
+class TestFinalizePendingByCallId:
+    """Resume 路径专用：按 call_id 精准翻 pending → success/failed。"""
+
+    async def test_flips_pending_to_success(self, db_session):
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(project_name="demo", call_type="video", model="m")
+
+        # 显式 cost_amount=0.0 维持单元测试的确定性，绕过 auto-calc 路径
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, cost_amount=0.0)
+        assert affected == 1
+
+        calls = await repo.get_calls(project_name="demo")
+        assert calls["items"][0]["status"] == "success"
+        assert calls["items"][0]["cost_amount"] == 0.0
+
+    async def test_auto_calculates_cost_when_amount_omitted(self, db_session):
+        """cost_amount=None + status='success' → 按 ApiCall 行字段调 cost_calculator 算实际 cost。"""
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(
+            project_name="demo",
+            call_type="video",
+            model="veo-3.0-fast-generate-001",
+            duration_seconds=8,
+            resolution="1080p",
+            aspect_ratio="9:16",
+            generate_audio=True,
+            provider="gemini",
+        )
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id)
+        assert affected == 1
+
+        calls = await repo.get_calls(project_name="demo")
+        # auto-calc 由 cost_calculator 按 model/duration/resolution/audio 算出，应为正数
+        assert calls["items"][0]["status"] == "success"
+        assert calls["items"][0]["cost_amount"] > 0.0, "auto-calc 应算出真实 cost，不应是 0"
+
+    async def test_service_tier_passed_to_cost_calculator(self, db_session, monkeypatch):
+        """service_tier 应从 caller 透传到 cost_calculator.calculate_cost，非 default 档位才算对。"""
+        from lib import cost_calculator as cc_module
+
+        captured: dict[str, str] = {}
+
+        def _spy_calculate_cost(**kwargs):
+            captured["service_tier"] = kwargs.get("service_tier", "MISSING")
+            return (1.5, "USD")
+
+        monkeypatch.setattr(cc_module.cost_calculator, "calculate_cost", _spy_calculate_cost)
+
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(
+            project_name="demo",
+            call_type="video",
+            model="sora-2",
+            duration_seconds=8,
+            provider="openai",
+        )
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, service_tier="priority")
+        assert affected == 1
+        assert captured["service_tier"] == "priority", "service_tier 必须从 caller 透传到 cost_calculator"
+
+    async def test_usage_tokens_passed_to_cost_calculator(self, db_session, monkeypatch):
+        """Ark video 按 usage_tokens 计费，repo 必须把 caller 传入的 usage_tokens 透传到 cost_calculator，
+        否则 calculate_ark_video_cost 走 usage_tokens or 0 路径 → cost 永远为 0 CNY。"""
+        from lib import cost_calculator as cc_module
+
+        captured: dict[str, object] = {}
+
+        def _spy_calculate_cost(**kwargs):
+            captured["usage_tokens"] = kwargs.get("usage_tokens", "MISSING")
+            return (3.2, "CNY")
+
+        monkeypatch.setattr(cc_module.cost_calculator, "calculate_cost", _spy_calculate_cost)
+
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(
+            project_name="demo",
+            call_type="video",
+            model="doubao-seedance-1-0-pro",
+            duration_seconds=8,
+            provider="ark",
+        )
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, usage_tokens=12345)
+        assert affected == 1
+        assert captured["usage_tokens"] == 12345, "usage_tokens 必须从 caller 透传到 cost_calculator"
+
+        # 同时必须写回 ApiCall.usage_tokens 列，否则用量明细/抽屉里这条记录的
+        # tokens 字段永远为 null（resume 路径与正常 finish_call 路径行为不一致）。
+        calls = await repo.get_calls(project_name="demo")
+        assert calls["items"][0]["usage_tokens"] == 12345, "usage_tokens 必须 UPDATE 写回 ApiCall 行"
+
+    async def test_does_not_touch_other_pending_call(self, db_session):
+        repo = UsageRepository(db_session)
+        cid_a = await repo.start_call(project_name="demo", call_type="video", model="m", segment_id="E1S01")
+        cid_b = await repo.start_call(project_name="demo", call_type="video", model="m", segment_id="E1S01")
+
+        affected = await repo.finalize_pending_by_call_id(call_id=cid_a, cost_amount=0.0)
+        assert affected == 1
+
+        # 全量查询
+        calls = await repo.get_calls(project_name="demo", page_size=100)
+        by_id = {c["id"]: c for c in calls["items"]}
+        assert by_id[cid_a]["status"] == "success"
+        assert by_id[cid_b]["status"] == "pending", "另一条 pending 不应被 touch"
+
+    async def test_idempotent_when_already_success(self, db_session):
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(project_name="demo", call_type="video", model="m")
+        await repo.finish_call(call_id, status="success", cost_amount=5.0, currency="USD")
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, cost_amount=999.0)
+        assert affected == 0, "已 success 行应保持不变"
+
+        calls = await repo.get_calls(project_name="demo")
+        assert calls["items"][0]["cost_amount"] == 5.0, "cost 未被覆写"
+
+    async def test_finalize_failed_status(self, db_session):
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(project_name="demo", call_type="video", model="m")
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, status="failed")
+        assert affected == 1
+
+        calls = await repo.get_calls(project_name="demo")
+        assert calls["items"][0]["status"] == "failed"
+        assert calls["items"][0]["cost_amount"] == 0.0
+
+    async def test_unknown_call_id_returns_zero(self, db_session):
+        repo = UsageRepository(db_session)
+        affected = await repo.finalize_pending_by_call_id(call_id=99999)
+        assert affected == 0
+
+    async def test_writes_duration_ms(self, db_session):
+        """resume 完成的调用必须回写 duration_ms，否则 get_stats_grouped_by_provider 的
+        provider 级时长统计会因 NULL 系统性压低。"""
+        repo = UsageRepository(db_session)
+        call_id = await repo.start_call(project_name="demo", call_type="video", model="m")
+
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, cost_amount=0.0)
+        assert affected == 1
+
+        calls = await repo.get_calls(project_name="demo")
+        item = calls["items"][0]
+        # started_at 与 finished_at 同瞬间内完成；duration_ms 必须是已写入的非 None 整数
+        assert item["duration_ms"] is not None
+        assert item["duration_ms"] >= 0
+
+    async def test_generate_audio_override_passed_to_cost_calculator(self, db_session, monkeypatch):
+        """provider 在 submit 后可能降级/关闭音频；finalize 接受 caller 透传的 generate_audio
+        覆盖 ApiCall 行上 start_call 时的请求值（与 finish_call 同语义），cost_calculator 也应收到
+        覆盖后的值，避免按请求值误计费。"""
+        from lib import cost_calculator as cc_module
+
+        captured: dict[str, object] = {}
+
+        def _spy_calculate_cost(**kwargs):
+            captured["generate_audio"] = kwargs.get("generate_audio", "MISSING")
+            return (1.5, "USD")
+
+        monkeypatch.setattr(cc_module.cost_calculator, "calculate_cost", _spy_calculate_cost)
+
+        repo = UsageRepository(db_session)
+        # start_call 时请求 generate_audio=True
+        call_id = await repo.start_call(
+            project_name="demo",
+            call_type="video",
+            model="veo-3.0-fast-generate-001",
+            duration_seconds=8,
+            generate_audio=True,
+            provider="gemini",
+        )
+
+        # provider 实际降级到关闭音频
+        affected = await repo.finalize_pending_by_call_id(call_id=call_id, generate_audio=False)
+        assert affected == 1
+        assert captured["generate_audio"] is False, "generate_audio 透传必须覆盖到 cost_calculator"
+
+        # 并且 ApiCall.generate_audio 也回写为降级后的实际值
+        calls = await repo.get_calls(project_name="demo")
+        assert calls["items"][0]["generate_audio"] is False
+
+
 class TestMultiProviderUsage:
     async def test_ark_call_records_provider_and_tokens(self, db_session):
         repo = UsageRepository(db_session)

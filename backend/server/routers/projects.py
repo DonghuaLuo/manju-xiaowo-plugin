@@ -76,6 +76,8 @@ class CreateProjectRequest(BaseModel):
     content_mode: ContentMode | None = "narration"
     aspect_ratio: str | None = "9:16"
     default_duration: int | None = None
+    episode_target_units: int | None = 1000
+    source_language: Literal["zh", "en", "vi"] | None = "zh"
     generation_mode: str | None = None
     # ===== 新增 =====
     style_template_id: str | None = None
@@ -110,6 +112,8 @@ class UpdateProjectRequest(BaseModel):
     content_mode: ContentMode | None = None
     aspect_ratio: str | None = None
     default_duration: int | None = None
+    episode_target_units: int | None = None
+    source_language: Literal["zh", "en", "vi"] | None = None
     generation_mode: str | None = None
     video_backend: str | None = None
     image_backend: str | None = None
@@ -123,6 +127,14 @@ class UpdateProjectRequest(BaseModel):
     clear_style_image: bool | None = None
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
+
+
+def _validate_episode_target_units(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value < 1:
+        raise HTTPException(status_code=400, detail="每集目标长度必须大于 0")
+    return int(value)
 
 
 @router.get("/style-templates")
@@ -468,6 +480,7 @@ async def create_project(
             # 避免迁移后再写时被解析链忽略、静默落到全局默认的另一供应商。
             if req.image_backend:
                 raise HTTPException(status_code=400, detail=_t("deprecated_image_backend"))
+            episode_target_units = _validate_episode_target_units(req.episode_target_units)
 
             # 与 update 路径对称：校验所有 backend 字段
             for field_name in (
@@ -500,6 +513,10 @@ async def create_project(
             }
             if req.model_settings is not None:
                 extras["model_settings"] = req.model_settings
+            if req.source_language is not None:
+                extras["source_language"] = req.source_language
+            if episode_target_units is not None:
+                extras["episode_target_units"] = episode_target_units
             # generation_mode 并入 extras 一次性写入，避免 create 后再 load-save 的额外 RMW
             if req.generation_mode is not None:
                 extras["generation_mode"] = req.generation_mode
@@ -665,6 +682,17 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                         project.pop("default_duration", None)
                     else:
                         project["default_duration"] = req.default_duration
+                if "episode_target_units" in req.model_fields_set:
+                    episode_target_units = _validate_episode_target_units(req.episode_target_units)
+                    if episode_target_units is None:
+                        project.pop("episode_target_units", None)
+                    else:
+                        project["episode_target_units"] = episode_target_units
+                if "source_language" in req.model_fields_set:
+                    if req.source_language is None:
+                        project.pop("source_language", None)
+                    else:
+                        project["source_language"] = req.source_language
 
                 if "style_template_id" in req.model_fields_set:
                     if req.style_template_id is None:

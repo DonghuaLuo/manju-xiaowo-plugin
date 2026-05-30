@@ -15,7 +15,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AssetSpec:
-    """单一资产类型的所有结构性属性。"""
+    """单一资产类型的所有结构性属性。
+
+    extra_string_fields 是 schema 维度，用于校验和常规 API 默认字段；agent_editable_extra_fields
+    是权限维度，用于 patch_project 的 MCP 写入白名单。两者不能混用：reference_image 是用户
+    上传/系统管理的路径字段，应通过专用 API 更新，不允许 Agent 直接覆写。
+    """
 
     asset_type: str
     bucket_key: str
@@ -23,6 +28,7 @@ class AssetSpec:
     subdir: str
     label_zh: str
     extra_string_fields: tuple[str, ...] = ()
+    agent_editable_extra_fields: tuple[str, ...] = ()
 
 
 ASSET_SPECS: dict[str, AssetSpec] = {
@@ -33,6 +39,7 @@ ASSET_SPECS: dict[str, AssetSpec] = {
         subdir="characters",
         label_zh="角色",
         extra_string_fields=("voice_style", "reference_image"),
+        agent_editable_extra_fields=("voice_style",),
     ),
     "scene": AssetSpec(
         asset_type="scene",
@@ -41,6 +48,7 @@ ASSET_SPECS: dict[str, AssetSpec] = {
         subdir="scenes",
         label_zh="场景",
         extra_string_fields=(),
+        agent_editable_extra_fields=(),
     ),
     "prop": AssetSpec(
         asset_type="prop",
@@ -49,6 +57,7 @@ ASSET_SPECS: dict[str, AssetSpec] = {
         subdir="props",
         label_zh="道具",
         extra_string_fields=(),
+        agent_editable_extra_fields=(),
     ),
 }
 

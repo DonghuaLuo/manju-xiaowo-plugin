@@ -16,7 +16,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import portalocker
 from pydantic import BaseModel, Field
@@ -36,7 +36,7 @@ from lib.profile_manifest import (
     force_resync_profile as _force_resync_profile,
 )
 from lib.project_change_hints import emit_project_change_hint
-from lib.script_models import SCRIPT_SHAPES, ScriptShape
+from lib.script_editor import ScriptEditError, resolve_items
 from lib.style_templates import LEGACY_STYLE_MAP, resolve_template_prompt
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,22 @@ def effective_mode(*, project: dict, episode: dict) -> str:
     return _DEFAULT_GENERATION_MODE
 
 
-def _script_items_shape(script: dict, content_mode: str) -> ScriptShape:
-    """选剧本列表所在的形状（字段名取自 lib.script_models.SCRIPT_SHAPES）。
+def _resolve_items_or_warn(script: dict, *, script_filename: str | None = None) -> list[dict]:
+    """读取侧容错：剧本列表键损坏时降级为空列表并写 warning。
 
-    仅当 content_mode=narration **且**脚本确有 narration 列表键时走 narration 形状；
-    否则落 drama 形状——这覆盖了 narration 但数据畸形落在 `scenes` 键下的回退，保持
-    与历史 `if content_mode == "narration" and "segments" in script` 守卫一致。
+    写入侧直接使用 `resolve_items`，让结构损坏显式失败；读取侧用于 UI/查询 helper，
+    保持页面可渲染，同时留下可观测信号。
     """
-    narration = SCRIPT_SHAPES["narration"]
-    if content_mode == "narration" and narration.items_key in script:
-        return narration
-    return SCRIPT_SHAPES["drama"]
+    try:
+        items, _id_field, _kind = resolve_items(script)
+        return items
+    except ScriptEditError as e:
+        logger.warning(
+            "剧本 %s 数据损坏（%s），读取降级为空列表——请人工修复",
+            script_filename or "<unknown>",
+            e,
+        )
+        return []
 
 
 class EpisodeScriptReboundError(RuntimeError):
@@ -96,6 +101,7 @@ class ProjectOverview(BaseModel):
     genre: str = Field(description="题材类型，如：古装宫斗、现代悬疑、玄幻修仙")
     theme: str = Field(description="核心主题，如：复仇与救赎、成长与蜕变")
     world_setting: str = Field(description="时代背景和世界观设定，100-200字")
+    language: Literal["zh", "en", "vi"] = Field(description="小说源语言代码")
 
 
 class ProjectManager:
@@ -548,30 +554,28 @@ class ProjectManager:
         metadata.setdefault("status", "draft")
         metadata["updated_at"] = now
 
-        scenes = script.get("scenes", [])
-        if not isinstance(scenes, list):
-            scenes = []
-        segments = script.get("segments", [])
-        if not isinstance(segments, list):
-            segments = []
-
-        content_mode = script.get("content_mode", "narration")
-        if content_mode == "narration" and segments:
-            items = segments
-            items_type = "segments"
-        elif scenes:
-            items = scenes
-            items_type = "scenes"
+        try:
+            items, _id_field, kind = resolve_items(script)
+        except ScriptEditError as e:
+            logger.warning(
+                "剧本 %s 数据损坏（%s），跳过 metadata 重算以保留旧值",
+                output_path.name,
+                e,
+            )
         else:
-            items = segments
-            items_type = "segments"
+            metadata["total_scenes"] = len(items)
 
-        metadata["total_scenes"] = len(items)
+            default_duration = 4 if kind == "segments" else 8
 
-        # 计算总时长：按当前选中的数据结构决定回退值，避免 content_mode 缺失时误判
-        default_duration = 4 if items_type == "segments" else 8
-        total_duration = sum(item.get("duration_seconds", default_duration) for item in items)
-        metadata["estimated_duration_seconds"] = total_duration
+            def _duration(item: dict) -> int:
+                value = item.get("duration_seconds")
+                if isinstance(value, bool):
+                    return default_duration
+                if isinstance(value, (int, float)):
+                    return int(value)
+                return default_duration
+
+            metadata["estimated_duration_seconds"] = sum(_duration(item) for item in items)
 
         # 原子写（含路径遍历防护，output_path 已在守卫前解析），避免并发 PATCH 导致 JSON 损坏
         atomic_write_json(output_path, script)
@@ -1091,11 +1095,8 @@ class ProjectManager:
         """
         # 资产回写热路径：只动 generated_assets，结构不可能因此变坏，豁免结构校验。
         with self.locked_script(project_name, script_filename, validate=False) as script:
-            # 根据内容模式选择正确的数据结构
             content_mode = script.get("content_mode", "narration")
-            shape = _script_items_shape(script, content_mode)
-            items = script.get(shape.items_key, [])
-            id_field = shape.id_field
+            items, id_field, _kind = resolve_items(script)
 
             for item in items:
                 if str(item.get(id_field)) == str(scene_id):
@@ -1141,16 +1142,16 @@ class ProjectManager:
         # 资产回写热路径：只动 generated_assets，结构不可能因此变坏，豁免结构校验。
         with self.locked_script(project_name, script_filename, validate=False) as script:
             content_mode = script.get("content_mode", "narration")
-            shape = _script_items_shape(script, content_mode)
-            items = script.get(shape.items_key, [])
-            id_field = shape.id_field
+            items, id_field, _kind = resolve_items(script)
 
             # 建立 scene_id → item 索引，避免 O(N*M) 查找
             item_by_id: dict[str, dict] = {str(item.get(id_field)): item for item in items}
+            missing: list[str] = []
 
             for scene_id, asset_type, asset_path in updates:
                 item = item_by_id.get(str(scene_id))
                 if item is None:
+                    missing.append(str(scene_id))
                     continue
 
                 assets = item.get("generated_assets")
@@ -1165,6 +1166,9 @@ class ProjectManager:
 
                 assets[asset_type] = asset_path
                 self.update_scene_status(item)
+
+            if missing:
+                raise KeyError(f"批量回写命中失败：以下分镜不存在 {sorted(set(missing))}")
         return script
 
     def get_pending_scenes(self, project_name: str, script_filename: str, asset_type: str) -> list[dict]:
@@ -1181,11 +1185,13 @@ class ProjectManager:
         """
         script = self.load_script(project_name, script_filename)
 
-        # 根据内容模式选择正确的数据结构
-        content_mode = script.get("content_mode", "narration")
-        items = script.get(_script_items_shape(script, content_mode).items_key, [])
+        items = _resolve_items_or_warn(script, script_filename=script_filename)
 
-        return [item for item in items if not item["generated_assets"].get(asset_type)]
+        def _missing(item: dict) -> bool:
+            assets = item.get("generated_assets")
+            return not isinstance(assets, dict) or not assets.get(asset_type)
+
+        return [item for item in items if _missing(item)]
 
     # ==================== 文件路径工具 ====================
 
@@ -1222,10 +1228,13 @@ class ProjectManager:
         """
         script = self.load_script(project_name, script_filename)
 
-        content_mode = script.get("content_mode", "narration")
-        items = script.get(_script_items_shape(script, content_mode).items_key, [])
+        items = _resolve_items_or_warn(script, script_filename=script_filename)
 
-        return [item for item in items if not item.get("generated_assets", {}).get("storyboard_image")]
+        def _missing_storyboard(item: dict) -> bool:
+            assets = item.get("generated_assets")
+            return not isinstance(assets, dict) or not assets.get("storyboard_image")
+
+        return [item for item in items if _missing_storyboard(item)]
 
     # ==================== 项目级元数据管理 ====================
 
@@ -1456,6 +1465,8 @@ class ProjectManager:
             "title": project_title,
             "content_mode": content_mode or "narration",
             "aspect_ratio": aspect_ratio or "9:16",
+            "source_language": "zh",
+            "episode_target_units": 1000,
             "style": style or "",
             "episodes": [],
             "characters": {},
@@ -1665,6 +1676,97 @@ class ProjectManager:
         """更新项目级角色设计图路径"""
         return self._update_asset_sheet("character", project_name, name, sheet_path)
 
+    def upsert_assets(self, project_name: str, table: str, entries: dict[str, dict]) -> dict[str, Any]:
+        """按 table（characters/scenes/props）+ name upsert 资产。"""
+        from lib.data_validator import DataValidator
+
+        asset_type = self._BUCKET_TO_ASSET_TYPE.get(table)
+        if asset_type is None:
+            raise ValueError(f"未知资产表: {table!r}，须是 {sorted(self._BUCKET_TO_ASSET_TYPE)} 之一")
+        if not isinstance(entries, dict):
+            raise ValueError(f"entries 必须是对象（dict），当前为 {type(entries).__name__}")
+        if not entries:
+            raise ValueError("entries 不能为空（至少需要一个 name → attrs 条目）")
+
+        normalized_entries: dict[str, dict] = {}
+        raw_keys_by_normalized: dict[str, str] = {}
+        for raw_name, attrs in entries.items():
+            name = raw_name.strip() if isinstance(raw_name, str) else raw_name
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"{table} 的名称不能为空或仅含空白字符")
+            if not isinstance(attrs, dict):
+                raise ValueError(f"{table} '{name}' 的内容必须是对象")
+            if name in normalized_entries:
+                raise ValueError(
+                    f"{table} 的 entries 含规范化后冲突的 name {name!r}: "
+                    f"原始键 {raw_keys_by_normalized[name]!r} 与 {raw_name!r} 在 strip 后等价"
+                )
+            normalized_entries[name] = attrs
+            raw_keys_by_normalized[name] = raw_name
+
+        spec = ASSET_SPECS[asset_type]
+        allowed_fields = {"description", *spec.agent_editable_extra_fields}
+        cleaned: dict[str, dict[str, Any]] = {}
+        dropped_fields: dict[str, list[str]] = {}
+        dropped_legacy: dict[str, list[str]] = {}
+        for name, attrs in normalized_entries.items():
+            legacy_keys = sorted(set(attrs) & self._LEGACY_ASSET_FIELDS)
+            if legacy_keys:
+                dropped_legacy[name] = legacy_keys
+            entry_clean: dict[str, Any] = {}
+            non_allowed: list[str] = []
+            for key, value in self._strip_legacy_asset_fields(attrs).items():
+                if key in allowed_fields:
+                    entry_clean[key] = value
+                else:
+                    non_allowed.append(key)
+            if non_allowed:
+                dropped_fields[name] = sorted(non_allowed)
+            cleaned[name] = entry_clean
+
+        added: list[str] = []
+        merged: list[str] = []
+        noop: list[str] = []
+
+        def _mutate(project: dict) -> None:
+            validator = DataValidator(str(self.projects_root))
+            before_errors = set(validator.validate_project_payload(project).errors)
+            bucket = project.setdefault(spec.bucket_key, {})
+            if not isinstance(bucket, dict):
+                raise ValueError(f"project[{spec.bucket_key!r}] 必须是对象，当前为 {type(bucket).__name__}")
+            for name, attrs in cleaned.items():
+                existing = isinstance(bucket.get(name), dict)
+                if existing and not attrs:
+                    noop.append(name)
+                    continue
+                if existing:
+                    bucket[name].update(attrs)
+                    merged.append(name)
+                else:
+                    bucket[name] = self._build_asset_entry(asset_type, attrs.get("description", ""), attrs)
+                    added.append(name)
+            after_errors = set(validator.validate_project_payload(project).errors)
+            new_errors = after_errors - before_errors
+            if new_errors:
+                raise ValueError("project.json 结构校验失败: " + "; ".join(sorted(new_errors)))
+
+        self.update_project(project_name, _mutate)
+        return {
+            "added": added,
+            "merged": merged,
+            "noop": noop,
+            "dropped_fields": dropped_fields,
+            "dropped_legacy": dropped_legacy,
+        }
+
+    _BUCKET_TO_ASSET_TYPE = {spec.bucket_key: asset_type for asset_type, spec in ASSET_SPECS.items()}
+    _LEGACY_ASSET_FIELDS = frozenset({"type", "importance"})
+
+    @classmethod
+    def _strip_legacy_asset_fields(cls, attrs: dict) -> dict:
+        """剔除旧式 type/importance 字段。"""
+        return {key: value for key, value in attrs.items() if key not in cls._LEGACY_ASSET_FIELDS}
+
     def update_character_reference_image(self, project_name: str, char_name: str, ref_path: str) -> dict:
         """
         更新角色的参考图路径
@@ -1870,7 +1972,7 @@ class ProjectManager:
             project_name: 项目名称
 
         Returns:
-            生成的 overview 字典，包含 synopsis, genre, theme, world_setting, generated_at
+            生成的 overview 字典，包含 synopsis, genre, theme, world_setting, language, generated_at
         """
         from .text_backends.base import TextGenerationRequest, TextTaskType
         from .text_generator import TextGenerator
@@ -1884,7 +1986,11 @@ class ProjectManager:
         generator = await TextGenerator.create(TextTaskType.OVERVIEW, project_name)
 
         # 调用 TextGenerator（Structured Outputs）
-        prompt = f"请分析以下小说内容，提取关键信息：\n\n{source_content}"
+        prompt = (
+            "请分析以下小说内容，提取关键信息；同时判断小说源语言，"
+            "language 只能输出 zh、en、vi 之一。\n\n"
+            f"{source_content}"
+        )
 
         result = await generator.generate(
             TextGenerationRequest(
@@ -1903,6 +2009,7 @@ class ProjectManager:
         # 保存到 project.json（RMW 在单一 _project_lock 内完成，避免并发覆盖其它字段）
         def _mutate(project: dict) -> None:
             project["overview"] = overview_dict
+            project["source_language"] = overview_dict["language"]
 
         self.update_project(project_name, _mutate)
 

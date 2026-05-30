@@ -7,10 +7,10 @@
 ## 本次对齐记录
 
 - 本次同步来源：`E:\rust_python\ArcReel`
-- 本次 pull 记录：`2026-05-26 15:44:52 +0800`，`merge origin/main: Fast-forward`
-- 本次检查范围：`9cada0c..c27c30c`
-- 本次已对齐到 ArcReel commit：`c27c30c3568558d1ce3d238feb39d1c72bd69adb`（短 hash：`c27c30c`）
-- 后续继续同步时，默认以 `c27c30c3568558d1ce3d238feb39d1c72bd69adb` 作为已对齐基线，只评估 ArcReel 在此之后新增的更新。
+- 本次 pull 记录：`2026-05-29` 复审本地 ArcReel HEAD，`E:\rust_python\ArcReel` 当前为 `d0fcf676fc4283a5a7a2ec1458d73e37a143964f`
+- 本次检查范围：`c27c30c3568558d1ce3d238feb39d1c72bd69adb..d0fcf676fc4283a5a7a2ec1458d73e37a143964f`
+- 本次已评估到 ArcReel commit：`d0fcf676fc4283a5a7a2ec1458d73e37a143964f`（短 hash：`d0fcf67`）
+- 详细采纳记录见 `arcreel-sync-evaluation-2026-05-29.md`。后续继续同步时，默认以 `d0fcf676fc4283a5a7a2ec1458d73e37a143964f` 作为已评估基线，只评估 ArcReel 在此之后新增的更新。
 
 ## 本地审查待处理问题
 

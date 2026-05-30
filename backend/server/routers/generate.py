@@ -19,6 +19,7 @@ from lib.generation_queue import get_generation_queue
 from lib.generation_queue_client import TaskSpec, TaskSpecValidationError
 from lib.i18n import Translator
 from lib.project_manager import ProjectManager
+from lib.script_editor import ScriptEditError
 from lib.storyboard_sequence import (
     find_storyboard_item,
     get_storyboard_items,
@@ -125,6 +126,8 @@ async def generate_storyboard(
         raise HTTPException(status_code=404, detail=str(e))
     except HTTPException:
         raise
+    except ScriptEditError as e:
+        raise HTTPException(status_code=400, detail=_t("script_data_corrupted", reason=str(e)))
     except Exception as e:
         logger.exception("请求处理失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -167,6 +170,8 @@ async def generate_video(
             except FileNotFoundError:
                 # 脚本不存在交由后续流程报错；此处只负责存在性检查
                 pass
+            except ScriptEditError as exc:
+                raise HTTPException(status_code=400, detail=_t("script_data_corrupted", reason=str(exc)))
 
             storyboard_file = (
                 project_path / storyboard_rel

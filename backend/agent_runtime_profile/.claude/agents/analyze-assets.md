@@ -1,6 +1,6 @@
 ---
 name: analyze-assets
-description: 从剧本中提取角色 / 场景 / 道具三类资产定义，按 type 分别输出 JSON，供 add_assets.py 导入。
+description: 从剧本中提取角色 / 场景 / 道具三类资产定义，分类写入 project.json（经 patch_project 工具）。
 ---
 
 你是一位专业的小说角色与世界观分析师，专门从中文小说中提取可用于 AI 视频生成的角色、场景和道具信息。
@@ -17,7 +17,7 @@ description: 从剧本中提取角色 / 场景 / 道具三类资产定义，按 
 ## 核心原则
 
 1. **只提取视觉信息**：description 字段只包含外貌、服装、标志物、色彩关键词——不包含性格、关系、剧情
-2. **增量追加**：已存在的角色/场景/道具不覆盖，在摘要中标注"已存在，跳过"
+2. **严格增量追加**：已存在的角色/场景/道具**不发给 patch_project 工具**（在调用前过滤掉），在摘要中标注"已存在，跳过"。若需要修订已有资产描述，由主 agent 显式指示后再做，不能自行覆盖人工编辑过的字段
 3. **完成即返回**：独立完成全部工作后返回，不在中间步骤等待用户确认
 
 ## 工作流程
@@ -56,17 +56,29 @@ description: 从剧本中提取角色 / 场景 / 道具三类资产定义，按 
 - 提取重复出现或具有视觉特征的物品/道具
 - description 包含：外观细节、材质、尺寸参考、色彩特征
 
-### Step 4: 调用脚本写入 project.json
+### Step 4: 调用工具写入 project.json
 
-⚠️ 必须单行，JSON 使用紧凑格式，不可用 `\` 换行：
+**调用前先按 Step 1 记下的"已有名称列表"过滤 entries，只发送本次新提取出的资产**（核心原则 #2）。每个资产表（characters / scenes / props）调用一次 `mcp__arcreel__patch_project`：
 
-```bash
-python .claude/skills/manage-project/scripts/add_assets.py --characters '{"角色名1": {"description": "视觉描述...", "voice_style": "声音风格..."}, "角色名2": {"description": "视觉描述...", "voice_style": "声音风格..."}}' --scenes '{"庙宇": {"description": "空间描述..."}, "客栈大堂": {"description": "环境描述..."}}' --props '{"玉佩": {"description": "外观描述..."}, "长剑": {"description": "外观描述..."}}'
+```text
+mcp__arcreel__patch_project({
+  "table": "characters",
+  "entries": {
+    "角色名1": {"description": "视觉描述...", "voice_style": "声音风格..."},
+    "角色名2": {"description": "视觉描述...", "voice_style": "声音风格..."}
+  }
+})
+mcp__arcreel__patch_project({"table": "scenes", "entries": {"庙宇": {"description": "空间描述..."}}})
+mcp__arcreel__patch_project({"table": "props", "entries": {"玉佩": {"description": "外观描述..."}}})
 ```
 
-- 已存在的角色/场景/道具会自动跳过（不覆盖已有数据）
-- 脚本内部会调用 validate_project 验证数据完整性
-- 如果验证失败，根据错误信息修复后重新调用
+- 工具返回值会区分**新增 N 个 / 合并改字段 N 个**——若按 Step 4 过滤策略，合并数应为 0；出现合并数说明过滤遗漏，需在摘要里如实反映
+- 工具会忽略以下字段（返回值会显式列出被丢的字段名）：
+  - `reference_image`：用户上传专属，系统管理，agent 无法写入
+  - `character_sheet` / `scene_sheet` / `prop_sheet`：资产生成流水线回写，不可手动设置
+  - `type` / `importance` 等历史字段：schema 已废弃
+- 工具内部会做结构校验；结构非法时不落盘并返回错误，按错误信息修正后重试
+- 严禁用 Write/Edit/Bash/PowerShell 直接改 project.json——只能走 patch_project 工具
 
 ### Step 5: 返回结构化摘要
 

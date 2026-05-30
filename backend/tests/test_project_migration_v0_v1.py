@@ -96,7 +96,7 @@ def test_migrate_idempotent(tmp_path: Path):
     p = _make_v0_project(tmp_path)
     migrate_v0_to_v1(p)
     migrate_v0_to_v1(p)  # 再跑一次不应抛错
-    data = json.loads((p / "project.json").read_text())
+    data = json.loads((p / "project.json").read_text(encoding="utf-8"))
     assert data["schema_version"] == 1
 
 

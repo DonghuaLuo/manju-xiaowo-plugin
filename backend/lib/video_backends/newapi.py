@@ -28,8 +28,7 @@ from lib.video_backends.base import (
     VideoGenerationRequest,
     VideoGenerationResult,
     download_video,
-    get_resume_job_id,
-    persist_job_id_if_in_task_context,
+    persist_provider_job_id,
     poll_with_retry,
 )
 
@@ -112,11 +111,6 @@ class NewAPIVideoBackend:
         return VideoCapabilities(reference_images=False, max_reference_images=0)
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
-        # 重启自愈：worker _process_resume_task 入口 set _RESUME_JOB_ID 时跳 submit
-        resume_id = get_resume_job_id()
-        if resume_id is not None:
-            return await self.resume_video(resume_id, request)
-
         width, height = _resolve_size(request.resolution, request.aspect_ratio)
         payload: dict = {
             "model": self._model,
@@ -153,33 +147,58 @@ class NewAPIVideoBackend:
         logger.info("调用 %s 视频 SDK payload=%s", self.name, format_kwargs_for_log(payload))
 
         async with httpx.AsyncClient(timeout=self._http_timeout) as client:
-            task_id = await self._create_task(client, payload)
-            logger.info("NewAPI 任务创建: task_id=%s", task_id)
-            await persist_job_id_if_in_task_context(task_id)
-            return await self._poll_and_build(client, task_id, request)
+            provider_task_id = await self._create_task(client, payload)
+            logger.info("NewAPI 任务创建: task_id=%s", provider_task_id)
+            if request.task_id is not None:
+                await persist_provider_job_id(request.task_id, provider_task_id, provider=PROVIDER_NEWAPI)
+            return await self._poll_and_build(client, provider_task_id, request, is_resume=False)
 
     async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
         """接续已 submit 的 NewAPI task：仅 poll + 下载。"""
-        try:
-            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
-                return await self._poll_and_build(client, job_id, request)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                raise ResumeExpiredError(job_id=job_id, provider=PROVIDER_NEWAPI) from exc
-            raise
+        async with httpx.AsyncClient(timeout=self._http_timeout) as client:
+            return await self._poll_and_build(client, job_id, request, is_resume=True)
 
     async def _poll_and_build(
-        self, client: httpx.AsyncClient, task_id: str, request: VideoGenerationRequest
+        self,
+        client: httpx.AsyncClient,
+        task_id: str,
+        request: VideoGenerationRequest,
+        *,
+        is_resume: bool,
     ) -> VideoGenerationResult:
+        # _is_done 纯谓词：completed / failed / expired 均视为终态；caller 按 is_resume
+        # flag 决定 expired 抛 RuntimeError（generate）还是 ResumeExpiredError（resume）。
+        # resume 路径下 4xx（特别 404）由 _gated_poll 直接抛 ResumeExpiredError 而不
+        # 走 poll_with_retry 的 HTTPStatusError 重试：原 retryable_errors 包含
+        # HTTPStatusError 会让 404 被无限重试到 max_wait 超时，过期任务永远不会落
+        # [resume_expired]，对应 pending ApiCall 也不走 failed/cost=0 路径。
+        async def _gated_poll() -> dict:
+            try:
+                return await self._poll_once(client, task_id)
+            except httpx.HTTPStatusError as exc:
+                if is_resume and exc.response.status_code == 404:
+                    raise ResumeExpiredError(job_id=task_id, provider=PROVIDER_NEWAPI) from exc
+                raise
+
         final = await poll_with_retry(
-            poll_fn=lambda: self._poll_once(client, task_id),
-            is_done=lambda s: s.get("status") == "completed",
+            poll_fn=_gated_poll,
+            is_done=lambda state: state.get("status") in ("completed", "failed", "expired"),
             is_failed=_extract_failure,
             poll_interval=_POLL_INTERVAL_SECONDS,
             max_wait=self._max_wait(request.duration_seconds),
             retryable_errors=_NEWAPI_RETRYABLE_ERRORS,
             label="NewAPI",
         )
+
+        if final.get("status") == "expired":
+            if is_resume:
+                raise ResumeExpiredError(
+                    job_id=task_id,
+                    provider=PROVIDER_NEWAPI,
+                    message=f"NewAPI task expired: {task_id}",
+                )
+            raise RuntimeError(f"NewAPI task expired during generate: {task_id}")
+
         video_url = final.get("url")
         if not video_url:
             raise RuntimeError(f"NewAPI 任务完成但缺少 url 字段: {final}")

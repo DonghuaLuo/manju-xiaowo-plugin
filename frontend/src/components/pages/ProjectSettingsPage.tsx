@@ -50,6 +50,22 @@ function deriveStyleValue(
   };
 }
 
+type SourceLanguage = "zh" | "en" | "vi";
+
+const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
+const DEFAULT_EPISODE_TARGET_UNITS = 1000;
+
+function normalizeSourceLanguage(value: unknown): SourceLanguage {
+  return value === "en" || value === "vi" ? value : "zh";
+}
+
+function normalizeEpisodeTargetUnits(value: unknown): number {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? Math.floor(numericValue)
+    : DEFAULT_EPISODE_TARGET_UNITS;
+}
+
 // ─── Section card primitive ─────────────────────────────────────────────────
 
 interface SectionCardProps {
@@ -132,6 +148,8 @@ export function ProjectSettingsPage() {
   const [aspectRatio, setAspectRatio] = useState<string>("");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("storyboard");
   const [defaultDuration, setDefaultDuration] = useState<number | null>(null);
+  const [episodeTargetUnits, setEpisodeTargetUnits] = useState<string>(String(DEFAULT_EPISODE_TARGET_UNITS));
+  const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("zh");
   const [videoResolution, setVideoResolution] = useState<string | null>(null);
   const [imageResolution, setImageResolution] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<Record<string, { resolution: string | null }>>({});
@@ -151,6 +169,8 @@ export function ProjectSettingsPage() {
     textScript: "", textOverview: "", textStyle: "",
     aspectRatio: "", generationMode: "storyboard",
     defaultDuration: null as number | null,
+    episodeTargetUnits: String(DEFAULT_EPISODE_TARGET_UNITS),
+    sourceLanguage: "zh" as SourceLanguage,
     videoResolution: null as string | null,
     imageResolution: null as string | null,
   });
@@ -219,6 +239,9 @@ export function ProjectSettingsPage() {
       const ar = rawAr || "9:16";
       const gm = normalizeMode(project.generation_mode);
       const dd = project.default_duration != null ? (project.default_duration as number) : null;
+      const targetUnits = normalizeEpisodeTargetUnits(project.episode_target_units);
+      const targetUnitsInput = String(targetUnits);
+      const lang = normalizeSourceLanguage(project.source_language);
 
       setVideoBackend(vb);
       setImageBackendT2I(ibt2i);
@@ -230,6 +253,8 @@ export function ProjectSettingsPage() {
       setAspectRatio(ar);
       setGenerationMode(gm);
       setDefaultDuration(dd);
+      setEpisodeTargetUnits(targetUnitsInput);
+      setSourceLanguage(lang);
       setProjectTitle(typeof project.title === "string" ? project.title : "");
 
       // model_settings 的 key 以 effective backend（override ‖ global default）读写，
@@ -260,6 +285,7 @@ export function ProjectSettingsPage() {
         videoBackend: vb, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i, audioOverride: ao,
         textScript: ts, textOverview: to, textStyle: tst,
         aspectRatio: ar, generationMode: gm, defaultDuration: dd,
+        episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
         videoResolution: vRes, imageResolution: iRes,
       };
     }));
@@ -312,6 +338,8 @@ export function ProjectSettingsPage() {
     aspectRatio !== initialRef.current.aspectRatio ||
     generationMode !== initialRef.current.generationMode ||
     defaultDuration !== initialRef.current.defaultDuration ||
+    episodeTargetUnits !== initialRef.current.episodeTargetUnits ||
+    sourceLanguage !== initialRef.current.sourceLanguage ||
     videoResolution !== initialRef.current.videoResolution ||
     imageResolution !== initialRef.current.imageResolution ||
     styleIsDirty;
@@ -436,6 +464,8 @@ export function ProjectSettingsPage() {
         newModelSettings[effectiveImageT2I] = { resolution: imageResolution };
       }
 
+      const normalizedEpisodeTargetUnits = normalizeEpisodeTargetUnits(episodeTargetUnits);
+
       await API.updateProject(projectName, {
         video_backend: videoBackend || null,
         image_provider_t2i: imageBackendT2I || null,
@@ -447,13 +477,18 @@ export function ProjectSettingsPage() {
         aspect_ratio: aspectRatio || undefined,
         generation_mode: generationMode,
         default_duration: defaultDuration,
+        episode_target_units: normalizedEpisodeTargetUnits,
+        source_language: sourceLanguage,
         model_settings: newModelSettings,
       });
+      const savedEpisodeTargetUnits = String(normalizedEpisodeTargetUnits);
+      setEpisodeTargetUnits(savedEpisodeTargetUnits);
       setModelSettings(newModelSettings);
       initialRef.current = {
         videoBackend, imageBackendT2I, imageBackendI2I, audioOverride,
         textScript, textOverview, textStyle,
         aspectRatio, generationMode, defaultDuration,
+        episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
         videoResolution, imageResolution,
       };
       useAppStore.getState().pushToast(t("saved"), "success");
@@ -462,7 +497,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, videoResolution, imageResolution, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
 
   return (
     <div
@@ -624,6 +659,49 @@ export function ProjectSettingsPage() {
                     textStyle: globalDefaults.textStyle ?? "",
                   }}
                 />
+              </SectionCard>
+
+              {/* Episode planning */}
+              <SectionCard kicker="Episode Planning" title={t("episode_planning_section_title")}>
+                <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
+                  <fieldset>
+                    <legend className="mb-2.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-3">
+                      {t("source_language_label")}
+                    </legend>
+                    <div className="flex flex-wrap gap-2.5">
+                      {SOURCE_LANGUAGES.map((lang) => (
+                        <label key={lang} className={radioCardClass(sourceLanguage === lang)}>
+                          <input
+                            type="radio"
+                            name="sourceLanguage"
+                            value={lang}
+                            checked={sourceLanguage === lang}
+                            onChange={() => setSourceLanguage(lang)}
+                            className="sr-only"
+                          />
+                          {t(`source_language_${lang}`)}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+
+                  <label className="block">
+                    <span className="mb-2.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-3">
+                      {t("episode_target_units_label")}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={episodeTargetUnits}
+                      onChange={(e) => setEpisodeTargetUnits(e.currentTarget.value)}
+                      className="h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-3 text-[13px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30"
+                    />
+                    <span className="mt-1 block text-[11.5px] leading-[1.45] text-text-3">
+                      {t("episode_target_units_hint")}
+                    </span>
+                  </label>
+                </div>
               </SectionCard>
 
               {/* Aspect ratio */}

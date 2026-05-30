@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lib.script_editor import ScriptEditError
 from server.auth import CurrentUserInfo, get_current_user
 from server.routers import generate
 
@@ -197,6 +198,48 @@ class TestGenerateRouter:
             )
             assert video.status_code == 200, video.text
             assert video.json()["success"] is True
+
+    def test_storyboard_dirty_script_returns_400(self, tmp_path, monkeypatch):
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+
+        def _raise_dirty_script(_project_name, _script_file):
+            raise ScriptEditError("segments 必须是列表，当前为 NoneType")
+
+        fake_pm.load_script = _raise_dirty_script
+        fake_queue = _FakeQueue()
+        client = _client(monkeypatch, fake_pm, fake_queue)
+
+        with client:
+            resp = client.post(
+                "/api/v1/projects/demo/generate/storyboard/E1S02",
+                json={"script_file": "episode_1.json", "prompt": "雨夜"},
+            )
+
+        assert resp.status_code == 400
+        assert "segments 必须是列表" in resp.json()["detail"]
+        assert fake_queue.calls == []
+
+    def test_video_dirty_script_returns_400(self, tmp_path, monkeypatch):
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+
+        def _raise_dirty_script(_project_name, _script_file):
+            raise ScriptEditError("segments 必须是列表，当前为 NoneType")
+
+        fake_pm.load_script = _raise_dirty_script
+        fake_queue = _FakeQueue()
+        client = _client(monkeypatch, fake_pm, fake_queue)
+
+        with client:
+            resp = client.post(
+                "/api/v1/projects/demo/generate/video/E1S01",
+                json={"script_file": "episode_1.json", "prompt": "奔跑"},
+            )
+
+        assert resp.status_code == 400
+        assert "segments 必须是列表" in resp.json()["detail"]
+        assert fake_queue.calls == []
 
     def test_character_enqueue_success(self, tmp_path, monkeypatch):
         project_path = _prepare_files(tmp_path)

@@ -36,7 +36,7 @@ def backfill_revisions() -> tuple[str, str]:
     versions_dir = repo_root / "alembic" / "versions"
     matches = list(versions_dir.glob("*_backfill_custom_model_durations.py"))
     assert len(matches) == 1, f"找到 {len(matches)} 个回填迁移文件，期望 1"
-    text = matches[0].read_text()
+    text = matches[0].read_text(encoding="utf-8")
     revision: str | None = None
     down_revision: str | None = None
     for line in text.splitlines():
