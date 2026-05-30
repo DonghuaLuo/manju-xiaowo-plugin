@@ -13,6 +13,11 @@ import {
   pickDesktopFile,
   type UploadFileInput,
 } from "@/utils/desktop-file";
+import {
+  SOURCE_FILE_DIALOG_EXTENSIONS,
+  SOURCE_FILE_FORMAT_LABEL,
+  isSupportedSourceFileName,
+} from "@/utils/source-files";
 
 interface SourceFile {
   name: string;
@@ -24,8 +29,6 @@ interface SourceFile {
 interface SourceFilesPageProps {
   projectName: string;
 }
-
-const ALLOWED_EXTENSIONS = [".txt", ".md", ".docx", ".epub", ".pdf"];
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -84,7 +87,7 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
       // 入口处统一做扩展名校验，让拖拽 / file picker 共用一条规则；
       // <input accept> 只是 picker 提示，不能挡未授权类型。
       const filename = getUploadFileName(file);
-      if (!ALLOWED_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext))) {
+      if (!isSupportedSourceFileName(filename)) {
         useAppStore
           .getState()
           .pushToast(
@@ -186,7 +189,7 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
     const file = await pickDesktopFile({
       title: tRef.current("dashboard:upload_source_files"),
       filters: [
-        { name: "Source files", extensions: ALLOWED_EXTENSIONS.map((ext) => ext.replace(/^\./, "")) },
+        { name: "Source files", extensions: SOURCE_FILE_DIALOG_EXTENSIONS },
       ],
     });
     if (file) void handleUpload(file);
@@ -375,7 +378,7 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
                   className="num text-[10.5px] uppercase tracking-[0.18em]"
                   style={{ color: "var(--color-text-4)" }}
                 >
-                  {ALLOWED_EXTENSIONS.map((e) => e.replace(/^\./, "").toUpperCase()).join(" · ")}
+                  {SOURCE_FILE_FORMAT_LABEL}
                 </p>
               </div>
               <span

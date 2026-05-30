@@ -20,6 +20,7 @@ import {
   pickDesktopFile,
   type UploadFileInput,
 } from "@/utils/desktop-file";
+import { SOURCE_FILE_DIALOG_EXTENSIONS, isSupportedSourceFileName } from "@/utils/source-files";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,8 +34,6 @@ interface WelcomeCanvasProps {
   onUpload?: (file: UploadFileInput) => Promise<void>;
   onAnalyze?: () => Promise<void>;
 }
-
-const ALLOWED_SOURCE_EXTENSIONS = [".txt", ".md", ".docx", ".epub", ".pdf"];
 
 const CARD_BG =
   "linear-gradient(180deg, oklch(0.22 0.012 265 / 0.55), oklch(0.19 0.010 265 / 0.40))";
@@ -93,6 +92,11 @@ export function WelcomeCanvas({
     async (file: UploadFileInput) => {
       if (!onUpload) return;
       const filename = getUploadFileName(file);
+      if (!isSupportedSourceFileName(filename)) {
+        setError(t("source_unsupported_extension", { filename }));
+        setPhase(sourceFiles.length > 0 ? "has_sources" : "idle");
+        return;
+      }
       setFileName(filename);
       setError(null);
 
@@ -148,7 +152,7 @@ export function WelcomeCanvas({
         filters: [
           {
             name: "Source files",
-            extensions: ALLOWED_SOURCE_EXTENSIONS.map((ext) => ext.replace(/^\./, "")),
+            extensions: SOURCE_FILE_DIALOG_EXTENSIONS,
           },
         ],
       });
@@ -163,7 +167,7 @@ export function WelcomeCanvas({
       dropActiveRef.current = false;
       setIsDragging(false);
       const file = e.dataTransfer.files[0];
-      if (file && ALLOWED_SOURCE_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))) {
+      if (file) {
         voidCall(processFile(file));
       }
     },
@@ -176,7 +180,7 @@ export function WelcomeCanvas({
       dropActiveRef.current = false;
       setIsDragging(false);
       const file = paths[0] ? desktopFileRefFromPath(paths[0]) : null;
-      if (file && ALLOWED_SOURCE_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))) {
+      if (file) {
         voidCall(processFile(file));
       }
     };

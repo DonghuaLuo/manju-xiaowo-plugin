@@ -24,11 +24,6 @@ from lib.prompt_builders_script import (
     build_drama_prompt,
     build_narration_prompt,
 )
-from lib.reference_video.limits import (
-    DEFAULT_MAX_REFS,
-    PROVIDER_MAX_REFS,
-    normalize_provider_id,
-)
 from lib.script_models import (
     DramaEpisodeScript,
     NarrationEpisodeScript,
@@ -338,16 +333,21 @@ class ScriptGenerator:
             return self.project_json["aspect_ratio"]
         return "9:16" if self.content_mode == "narration" else "16:9"
 
-    def _resolve_max_refs(self, caps: dict | None = None) -> int:
-        """按 provider 粗粒度解析最大参考图数。数值来源：`lib.reference_video.limits`。"""
+    def _resolve_max_refs(self, caps: dict | None = None) -> int | None:
+        """解析当前视频模型的最大参考图数；None 表示未知，不写硬性数量约束。"""
         if caps:
             cached = caps.get("max_reference_images")
             if cached is not None:
                 return int(cached)
-        video_backend = self.project_json.get("video_backend") or ""
-        raw_provider = video_backend.split("/", 1)[0] if "/" in video_backend else ""
-        provider_id = normalize_provider_id(raw_provider)
-        return PROVIDER_MAX_REFS.get(provider_id, DEFAULT_MAX_REFS)
+        video_backend = self.project_json.get("video_backend")
+        if video_backend and isinstance(video_backend, str) and "/" in video_backend:
+            provider_id, model_id = video_backend.split("/", 1)
+            provider_meta = PROVIDER_REGISTRY.get(provider_id)
+            if provider_meta:
+                model_info = provider_meta.models.get(model_id)
+                if model_info and model_info.max_reference_images is not None:
+                    return int(model_info.max_reference_images)
+        return None
 
     def _load_project_json(self) -> dict:
         """加载 project.json"""

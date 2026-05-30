@@ -100,6 +100,7 @@ class TestProviderPool:
 
         finished = pool.drain_finished()
         assert len(finished) == 2
+        assert {task_id for task_id, _task in finished} == {"done1", "done2"}
         assert "done1" not in pool.image_inflight
         assert "pending1" in pool.image_inflight
         assert "done2" not in pool.video_inflight
@@ -362,6 +363,7 @@ class TestGenerationWorker:
         await worker._drain_finished_tasks()
 
         assert "tc" not in pool.image_inflight
+        assert queue.cancelled == [("tc", "user")]
 
     @pytest.mark.asyncio
     async def test_process_task_zero_rows_succeeded_falls_through_to_cancelled(self, monkeypatch):

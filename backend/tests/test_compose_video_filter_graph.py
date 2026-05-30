@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -272,6 +273,43 @@ class TestBuildXfadeFilterComplex:
         assert result is not None
         # 边界 1 没在 transitions 里 → 默认 fade
         assert "[g0v1][2:v]xfade=transition=fade" in result
+
+    def test_middle_clip_too_short_for_two_xfades_downgrades_left_boundary(self) -> None:
+        """中段同时承担入场/出场时，duration < 2*transition_duration 应降左侧为 cut。"""
+        result = compose_video._build_xfade_filter_complex([5.0, 0.8, 5.0], ["fade", "fade"], 0.5)
+        assert result is not None
+        assert "[0:v][1:v]xfade" not in result
+        assert "[1:v][2:v]xfade=transition=fade:duration=0.5:offset=0.300[g1v]" in result
+        assert "[0:v][0:a][g1v][g1a]concat=n=2:v=1:a=1[vout][aout]" in result
+
+    def test_middle_clip_exactly_two_transition_durations_keeps_both_boundaries(self) -> None:
+        """duration == 2*transition_duration 时两个相邻 xfade 不交叉，应保留。"""
+        result = compose_video._build_xfade_filter_complex([5.0, 1.0, 5.0], ["fade", "fade"], 0.5)
+        assert result is not None
+        assert "[0:v][1:v]xfade=transition=fade:duration=0.5:offset=4.500[g0v1]" in result
+        assert "[g0v1][2:v]xfade=transition=fade:duration=0.5:offset=5.000[g0v]" in result
+
+    def test_chained_short_middle_clips_downgrade_each_left_boundary(self) -> None:
+        """连续短中段逐个降级左边界，保留最右侧可成立的 xfade。"""
+        result = compose_video._build_xfade_filter_complex([5.0, 0.8, 0.8, 5.0], ["fade", "fade", "fade"], 0.5)
+        assert result is not None
+        assert "[0:v][1:v]xfade" not in result
+        assert "[1:v][2:v]xfade" not in result
+        assert "[2:v][3:v]xfade=transition=fade:duration=0.5:offset=0.300[g2v]" in result
+
+    def test_middle_guard_keeps_offsets_monotonic_inside_remaining_group(self) -> None:
+        result = compose_video._build_xfade_filter_complex([5.0, 0.75, 5.0, 5.0], ["fade", "fade", "fade"], 0.5)
+        assert result is not None
+        offsets = [float(m.group(1)) for m in re.finditer(r"offset=([0-9.]+)", result)]
+        assert offsets == sorted(offsets)
+        assert offsets == [0.25, 4.75]
+
+    def test_middle_guard_only_changes_adjacent_xfade_boundaries(self) -> None:
+        """cut 边界两侧不触发双侧守卫，避免误改用户显式 cut。"""
+        result = compose_video._build_xfade_filter_complex([5.0, 0.8, 5.0, 5.0], ["cut", "fade", "fade"], 0.5)
+        assert result is not None
+        assert "[1:v][2:v]xfade=transition=fade:duration=0.5:offset=0.300[g1v1]" in result
+        assert "[g1v1][3:v]xfade=transition=fade:duration=0.5:offset=4.800[g1v]" in result
 
 
 # ---------------------------------------------------------------------------

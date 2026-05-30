@@ -495,7 +495,7 @@ class TestVideoCapabilities:
         assert caps["source"] == "registry"
         assert caps["supported_durations"] == [4, 6, 8]
         assert caps["max_duration"] == 8
-        # normalize("gemini-aistudio") -> "gemini"，查 PROVIDER_MAX_REFS["gemini"]
+        # 来自 registry ModelInfo.max_reference_images，而不是 provider 粒度兜底。
         assert caps["max_reference_images"] == 3
 
     async def test_registry_model_level_zero_reference_images_is_preserved(self):
@@ -602,28 +602,34 @@ class TestVideoCapabilities:
         assert caps["default_duration"] == 9
         assert caps["max_reference_images"] == 7
 
-    async def test_max_reference_images_falls_back_to_default_for_unlisted_provider(self):
-        """PROVIDER_MAX_REFS 未覆盖的 provider → resolver 返 DEFAULT_MAX_REFS，不返 None。
+    async def test_registry_unknown_reference_image_limit_preserves_none(self, monkeypatch):
+        """registry 未声明参考图上限时返回 None；不再按 provider/default 粗粒度兜底。"""
+        from lib.config.registry import ModelInfo, ProviderMeta, PROVIDER_REGISTRY
 
-        gemini 建议：下游消费者（subagent / 前端）不用处理 None 特例。
-        """
-        from lib.reference_video.limits import DEFAULT_MAX_REFS
-
+        monkeypatch.setitem(
+            PROVIDER_REGISTRY,
+            "tmp-unknown-refs",
+            ProviderMeta(
+                display_name="Tmp",
+                description="tmp",
+                required_keys=[],
+                models={
+                    "video": ModelInfo(
+                        display_name="Video",
+                        media_type="video",
+                        capabilities=["text_to_video"],
+                        supported_durations=[4],
+                    )
+                },
+            ),
+        )
         factory, engine = await _make_session()
         try:
             resolver = ConfigResolver(factory)
-            with patch("lib.config.resolver.get_project_manager"):
-                # ark 在 PROVIDER_MAX_REFS 里登记（=9），这里借道 normalize_provider_id 不会剥离的串验证
-                # 使用一个 PROVIDER_MAX_REFS 明确未登记的 provider：不过所有注册 provider 都有入口，
-                # 本测试改为 patch normalize_provider_id 让它返回未登记字符串以触发 fallback
-                with patch(
-                    "lib.config.resolver.normalize_provider_id",
-                    return_value="___never_registered___",
-                ):
-                    caps = await resolver.video_capabilities_for_project({"video_backend": "grok/grok-imagine-video"})
+            caps = await resolver.video_capabilities_for_project({"video_backend": "tmp-unknown-refs/video"})
         finally:
             await engine.dispose()
-        assert caps["max_reference_images"] == DEFAULT_MAX_REFS
+        assert caps["max_reference_images"] is None
 
     async def test_custom_provider_reads_db_supported_durations(self):
         """custom-<id>/<model> 走 DB 分支，返回 source='custom'。"""
@@ -663,6 +669,7 @@ class TestVideoCapabilities:
         assert caps["source"] == "custom"
         assert caps["supported_durations"] == [5, 10]
         assert caps["max_duration"] == 10
+        assert caps["max_reference_images"] == 0
 
 
 class TestResolveImageBackend:

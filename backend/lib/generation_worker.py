@@ -75,13 +75,13 @@ class ProviderPool:
     def has_video_room(self) -> bool:
         return self.video_max > 0 and len(self.video_inflight) + len(self.video_pending) < self.video_max
 
-    def drain_finished(self) -> list[asyncio.Task]:
-        """Remove finished tasks from inflight dicts. Return them for await."""
+    def drain_finished(self) -> list[tuple[str, asyncio.Task]]:
+        """Remove finished tasks from inflight dicts. Return task_id + task for await."""
         finished = []
         for inflight in (self.image_inflight, self.video_inflight):
             done_ids = [tid for tid, t in inflight.items() if t.done()]
             for tid in done_ids:
-                finished.append(inflight.pop(tid))
+                finished.append((tid, inflight.pop(tid)))
         return finished
 
     def all_inflight(self) -> list[asyncio.Task]:
@@ -507,9 +507,15 @@ class GenerationWorker:
 
     async def _drain_finished_tasks(self) -> None:
         for pool in self._pools.values():
-            for finished_task in pool.drain_finished():
+            for task_id, finished_task in pool.drain_finished():
+                if finished_task.cancelled():
+                    try:
+                        await self.queue.mark_task_cancelled(task_id, cancelled_by="user")
+                    except Exception:
+                        logger.warning("drain finished cancelled task 落终态失败: %s", task_id, exc_info=True)
+                    continue
                 try:
-                    await finished_task
+                    finished_task.result()
                 except asyncio.CancelledError:
                     logger.debug("已处理的任务取消已在 _process_task 中记录")
                 except Exception:

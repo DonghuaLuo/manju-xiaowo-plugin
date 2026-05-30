@@ -67,6 +67,7 @@ class TestOpenAIVideoBackend:
             assert VideoCapability.GENERATE_AUDIO not in backend.capabilities
             assert VideoCapability.NEGATIVE_PROMPT not in backend.capabilities
             assert VideoCapability.SEED_CONTROL not in backend.capabilities
+            assert backend.video_capabilities.max_reference_images == 1
 
     async def test_text_to_video(self, tmp_path: Path):
         video_data = b"mp4-video-content"

@@ -155,12 +155,15 @@ async def test_script_generator_reference_branch_inherits_drama_content_mode(tmp
     "video_backend, expected",
     [
         ("gemini-aistudio/veo-3.1-generate-preview", 3),
-        ("gemini-vertex/veo-3.1", 3),
+        ("gemini-vertex/veo-3.1-generate-001", 3),
         ("openai/sora-2", 1),
         ("grok/grok-imagine-video", 7),
-        ("ark/seedance-2.0", 9),
-        (None, 9),
-        ("unknown/xyz", 9),
+        ("ark/doubao-seedance-2-0-260128", 9),
+        ("ark/doubao-seedance-1-0-pro-250528", 0),
+        ("vidu/viduq3-pro", 0),
+        ("vidu/viduq3-turbo", 7),
+        (None, None),
+        ("unknown/xyz", None),
     ],
 )
 def test_resolve_max_refs_by_provider(tmp_path: Path, video_backend, expected):

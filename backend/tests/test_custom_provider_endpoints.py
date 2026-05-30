@@ -49,6 +49,7 @@ class TestRegistry:
             "request_method": "POST",
             "request_path_template": "/v1/chat/completions",
             "image_capabilities": None,
+            "video_max_reference_images": 0,
         }
 
     def test_media_type_groups(self):
@@ -164,3 +165,9 @@ def test_existing_image_endpoints_have_full_capabilities():
     # Verify endpoint_spec_to_dict serializes capabilities to sorted list[str]
     serialized = endpoint_spec_to_dict(ENDPOINT_REGISTRY["openai-images"])
     assert serialized["image_capabilities"] == ["image_to_image", "text_to_image"]
+
+
+def test_video_endpoint_reference_image_limits_are_explicit():
+    assert ENDPOINT_REGISTRY["openai-video"].video_max_reference_images == 1
+    assert ENDPOINT_REGISTRY["newapi-video"].video_max_reference_images == 0
+    assert endpoint_spec_to_dict(ENDPOINT_REGISTRY["openai-video"])["video_max_reference_images"] == 1

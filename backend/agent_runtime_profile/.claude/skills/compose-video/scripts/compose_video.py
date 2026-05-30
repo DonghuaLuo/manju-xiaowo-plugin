@@ -424,6 +424,18 @@ def _build_xfade_filter_complex(
             continue
         boundary_xfade.append(xfade)
 
+    # 中段双侧 xfade 守卫：相邻 xfade 让中段同时承担入场 + 出场两个转场，
+    # 合计需要 2*transition_duration 秒。单边界守卫只看单侧会漏判，导致
+    # xfade 时段交叉。对两侧都是 xfade 且 duration < 2*td 的中段，降左侧
+    # 边界为 cut（保留右侧）；等于 2*td 视为足够。
+    for i in range(1, n - 1):
+        if (
+            boundary_xfade[i - 1] is not None
+            and boundary_xfade[i] is not None
+            and durations[i] < 2 * transition_duration
+        ):
+            boundary_xfade[i - 1] = None
+
     if all(b is None for b in boundary_xfade):
         return None
 
