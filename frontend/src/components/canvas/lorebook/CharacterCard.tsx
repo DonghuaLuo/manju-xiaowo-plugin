@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ImagePlus, Upload, User } from "lucide-react";
 import { API } from "@/api";
 import { AddToLibraryButton } from "@/components/assets/AddToLibraryButton";
+import { DeleteDesignButton } from "@/components/canvas/lorebook/DeleteDesignButton";
 import { VersionTimeMachine } from "@/components/canvas/timeline/VersionTimeMachine";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { GenerateButton } from "@/components/ui/GenerateButton";
@@ -258,7 +259,14 @@ export function CharacterCard({
             resourceType="characters"
             resourceId={name}
             onRestore={onRestoreVersion}
+            allowDelete
             iconOnly
+          />
+          <DeleteDesignButton
+            projectName={projectName}
+            resourceType="characters"
+            resourceId={name}
+            onDeleted={onReload}
           />
         </div>
       </div>

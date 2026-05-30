@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronRight, History } from "lucide-react";
-import { API, type VersionInfo } from "@/api";
+import { ChevronDown, ChevronRight, History, Trash2 } from "lucide-react";
+import { API, type VersionInfo, type VersionResourceType } from "@/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
@@ -10,9 +11,10 @@ import { errMsg } from "@/utils/async";
 
 interface VersionTimeMachineProps {
   projectName: string;
-  resourceType: "storyboards" | "videos" | "characters" | "scenes" | "props";
+  resourceType: VersionResourceType;
   resourceId: string;
   onRestore?: (version: number) => void | Promise<void>;
+  allowDelete?: boolean;
   /** Icon-only trigger button: hides label and chevron for narrow card headers. */
   iconOnly?: boolean;
 }
@@ -42,6 +44,7 @@ export function VersionTimeMachine({
   resourceType,
   resourceId,
   onRestore,
+  allowDelete = false,
   iconOnly = false,
 }: VersionTimeMachineProps) {
   const { t } = useTranslation("dashboard");
@@ -63,6 +66,8 @@ export function VersionTimeMachine({
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VersionInfo | null>(null);
+  const [deletingVersion, setDeletingVersion] = useState<number | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
 
   // Reset version list when the underlying resource changes so it's re-fetched
@@ -77,6 +82,8 @@ export function VersionTimeMachine({
     setLoadedOnce(false);
     setSelectedVersion(null);
     setRestoringVersion(null);
+    setDeleteTarget(null);
+    setDeletingVersion(null);
     setPreviewImage(null);
   }, [resourceFp, projectName, resourceId, resourceType]);
 
@@ -87,15 +94,17 @@ export function VersionTimeMachine({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadVersions 是组件内普通函数，无法稳定化；加入 deps 会导致每次渲染重复触发
   }, [open, loadedOnce, resourceId]);
 
-  async function loadVersions() {
+  async function loadVersions(): Promise<{ ok: boolean; message?: string }> {
     setLoading(true);
     try {
       const data = await API.getVersions(projectName, resourceType, resourceId);
       setVersions(data.versions);
       setCurrentVersion(data.current_version);
       setLoadedOnce(true);
-    } catch {
+      return { ok: true };
+    } catch (err) {
       setVersions([]);
+      return { ok: false, message: errMsg(err) };
     } finally {
       setLoading(false);
     }
@@ -121,9 +130,76 @@ export function VersionTimeMachine({
     }
   }
 
+  function requestDeleteVersion(versionInfo: VersionInfo) {
+    if (versionInfo.is_current || versionInfo.version === currentVersion) {
+      useAppStore.getState().pushToast(t("version_delete_current_blocked"), "warning");
+      return;
+    }
+    if (versions.length <= 1) {
+      useAppStore.getState().pushToast(t("version_delete_last_blocked"), "warning");
+      return;
+    }
+    setDeleteTarget(versionInfo);
+  }
+
+  async function handleDeleteVersion() {
+    if (!deleteTarget) return;
+    setDeletingVersion(deleteTarget.version);
+    try {
+      const result = await API.deleteVersion(
+        projectName,
+        resourceType,
+        resourceId,
+        deleteTarget.version,
+      );
+      if (result.asset_fingerprints) {
+        useProjectsStore.getState().updateAssetFingerprints(result.asset_fingerprints);
+      }
+      const deletedVersion = deleteTarget.version;
+      const failedFileCount = Math.max(
+        result.failed_files?.length ?? 0,
+        result.file_delete_errors?.length ?? 0,
+      );
+      setDeleteTarget(null);
+      setSelectedVersion((prev) => (prev === deletedVersion ? null : prev));
+      if (failedFileCount > 0) {
+        useAppStore
+          .getState()
+          .pushToast(t("delete_files_partial_failed", { count: failedFileCount }), "warning");
+      } else {
+        useAppStore
+          .getState()
+          .pushToast(t("version_deleted", { version: deletedVersion }), "success");
+      }
+      const reloadResult = await loadVersions();
+      if (!reloadResult.ok) {
+        useAppStore
+          .getState()
+          .pushToast(t("load_failed", { message: reloadResult.message ?? "" }), "error");
+      }
+    } catch (err) {
+      const message = errMsg(err);
+      const isCurrentBlocked = message.includes("当前版本") || message.includes("应用");
+      const isLastBlocked = message.includes("保留至少一个版本");
+      useAppStore
+        .getState()
+        .pushToast(
+          isCurrentBlocked
+            ? t("version_delete_current_blocked")
+            : isLastBlocked
+              ? t("version_delete_last_blocked")
+              : t("version_delete_failed", { message }),
+          isCurrentBlocked || isLastBlocked ? "warning" : "error",
+        );
+    } finally {
+      setDeletingVersion(null);
+    }
+  }
+
   // Close the panel
   const close = useCallback(() => {
     setOpen(false);
+    setDeleteTarget(null);
     setPreviewImage(null);
   }, []);
 
@@ -171,11 +247,14 @@ export function VersionTimeMachine({
 
     // Close on click outside
     function onMouseDown(e: MouseEvent) {
+      const target = e.target;
+      if (!(target instanceof Node)) return;
       if (
-        panelRef.current?.contains(e.target as Node) ||
-        triggerRef.current?.contains(e.target as Node)
+        panelRef.current?.contains(target) ||
+        triggerRef.current?.contains(target)
       )
         return;
+      if (target instanceof Element && target.closest('[role="dialog"]')) return;
       close();
     }
     document.addEventListener("mousedown", onMouseDown);
@@ -306,20 +385,34 @@ export function VersionTimeMachine({
                           {selectedInfo.created_at}
                         </span>
                       </span>
-                      {selectedInfo.is_current ? (
-                        <span className="shrink-0 rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-300">
-                          {t("current_version_badge")}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={restoringVersion !== null}
-                          onClick={() => void handleRestore(selectedInfo.version)}
-                          className="shrink-0 rounded-full bg-indigo-600 px-2.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
-                        >
-                          {restoringVersion === selectedInfo.version ? t("switching_version") : t("switch_to_version")}
-                        </button>
-                      )}
+                      <div className="flex shrink-0 items-center gap-1">
+                        {selectedInfo.is_current ? (
+                          <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-medium text-indigo-300">
+                            {t("current_version_badge")}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={restoringVersion !== null || deletingVersion !== null}
+                            onClick={() => void handleRestore(selectedInfo.version)}
+                            className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                          >
+                            {restoringVersion === selectedInfo.version ? t("switching_version") : t("switch_to_version")}
+                          </button>
+                        )}
+                        {allowDelete && !selectedInfo.is_current && (
+                          <button
+                            type="button"
+                            disabled={restoringVersion !== null || deletingVersion !== null}
+                            onClick={() => requestDeleteVersion(selectedInfo)}
+                            title={t("delete_version")}
+                            aria-label={t("delete_version")}
+                            className="focus-ring inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-red-500/15 hover:text-red-300 disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Media preview */}
@@ -376,6 +469,21 @@ export function VersionTimeMachine({
           onClose={() => setPreviewImage(null)}
         />
       )}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t("confirm_delete_version_title")}
+        description={
+          deleteTarget
+            ? t("confirm_delete_version_desc", { version: deleteTarget.version })
+            : undefined
+        }
+        confirmLabel={t("delete_version")}
+        loadingLabel={t("deleting_version")}
+        tone="danger"
+        loading={deletingVersion !== null}
+        onConfirm={handleDeleteVersion}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

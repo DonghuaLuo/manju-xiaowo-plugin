@@ -105,6 +105,17 @@ export interface VersionInfo {
   restored_from?: number;
 }
 
+export type VersionResourceType = "storyboards" | "videos" | "characters" | "scenes" | "props";
+
+export type DesignResourceType = "characters" | "scenes" | "props";
+
+export interface DesignResourceUsage {
+  script_file: string;
+  episode?: number | string | null;
+  kind: string;
+  item_id?: string | null;
+}
+
 /** Options for {@link API.openTaskStream}. */
 export interface TaskStreamOptions {
   projectName?: string;
@@ -162,6 +173,11 @@ export interface UsageCallsFilters {
 /** Generic success response used by many endpoints. */
 export interface SuccessResponse {
   success: boolean;
+  message?: string;
+}
+
+export interface FileDeleteError {
+  file: string;
   message?: string;
 }
 
@@ -1631,17 +1647,17 @@ class API {
    */
   static async getVersions(
     projectName: string,
-    resourceType: string,
+    resourceType: VersionResourceType,
     resourceId: string
   ): Promise<{
-    resource_type: string;
+    resource_type: VersionResourceType;
     resource_id: string;
     current_version: number;
     versions: VersionInfo[];
   }> {
     await ensureLocalAssetRoots();
     const result = await this.request<{
-      resource_type: string;
+      resource_type: VersionResourceType;
       resource_id: string;
       current_version: number;
       versions: VersionInfo[];
@@ -1663,7 +1679,7 @@ class API {
    */
   static async restoreVersion(
     projectName: string,
-    resourceType: string,
+    resourceType: VersionResourceType,
     resourceId: string,
     version: number
   ): Promise<SuccessResponse & { file_path?: string; asset_fingerprints?: Record<string, number> }> {
@@ -1672,6 +1688,56 @@ class API {
       {
         method: "POST",
       }
+    );
+  }
+
+  static async getDesignResourceUsage(
+    projectName: string,
+    resourceType: DesignResourceType,
+    resourceId: string,
+  ): Promise<{
+    resource_type: DesignResourceType;
+    resource_id: string;
+    in_use: boolean;
+    usages: DesignResourceUsage[];
+  }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/usage`,
+    );
+  }
+
+  static async deleteDesignResource(
+    projectName: string,
+    resourceType: DesignResourceType,
+    resourceId: string,
+  ): Promise<SuccessResponse & {
+    deleted_versions?: number;
+    deleted_files?: string[];
+    failed_files?: string[];
+    file_delete_errors?: FileDeleteError[];
+    asset_fingerprints?: Record<string, number>;
+  }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  static async deleteVersion(
+    projectName: string,
+    resourceType: VersionResourceType,
+    resourceId: string,
+    version: number,
+  ): Promise<SuccessResponse & {
+    deleted_version?: number;
+    deleted_file?: string;
+    failed_files?: string[];
+    file_delete_errors?: FileDeleteError[];
+    asset_fingerprints?: Record<string, number>;
+  }> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/${version}`,
+      { method: "DELETE" },
     );
   }
 

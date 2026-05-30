@@ -148,4 +148,237 @@ describe("VersionTimeMachine", () => {
       screen.getByRole("dialog", { name: "版本 v1 预览 全屏预览" }),
     ).toBeInTheDocument();
   });
+
+  it("deletes a non-current design version after confirmation", async () => {
+    vi.spyOn(API, "getVersions")
+      .mockResolvedValueOnce({
+        resource_type: "characters",
+        resource_id: "Hero",
+        current_version: 2,
+        versions: [
+          {
+            version: 1,
+            filename: "v1.png",
+            created_at: "2026-02-01T00:00:00Z",
+            file_size: 10,
+            is_current: false,
+            prompt: "old prompt",
+            file_url: "/api/v1/files/demo/versions/characters/Hero_v1.png",
+          },
+          {
+            version: 2,
+            filename: "v2.png",
+            created_at: "2026-02-01T01:00:00Z",
+            file_size: 12,
+            is_current: true,
+            file_url: "/api/v1/files/demo/versions/characters/Hero_v2.png",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        resource_type: "characters",
+        resource_id: "Hero",
+        current_version: 2,
+        versions: [
+          {
+            version: 2,
+            filename: "v2.png",
+            created_at: "2026-02-01T01:00:00Z",
+            file_size: 12,
+            is_current: true,
+            file_url: "/api/v1/files/demo/versions/characters/Hero_v2.png",
+          },
+        ],
+      });
+    vi.spyOn(API, "deleteVersion").mockResolvedValue({ success: true });
+
+    render(
+      <VersionTimeMachine
+        projectName="demo"
+        resourceType="characters"
+        resourceId="Hero"
+        allowDelete
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /版本/ }));
+    expect(await screen.findByRole("button", { name: "v1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "v1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除版本" }));
+
+    expect(await screen.findByRole("dialog", { name: "删除版本" })).toBeInTheDocument();
+    const deleteButtons = screen.getAllByRole("button", { name: "删除版本" });
+    fireEvent.mouseDown(deleteButtons[deleteButtons.length - 1]);
+    expect(screen.getByRole("dialog", { name: "删除版本" })).toBeInTheDocument();
+    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(API.deleteVersion).toHaveBeenCalledWith("demo", "characters", "Hero", 1);
+      expect(API.getVersions).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().toast?.text).toBe("已删除 v1");
+    });
+  });
+
+  it("warns when version file cleanup partly fails", async () => {
+    vi.spyOn(API, "getVersions")
+      .mockResolvedValueOnce({
+        resource_type: "characters",
+        resource_id: "Hero",
+        current_version: 2,
+        versions: [
+          {
+            version: 1,
+            filename: "v1.png",
+            created_at: "2026-02-01T00:00:00Z",
+            file_size: 10,
+            is_current: false,
+          },
+          {
+            version: 2,
+            filename: "v2.png",
+            created_at: "2026-02-01T01:00:00Z",
+            file_size: 12,
+            is_current: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        resource_type: "characters",
+        resource_id: "Hero",
+        current_version: 2,
+        versions: [
+          {
+            version: 2,
+            filename: "v2.png",
+            created_at: "2026-02-01T01:00:00Z",
+            file_size: 12,
+            is_current: true,
+          },
+        ],
+      });
+    vi.spyOn(API, "deleteVersion").mockResolvedValue({
+      success: true,
+      failed_files: ["versions/characters/Hero_v1.png"],
+      file_delete_errors: [{ file: "versions/characters/Hero_v1.png", message: "busy" }],
+    });
+
+    render(
+      <VersionTimeMachine
+        projectName="demo"
+        resourceType="characters"
+        resourceId="Hero"
+        allowDelete
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /版本/ }));
+    expect(await screen.findByRole("button", { name: "v1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "v1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除版本" }));
+    const deleteButtons = screen.getAllByRole("button", { name: "删除版本" });
+    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(API.deleteVersion).toHaveBeenCalledWith("demo", "characters", "Hero", 1);
+      expect(API.getVersions).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().toast?.text).toBe(
+        "已删除记录，但有 1 个文件未成功删除。",
+      );
+      expect(useAppStore.getState().toast?.tone).toBe("warning");
+    });
+  });
+
+  it("keeps delete success when version reload fails after deletion", async () => {
+    vi.spyOn(API, "getVersions")
+      .mockResolvedValueOnce({
+        resource_type: "characters",
+        resource_id: "Hero",
+        current_version: 2,
+        versions: [
+          {
+            version: 1,
+            filename: "v1.png",
+            created_at: "2026-02-01T00:00:00Z",
+            file_size: 10,
+            is_current: false,
+            prompt: "old prompt",
+            file_url: "/api/v1/files/demo/versions/characters/Hero_v1.png",
+          },
+          {
+            version: 2,
+            filename: "v2.png",
+            created_at: "2026-02-01T01:00:00Z",
+            file_size: 12,
+            is_current: true,
+            file_url: "/api/v1/files/demo/versions/characters/Hero_v2.png",
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("reload failed"));
+    vi.spyOn(API, "deleteVersion").mockResolvedValue({ success: true });
+
+    render(
+      <VersionTimeMachine
+        projectName="demo"
+        resourceType="characters"
+        resourceId="Hero"
+        allowDelete
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /版本/ }));
+    expect(await screen.findByRole("button", { name: "v1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "v1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除版本" }));
+    const deleteButtons = screen.getAllByRole("button", { name: "删除版本" });
+    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(API.deleteVersion).toHaveBeenCalledWith("demo", "characters", "Hero", 1);
+      expect(screen.queryByRole("dialog", { name: "删除版本" })).not.toBeInTheDocument();
+      expect(useAppStore.getState().toast?.text).toBe("加载失败: reload failed");
+    });
+  });
+
+  it("does not show delete button for the current design version", async () => {
+    vi.spyOn(API, "getVersions").mockResolvedValue({
+      resource_type: "characters",
+      resource_id: "Hero",
+      current_version: 2,
+      versions: [
+        {
+          version: 1,
+          filename: "v1.png",
+          created_at: "2026-02-01T00:00:00Z",
+          file_size: 10,
+          is_current: false,
+          file_url: "/api/v1/files/demo/versions/characters/Hero_v1.png",
+        },
+        {
+          version: 2,
+          filename: "v2.png",
+          created_at: "2026-02-01T01:00:00Z",
+          file_size: 12,
+          is_current: true,
+          file_url: "/api/v1/files/demo/versions/characters/Hero_v2.png",
+        },
+      ],
+    });
+
+    render(
+      <VersionTimeMachine
+        projectName="demo"
+        resourceType="characters"
+        resourceId="Hero"
+        allowDelete
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /版本/ }));
+    expect(await screen.findByRole("button", { name: "v2" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "v2" }));
+
+    expect(await screen.findByText("当前")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除版本" })).not.toBeInTheDocument();
+  });
 });

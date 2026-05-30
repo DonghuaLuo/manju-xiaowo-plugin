@@ -338,6 +338,126 @@ class VersionManager:
                 return v.get("prompt")
         return None
 
+    def _version_file_path(self, rel_path: str) -> Path:
+        """解析版本文件路径，并确保不会逃出项目目录。"""
+        target = (self.project_path / rel_path).resolve()
+        try:
+            target.relative_to(self.project_path.resolve())
+        except ValueError as exc:
+            raise ValueError(f"版本文件路径越界: {rel_path}") from exc
+        return target
+
+    def _delete_version_file_best_effort(self, rel_path: str) -> str | None:
+        try:
+            path = self._version_file_path(rel_path)
+            if not path.exists():
+                return None
+            if not path.is_file():
+                raise ValueError(f"版本文件路径不是文件: {rel_path}")
+            path.unlink()
+            return None
+        except Exception as exc:
+            print(f"[versions] 删除版本文件失败 {rel_path}: {exc}", flush=True)
+            return str(exc)
+
+    def delete_version(self, resource_type: str, resource_id: str, version: int) -> dict:
+        """
+        删除指定的非当前历史版本。
+
+        当前版本代表项目中正在应用的设计图，且每个资源至少要保留一个版本记录。
+        """
+        if resource_type not in self.RESOURCE_TYPES:
+            raise ValueError(f"不支持的资源类型: {resource_type}")
+
+        with self._lock:
+            data = self._load_versions()
+            resource_data = data.get(resource_type, {}).get(resource_id)
+
+            if not resource_data:
+                raise FileNotFoundError(f"资源不存在: {resource_type}/{resource_id}")
+
+            versions = resource_data.get("versions", [])
+            if len(versions) <= 1:
+                raise ValueError("必须保留至少一个版本")
+
+            current_version = resource_data.get("current_version", 0)
+            if version == current_version:
+                raise ValueError("当前版本正在应用，无法删除")
+
+            target_index = next(
+                (idx for idx, item in enumerate(versions) if item.get("version") == version),
+                None,
+            )
+            if target_index is None:
+                raise FileNotFoundError(f"版本不存在: {version}")
+
+            target_record = versions.pop(target_index)
+            deleted_file = target_record.get("file")
+            self._save_versions(data)
+
+        failed_files: list[str] = []
+        file_delete_errors: list[dict[str, str]] = []
+        if isinstance(deleted_file, str) and deleted_file:
+            error = self._delete_version_file_best_effort(deleted_file)
+            if error is not None:
+                failed_files.append(deleted_file)
+                file_delete_errors.append({"file": deleted_file, "message": error})
+
+        return {
+            "deleted_version": version,
+            "deleted_file": deleted_file,
+            "current_version": current_version,
+            "failed_files": failed_files,
+            "file_delete_errors": file_delete_errors,
+        }
+
+    def delete_resource(self, resource_type: str, resource_id: str) -> dict:
+        """删除某个资源的全部版本记录与版本文件。"""
+        if resource_type not in self.RESOURCE_TYPES:
+            raise ValueError(f"不支持的资源类型: {resource_type}")
+
+        with self._lock:
+            data = self._load_versions()
+            resource_bucket = data.get(resource_type, {})
+            resource_data = resource_bucket.get(resource_id)
+            if resource_data is None:
+                self._save_versions(data)
+                return {
+                    "deleted_versions": 0,
+                    "deleted_files": [],
+                    "failed_files": [],
+                    "file_delete_errors": [],
+                }
+
+            deleted_files: list[str] = []
+            seen_files: set[str] = set()
+            versions = resource_data.get("versions", [])
+            if not isinstance(versions, list):
+                versions = []
+            for item in versions:
+                rel_path = item.get("file") if isinstance(item, dict) else None
+                if isinstance(rel_path, str) and rel_path and rel_path not in seen_files:
+                    seen_files.add(rel_path)
+                    deleted_files.append(rel_path)
+
+            resource_bucket.pop(resource_id, None)
+            self._save_versions(data)
+
+        failed_files: list[str] = []
+        file_delete_errors: list[dict[str, str]] = []
+        for rel_path in deleted_files:
+            error = self._delete_version_file_best_effort(rel_path)
+            if error is not None:
+                failed_files.append(rel_path)
+                file_delete_errors.append({"file": rel_path, "message": error})
+
+        return {
+            "deleted_versions": len(versions),
+            "deleted_files": deleted_files,
+            "failed_files": failed_files,
+            "file_delete_errors": file_delete_errors,
+        }
+
     def has_versions(self, resource_type: str, resource_id: str) -> bool:
         """
         检查资源是否有版本记录

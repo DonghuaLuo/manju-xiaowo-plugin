@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from server.auth import CurrentUserInfo, get_current_user
 from server.routers import versions
+from lib.script_editor import ScriptEditError
+from lib.version_manager import VersionManager
 
 
 class _FakePM:
@@ -62,7 +64,30 @@ class _StoryboardSyncPM:
         if script_filename == "a.json":
             raise KeyError("missing scene")
         if script_filename == "b.json":
-            raise RuntimeError("bad script")
+            raise ScriptEditError("bad script")
+
+
+class _DesignDeletePM:
+    def __init__(self, project_path, project, scripts):
+        self.project_path = project_path
+        self.project = project
+        self.scripts = scripts
+
+    def get_project_path(self, project_name):
+        return self.project_path
+
+    def load_project(self, project_name):
+        return self.project
+
+    def list_scripts(self, project_name):
+        return list(self.scripts)
+
+    def load_script(self, project_name, filename):
+        return self.scripts[filename]
+
+    def update_project(self, project_name, mutate_fn):
+        mutate_fn(self.project)
+        return self.project
 
 
 def _client(monkeypatch):
@@ -220,3 +245,202 @@ class TestVersionsRouter:
             resp = client.get("/api/v1/projects/demo/versions/characters/Alice")
             assert resp.status_code == 500
             assert "boom" in resp.json()["detail"]
+
+    def test_design_usage_blocks_whole_design_delete(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        current_file = project_path / "characters" / "Alice.png"
+        current_file.parent.mkdir(parents=True)
+        current_file.write_bytes(b"current")
+
+        vm = VersionManager(project_path)
+        vm.add_version("characters", "Alice", "v1", current_file)
+
+        project = {
+            "characters": {"Alice": {"description": "hero", "character_sheet": "characters/Alice.png"}},
+            "scenes": {},
+            "props": {},
+            "episodes": [{"script_file": "episode_1.json"}],
+        }
+        scripts = {
+            "episode_1.json": {
+                "episode": 1,
+                "segments": [
+                    {"segment_id": "E1S01", "characters_in_segment": ["Alice"], "scenes": [], "props": []}
+                ],
+            }
+        }
+        fake_pm = _DesignDeletePM(project_path, project, scripts)
+        monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            usage_resp = client.get("/api/v1/projects/demo/versions/characters/Alice/usage")
+            assert usage_resp.status_code == 200
+            assert usage_resp.json()["in_use"] is True
+            assert usage_resp.json()["usages"][0]["kind"] == "segment"
+
+            delete_resp = client.delete("/api/v1/projects/demo/versions/characters/Alice")
+            assert delete_resp.status_code == 409
+            assert delete_resp.json()["detail"] == "已应用，无法删除"
+
+        assert "Alice" in project["characters"]
+        assert current_file.exists()
+        assert VersionManager(project_path).get_versions("characters", "Alice")["versions"]
+
+    def test_delete_whole_design_removes_entry_files_and_versions(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        current_file = project_path / "characters" / "Alice.png"
+        reference_file = project_path / "characters" / "refs" / "Alice.png"
+        reference_file.parent.mkdir(parents=True)
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_bytes(b"v1")
+        reference_file.write_bytes(b"ref")
+
+        vm = VersionManager(project_path)
+        vm.add_version("characters", "Alice", "v1", current_file)
+        current_file.write_bytes(b"v2")
+        vm.add_version("characters", "Alice", "v2", current_file)
+
+        project = {
+            "characters": {
+                "Alice": {
+                    "description": "hero",
+                    "character_sheet": "characters/Alice.png",
+                    "reference_image": "characters/refs/Alice.png",
+                }
+            },
+            "scenes": {},
+            "props": {},
+            "episodes": [{"script_file": "episode_1.json"}],
+        }
+        scripts = {
+            "episode_1.json": {
+                "episode": 1,
+                "segments": [
+                    {"segment_id": "E1S01", "characters_in_segment": [], "scenes": [], "props": []}
+                ],
+            }
+        }
+        fake_pm = _DesignDeletePM(project_path, project, scripts)
+        monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            resp = client.delete("/api/v1/projects/demo/versions/characters/Alice")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["deleted_versions"] == 2
+            assert data["failed_files"] == []
+            assert data["asset_fingerprints"]["characters/Alice.png"] == 0
+
+        assert "Alice" not in project["characters"]
+        assert not current_file.exists()
+        assert not reference_file.exists()
+        assert VersionManager(project_path).get_versions("characters", "Alice")["versions"] == []
+
+    def test_delete_whole_design_removes_entry_when_file_delete_fails(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        current_dir = project_path / "characters" / "Alice.png"
+        current_dir.mkdir(parents=True)
+
+        project = {
+            "characters": {"Alice": {"description": "hero", "character_sheet": "characters/Alice.png"}},
+            "scenes": {},
+            "props": {},
+            "episodes": [{"script_file": "episode_1.json"}],
+        }
+        scripts = {
+            "episode_1.json": {
+                "episode": 1,
+                "segments": [
+                    {"segment_id": "E1S01", "characters_in_segment": [], "scenes": [], "props": []}
+                ],
+            }
+        }
+        fake_pm = _DesignDeletePM(project_path, project, scripts)
+        monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            resp = client.delete("/api/v1/projects/demo/versions/characters/Alice")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["failed_files"] == ["characters/Alice.png"]
+            assert "资源路径不是文件" in data["file_delete_errors"][0]["message"]
+
+        assert "Alice" not in project["characters"]
+        assert current_dir.is_dir()
+
+    def test_delete_version_blocks_current_and_removes_non_current(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        current_file = project_path / "characters" / "Alice.png"
+        current_file.parent.mkdir(parents=True)
+        current_file.write_bytes(b"v1")
+
+        vm = VersionManager(project_path)
+        vm.add_version("characters", "Alice", "v1", current_file)
+        current_file.write_bytes(b"v2")
+        vm.add_version("characters", "Alice", "v2", current_file)
+        v1_file = project_path / vm.get_versions("characters", "Alice")["versions"][0]["file"]
+
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            current_resp = client.delete("/api/v1/projects/demo/versions/characters/Alice/2")
+            assert current_resp.status_code == 400
+            assert "当前版本" in current_resp.json()["detail"]
+
+            old_resp = client.delete("/api/v1/projects/demo/versions/characters/Alice/1")
+            assert old_resp.status_code == 200
+            assert old_resp.json()["deleted_version"] == 1
+            assert old_resp.json()["failed_files"] == []
+
+        remaining = VersionManager(project_path).get_versions("characters", "Alice")
+        assert [item["version"] for item in remaining["versions"]] == [2]
+        assert not v1_file.exists()
+
+    def test_delete_version_removes_record_when_file_delete_fails(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        current_file = project_path / "characters" / "Alice.png"
+        current_file.parent.mkdir(parents=True)
+        current_file.write_bytes(b"v1")
+
+        vm = VersionManager(project_path)
+        vm.add_version("characters", "Alice", "v1", current_file)
+        current_file.write_bytes(b"v2")
+        vm.add_version("characters", "Alice", "v2", current_file)
+        v1_rel = vm.get_versions("characters", "Alice")["versions"][0]["file"]
+        v1_file = project_path / v1_rel
+        v1_file.unlink()
+        v1_file.mkdir()
+
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            resp = client.delete("/api/v1/projects/demo/versions/characters/Alice/1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["deleted_version"] == 1
+            assert data["failed_files"] == [v1_rel]
+            assert "版本文件路径不是文件" in data["file_delete_errors"][0]["message"]
+
+        remaining = VersionManager(project_path).get_versions("characters", "Alice")
+        assert [item["version"] for item in remaining["versions"]] == [2]
+        assert v1_file.is_dir()
