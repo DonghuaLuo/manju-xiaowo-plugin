@@ -10,19 +10,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 logger = logging.getLogger(__name__)
 
 from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_SPECS
 from lib.i18n import Translator
-from lib.project_change_hints import project_change_source
+from lib.image_utils import convert_image_bytes_to_png, save_image_file_as_png
+from lib.project_change_hints import emit_project_change_batch, project_change_source
 from lib.project_manager import ProjectManager
 from lib.resource_paths import resource_relative_path
 from lib.script_editor import ScriptEditError
+from lib.storyboard_sequence import find_storyboard_item, get_storyboard_items
+from lib.thumbnail import extract_video_thumbnail
+from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
 from lib.version_manager import VersionManager
 from server.auth import CurrentUser
+from server.services.generation_tasks import (
+    _normalize_storyboard_prompt,
+    _normalize_video_prompt,
+    get_aspect_ratio,
+)
 
 router = APIRouter()
 
@@ -32,6 +41,11 @@ pm = ProjectManager(app_data_dir())
 # 经此路由可还原的资源类型（API 面策略）。路径形状委托 lib.resource_paths，但本路由
 # 仅放行有还原后元数据同步分支的这五类；grids/reference_videos 的还原是独立议题。
 _RESTORABLE_RESOURCE_TYPES = frozenset({"storyboards", "videos", "characters", "scenes", "props"})
+_EXTERNAL_UPLOAD_RESOURCE_TYPES = frozenset({"storyboards", "videos"})
+_EXTERNAL_UPLOAD_EXTENSIONS = {
+    "storyboards": frozenset({".png", ".jpg", ".jpeg", ".webp"}),
+    "videos": frozenset({".mp4"}),
+}
 
 
 def get_project_manager() -> ProjectManager:
@@ -311,6 +325,85 @@ def _sync_metadata(
         _sync_storyboard_metadata(project_name, resource_id, file_path, project_path)
 
 
+def _require_upload_filename(file: UploadFile) -> str:
+    filename = file.filename
+    if not filename:
+        raise HTTPException(status_code=400, detail="缺少文件名")
+    return filename
+
+
+def _coerce_duration_seconds(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        seconds = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _script_media_version_payload(
+    resource_type: str,
+    project: dict,
+    script: dict,
+    resource_id: str,
+) -> tuple[str, dict[str, Any]]:
+    try:
+        items, id_field, _, _, _ = get_storyboard_items(script)
+        resolved = find_storyboard_item(items, id_field, resource_id)
+        if resolved is None:
+            raise ValueError(f"未找到当前分镜/场景: {resource_id}")
+        item, _ = resolved
+        if resource_type == "storyboards":
+            prompt = _normalize_storyboard_prompt(item.get("image_prompt"), project.get("style", ""))
+            return prompt, {"aspect_ratio": get_aspect_ratio(project, "storyboards")}
+
+        prompt = _normalize_video_prompt(item.get("video_prompt"))
+        duration_seconds = _coerce_duration_seconds(item.get("duration_seconds"))
+        if duration_seconds is None:
+            duration_seconds = _coerce_duration_seconds(project.get("default_duration"))
+        metadata = {"duration_seconds": duration_seconds} if duration_seconds is not None else {}
+        return prompt, metadata
+    except (ValueError, ScriptEditError):
+        raise
+    except Exception as exc:
+        logger.warning("读取上传前媒体 prompt 失败 resource=%s/%s", resource_type, resource_id, exc_info=True)
+        raise ValueError("无法读取当前分镜/视频提示词，上传版本未保存") from exc
+
+
+def _emit_media_upload_change(
+    *,
+    project_name: str,
+    resource_type: str,
+    resource_id: str,
+    script_file: str,
+    episode: int | None,
+    asset_fingerprints: dict[str, int],
+) -> None:
+    action = "storyboard_ready" if resource_type == "storyboards" else "video_ready"
+    label = "分镜图" if resource_type == "storyboards" else "视频"
+    try:
+        emit_project_change_batch(
+            project_name,
+            [
+                {
+                    "entity_type": "segment",
+                    "action": action,
+                    "entity_id": resource_id,
+                    "label": f"分镜「{resource_id}」{label}",
+                    "script_file": script_file,
+                    "episode": episode,
+                    "focus": None,
+                    "important": True,
+                    "asset_fingerprints": asset_fingerprints,
+                }
+            ],
+            source="webui",
+        )
+    except Exception:
+        logger.exception("发送外部上传项目事件失败 project=%s resource=%s/%s", project_name, resource_type, resource_id)
+
+
 # ==================== 版本查询 ====================
 
 
@@ -540,6 +633,169 @@ async def restore_version(
 
 
 # ==================== 版本删除 ====================
+
+
+@router.post("/projects/{project_name}/versions/{resource_type}/{resource_id}/upload")
+async def upload_external_media_version(
+    project_name: str,
+    resource_type: str,
+    resource_id: str,
+    _user: CurrentUser,
+    _t: Translator,
+    script_file: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """上传外部生成的分镜图/视频，并作为当前资源的新版本登记。"""
+    try:
+        if resource_type not in _EXTERNAL_UPLOAD_RESOURCE_TYPES:
+            raise HTTPException(status_code=400, detail=f"不支持外部上传的资源类型: {resource_type}")
+
+        original_filename = _require_upload_filename(file)
+        ext = Path(original_filename).suffix.lower()
+        if ext not in _EXTERNAL_UPLOAD_EXTENSIONS[resource_type]:
+            allowed = ", ".join(sorted(_EXTERNAL_UPLOAD_EXTENSIONS[resource_type]))
+            raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext or '无扩展名'}，允许: {allowed}")
+
+        def _write_current() -> dict[str, Any]:
+            manager = get_project_manager()
+            project = manager.load_project(project_name)
+            project_path = manager.get_project_path(project_name)
+            script = manager.load_script(project_name, script_file)
+            episode = script.get("episode") if isinstance(script.get("episode"), int) else None
+            current_file, rel_path = _resolve_resource_path(resource_type, resource_id, project_path, _t)
+            current_file.parent.mkdir(parents=True, exist_ok=True)
+
+            version_manager = get_version_manager(project_name)
+            version_prompt, version_metadata = _script_media_version_payload(resource_type, project, script, resource_id)
+            if current_file.exists():
+                version_manager.ensure_current_tracked(
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    current_file=current_file,
+                    prompt=version_prompt,
+                    **version_metadata,
+                )
+
+            if resource_type == "storyboards":
+                try:
+                    source_path = local_upload_path(file)
+                    if source_path is not None:
+                        if source_path.stat().st_size <= 0:
+                            raise HTTPException(status_code=400, detail="上传文件为空")
+                        save_image_file_as_png(source_path, current_file)
+                    else:
+                        content = read_upload_bytes(file)
+                        if not content:
+                            raise HTTPException(status_code=400, detail="上传文件为空")
+                        current_file.write_bytes(convert_image_bytes_to_png(content))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="无效的图片文件")
+                with project_change_source("webui"):
+                    manager.update_scene_asset(
+                        project_name=project_name,
+                        script_filename=script_file,
+                        scene_id=resource_id,
+                        asset_type="storyboard_image",
+                        asset_path=rel_path,
+                    )
+            else:
+                copy_upload_file(file, current_file)
+                if not current_file.exists() or current_file.stat().st_size <= 0:
+                    current_file.unlink(missing_ok=True)
+                    raise HTTPException(status_code=400, detail="上传文件为空")
+                with project_change_source("webui"):
+                    manager.update_scene_asset(
+                        project_name=project_name,
+                        script_filename=script_file,
+                        scene_id=resource_id,
+                        asset_type="video_clip",
+                        asset_path=rel_path,
+                    )
+                    manager.update_scene_asset(
+                        project_name=project_name,
+                        script_filename=script_file,
+                        scene_id=resource_id,
+                        asset_type="video_uri",
+                        asset_path=None,
+                    )
+
+            version = version_manager.add_version(
+                resource_type=resource_type,
+                resource_id=resource_id,
+                prompt=version_prompt,
+                source_file=current_file,
+                **version_metadata,
+            )
+            versions = version_manager.get_versions(resource_type, resource_id)["versions"]
+            created_at = versions[-1]["created_at"] if versions else None
+            asset_fingerprints = {rel_path: current_file.stat().st_mtime_ns}
+
+            return {
+                "project_path": project_path,
+                "current_file": current_file,
+                "rel_path": rel_path,
+                "version": version,
+                "created_at": created_at,
+                "episode": episode,
+                "asset_fingerprints": asset_fingerprints,
+            }
+
+        result = await asyncio.to_thread(_write_current)
+
+        if resource_type == "videos":
+            project_path: Path = result["project_path"]
+            current_file: Path = result["current_file"]
+            thumbnail_file = project_path / "thumbnails" / f"scene_{resource_id}.jpg"
+            thumbnail_key = f"thumbnails/scene_{resource_id}.jpg"
+            thumbnail_file.unlink(missing_ok=True)
+            thumbnail_path = await extract_video_thumbnail(current_file, thumbnail_file)
+
+            def _sync_thumbnail() -> None:
+                manager = get_project_manager()
+                with project_change_source("webui"):
+                    manager.update_scene_asset(
+                        project_name=project_name,
+                        script_filename=script_file,
+                        scene_id=resource_id,
+                        asset_type="video_thumbnail",
+                        asset_path=thumbnail_key if thumbnail_path else None,
+                    )
+
+            await asyncio.to_thread(_sync_thumbnail)
+            result["asset_fingerprints"][thumbnail_key] = (
+                thumbnail_file.stat().st_mtime_ns if thumbnail_file.exists() else 0
+            )
+
+        _emit_media_upload_change(
+            project_name=project_name,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            script_file=script_file,
+            episode=result["episode"],
+            asset_fingerprints=result["asset_fingerprints"],
+        )
+
+        return {
+            "success": True,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "version": result["version"],
+            "created_at": result["created_at"],
+            "file_path": result["rel_path"],
+            "asset_fingerprints": result["asset_fingerprints"],
+        }
+
+    except HTTPException:
+        raise
+    except ScriptEditError as e:
+        raise HTTPException(status_code=400, detail=f"剧本数据损坏: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/projects/{project_name}/versions/{resource_type}/{resource_id}/{version}")

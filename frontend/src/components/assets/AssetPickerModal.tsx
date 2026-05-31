@@ -34,7 +34,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
   const [q, setQ] = useState("");
   const debouncedQ = useDebouncedValue(q, 250);
   const [selected, setSelected] = useState<Map<string, Asset>>(new Map());
-  const [previewAsset, setPreviewAsset] = useState<{ src: string; alt: string } | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<{ src: string; alt: string; path?: string } | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const titleId = useId();
@@ -190,7 +190,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
               onChange={(e) => setQ(e.target.value)}
               placeholder={t("search_placeholder")}
               aria-label={t("search_placeholder")}
-              className="focus-ring min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
               style={{ color: "var(--color-text)" }}
             />
           </div>
@@ -263,7 +263,11 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
-                      setPreviewAsset({ src: url, alt: a.name });
+                      setPreviewAsset({
+                        src: url,
+                        alt: a.name,
+                        path: a.image_path ?? undefined,
+                      });
                     }}
                     onKeyDown={(event) => event.stopPropagation()}
                     aria-label={`${a.name} 全屏预览`}
@@ -369,6 +373,9 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
           <ImageLightbox
             src={previewAsset.src}
             alt={previewAsset.alt}
+            downloadSource={
+              previewAsset.path ? { kind: "global", path: previewAsset.path } : undefined
+            }
             onClose={() => setPreviewAsset(null)}
           />
         )}

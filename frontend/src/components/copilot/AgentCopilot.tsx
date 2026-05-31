@@ -193,6 +193,7 @@ export function AgentCopilot() {
   const imageGenRef = useRef(0);
   const slashMenuRef = useRef<SlashCommandMenuHandle>(null);
   const dropActiveRef = useRef(false);
+  const dropResetTimerRef = useRef<number | null>(null);
   const [localInput, setLocalInput] = useState("");
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -209,6 +210,22 @@ export function AgentCopilot() {
     : isRunning
       ? t("generating_stop_hint")
       : t("input_placeholder");
+
+  const clearDropResetTimer = useCallback(() => {
+    if (dropResetTimerRef.current !== null) {
+      window.clearTimeout(dropResetTimerRef.current);
+      dropResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDropReset = useCallback(() => {
+    clearDropResetTimer();
+    dropResetTimerRef.current = window.setTimeout(() => {
+      dropActiveRef.current = false;
+      setIsDragOver(false);
+      dropResetTimerRef.current = null;
+    }, 1200);
+  }, [clearDropResetTimer]);
 
   const addImages = useCallback((files: File[]) => {
     setAttachError(null);
@@ -294,15 +311,15 @@ export function AgentCopilot() {
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    dropActiveRef.current = false;
+    dropActiveRef.current = true;
     setIsDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
-    if (files.length > 0) addImages(files);
-  }, [addImages]);
+    scheduleDropReset();
+  }, [scheduleDropReset]);
 
   useEffect(() => {
     const handleFileDrop = (paths: string[]) => {
       if (!dropActiveRef.current || attachDisabled) return;
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragOver(false);
       voidCall((async () => {
@@ -312,16 +329,18 @@ export function AgentCopilot() {
       })());
     };
     const handleCancelled = () => {
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragOver(false);
     };
     PluginSDK.onFileDrop(handleFileDrop);
     PluginSDK.onFileDropCancelled(handleCancelled);
     return () => {
+      clearDropResetTimer();
       PluginSDK.offFileDrop(handleFileDrop);
       PluginSDK.offFileDropCancelled(handleCancelled);
     };
-  }, [addDesktopImage, attachDisabled]);
+  }, [addDesktopImage, attachDisabled, clearDropResetTimer]);
 
   const removeImage = useCallback((id: string) => {
     setAttachedImages((prev) => prev.filter((img) => img.id !== id));

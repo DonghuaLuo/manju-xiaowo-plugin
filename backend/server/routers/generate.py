@@ -7,10 +7,13 @@
 
 import asyncio
 import logging
+import re
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from lib.app_data_dir import app_data_dir
@@ -23,8 +26,14 @@ from lib.script_editor import ScriptEditError
 from lib.storyboard_sequence import (
     find_storyboard_item,
     get_storyboard_items,
+    resolve_previous_storyboard_path,
 )
 from server.auth import CurrentUser
+from server.services.generation_tasks import (
+    _collect_reference_images,
+    _normalize_storyboard_prompt,
+    _normalize_video_prompt,
+)
 
 router = APIRouter()
 
@@ -34,6 +43,145 @@ pm = ProjectManager(app_data_dir())
 
 def get_project_manager() -> ProjectManager:
     return pm
+
+
+def _project_relative(project_path: Path, path: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(project_path.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _reference_labels(project: dict, project_path: Path) -> dict[str, str]:
+    labels: dict[str, str] = {}
+
+    for name, data in project.get("characters", {}).items():
+        if not isinstance(data, dict):
+            continue
+        sheet = data.get("character_sheet")
+        if isinstance(sheet, str) and sheet:
+            labels[sheet] = f"角色：{name}"
+
+    for name, data in project.get("scenes", {}).items():
+        if not isinstance(data, dict):
+            continue
+        sheet = data.get("scene_sheet")
+        if isinstance(sheet, str) and sheet:
+            labels[sheet] = f"场景：{name}"
+
+    for name, data in project.get("props", {}).items():
+        if not isinstance(data, dict):
+            continue
+        sheet = data.get("prop_sheet")
+        if isinstance(sheet, str) and sheet:
+            labels[sheet] = f"道具：{name}"
+
+    return {str((project_path / rel).resolve()): label for rel, label in labels.items()}
+
+
+def _serialize_reference(
+    *,
+    project_name: str,
+    project_path: Path,
+    ref: object,
+    labels: dict[str, str],
+    fallback_label: str = "参考图",
+) -> dict[str, str] | None:
+    label = fallback_label
+    description = ""
+    raw_path: object = ref
+    if isinstance(ref, dict):
+        raw_path = ref.get("image")
+        label = str(ref.get("label") or label)
+        description = str(ref.get("description") or "")
+
+    if raw_path is None:
+        return None
+
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = project_path / path
+    if not path.exists():
+        return None
+
+    resolved = str(path.resolve())
+    rel = _project_relative(project_path, path)
+    if not rel:
+        return None
+
+    label = labels.get(resolved, label)
+    result = {
+        "label": label,
+        "path": rel,
+        "url": f"/api/v1/files/{project_name}/{rel}",
+    }
+    if description:
+        result["description"] = description
+    return result
+
+
+_INVALID_EXPORT_FILENAME_CHARS = set('<>:"/\\|?*：')
+
+
+def _safe_export_stem(value: object, fallback: str) -> str:
+    text = str(value or "").strip() or fallback
+    chars = [
+        "_" if ord(char) < 32 or char in _INVALID_EXPORT_FILENAME_CHARS else char
+        for char in text
+    ]
+    safe = re.sub(r"\s+", "_", "".join(chars))
+    safe = re.sub(r"_+", "_", safe).strip(" ._")
+    return (safe[:60].strip(" ._") or fallback)
+
+
+def _reference_export_ext(path: object) -> str:
+    ext = Path(str(path or "")).suffix.lower()
+    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+        return ext
+    return ".png"
+
+
+def _with_external_reference_names(references: list[dict[str, str]]) -> list[dict[str, Any]]:
+    named: list[dict[str, Any]] = []
+    for index, ref in enumerate(references, start=1):
+        item: dict[str, Any] = dict(ref)
+        item["index"] = index
+        stem = _safe_export_stem(ref.get("label"), "参考图")
+        item["filename"] = f"{index:02d}_{stem}{_reference_export_ext(ref.get('path'))}"
+        named.append(item)
+    return named
+
+
+def _format_reference_lines(references: list[dict[str, Any]]) -> str:
+    if not references:
+        return "参考图：无"
+    lines = [
+        "参考图（文件名和上传/粘贴顺序只用于辅助对应；如果文件名无法读取或顺序不准确，请以图片实际内容和下方含义为准）："
+    ]
+    for index, ref in enumerate(references, start=1):
+        ref_index = int(ref.get("index") or index)
+        filename = str(ref.get("filename") or f"参考图{ref_index}")
+        suffix = f"；{ref['description']}" if ref.get("description") else ""
+        lines.append(f"参考图{ref_index}：{filename}，{ref['label']}{suffix}")
+    return "\n".join(lines)
+
+
+def _external_storyboard_text(prompt_text: str, references: list[dict[str, Any]]) -> str:
+    return (
+        "我会上传/粘贴下列参考图，请使用这些参考图生成这一镜的分镜图，保持角色、场景、道具与参考图一致；不要添加字幕、水印或多余文字。\n\n"
+        f"{_format_reference_lines(references)}\n\n"
+        "分镜图生成提示词：\n"
+        f"{prompt_text}"
+    )
+
+
+def _external_video_text(prompt_text: str, references: list[dict[str, Any]]) -> str:
+    return (
+        "我会上传/粘贴下列参考图，请使用分镜图参考生成视频；如果包含“视频首帧”，请把它作为首帧，动作从这张图开始，保持主体、构图和风格一致。\n\n"
+        f"{_format_reference_lines(references)}\n\n"
+        "视频生成提示词：\n"
+        f"{prompt_text}"
+    )
 
 
 # ==================== 请求模型 ====================
@@ -61,6 +209,118 @@ class GenerateSceneRequest(BaseModel):
 
 class GeneratePropRequest(BaseModel):
     prompt: str
+
+
+# ==================== 外部生成辅助 ====================
+
+
+@router.get("/projects/{project_name}/generate/external-package/{segment_id}")
+async def get_external_generation_package(
+    project_name: str,
+    segment_id: str,
+    _user: CurrentUser,
+    _t: Translator,
+    script_file: str = Query(...),
+):
+    """返回当前分镜用于外部生成的真实 prompt 与参考图清单。"""
+    try:
+
+        def _sync() -> dict[str, Any]:
+            manager = get_project_manager()
+            project = manager.load_project(project_name)
+            project_path = manager.get_project_path(project_name)
+            script = manager.load_script(project_name, script_file)
+            items, id_field, char_field, scene_field, prop_field = get_storyboard_items(script)
+            resolved = find_storyboard_item(items, id_field, segment_id)
+            if resolved is None:
+                raise HTTPException(status_code=404, detail=_t("segment_not_found", id=segment_id))
+            target_item, _ = resolved
+
+            storyboard_prompt = _normalize_storyboard_prompt(
+                target_item.get("image_prompt"),
+                project.get("style", ""),
+            )
+            video_prompt = _normalize_video_prompt(target_item.get("video_prompt"))
+
+            labels = _reference_labels(project, project_path)
+            previous_path = resolve_previous_storyboard_path(project_path, items, id_field, segment_id)
+            raw_storyboard_refs = _collect_reference_images(
+                project,
+                project_path,
+                target_item,
+                char_field=char_field,
+                scene_field=scene_field,
+                prop_field=prop_field,
+                previous_storyboard_path=previous_path,
+            ) or []
+            storyboard_refs: list[dict[str, Any]] = [
+                serialized
+                for ref in raw_storyboard_refs
+                if (
+                    serialized := _serialize_reference(
+                        project_name=project_name,
+                        project_path=project_path,
+                        ref=ref,
+                        labels=labels,
+                    )
+                )
+            ]
+
+            assets = target_item.get("generated_assets") if isinstance(target_item, dict) else None
+            storyboard_rel = assets.get("storyboard_image") if isinstance(assets, dict) else None
+            storyboard_path = (
+                project_path / storyboard_rel
+                if isinstance(storyboard_rel, str) and storyboard_rel
+                else project_path / "storyboards" / f"scene_{segment_id}.png"
+            )
+            video_refs: list[dict[str, Any]] = []
+            if storyboard_path.exists():
+                raw_video_ref = {
+                    "image": storyboard_path,
+                    "label": "当前分镜图（视频首帧）",
+                    "description": "视频生成时实际作为 start_image 使用",
+                }
+                serialized_video_ref = _serialize_reference(
+                    project_name=project_name,
+                    project_path=project_path,
+                    ref=raw_video_ref,
+                    labels={},
+                )
+                if serialized_video_ref:
+                    video_refs.append(serialized_video_ref)
+
+            storyboard_refs = _with_external_reference_names(storyboard_refs)
+            video_refs = _with_external_reference_names(video_refs)
+
+            return {
+                "project_name": project_name,
+                "script_file": script_file,
+                "segment_id": segment_id,
+                "storyboard": {
+                    "prompt": storyboard_prompt,
+                    "external_prompt": _external_storyboard_text(storyboard_prompt, storyboard_refs),
+                    "references": storyboard_refs,
+                },
+                "video": {
+                    "prompt": video_prompt,
+                    "external_prompt": _external_video_text(video_prompt, video_refs),
+                    "references": video_refs,
+                },
+            }
+
+        return await asyncio.to_thread(_sync)
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except ScriptEditError as e:
+        raise HTTPException(status_code=400, detail=_t("script_data_corrupted", reason=str(e)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== 分镜图生成 ====================

@@ -28,9 +28,18 @@ export async function saveBlobWithDialog(
   });
   if (!savePath) return null;
 
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  await PluginSDK.fs.writeBase64File(savePath, bytesToBase64(bytes), false);
+  await writeBlobToPath(blob, savePath);
   return savePath;
+}
+
+export async function writeBlobToPath(blob: Blob, path: string): Promise<void> {
+  if (blob.type.startsWith("text/")) {
+    await PluginSDK.fs.writeTextFile(path, await blob.text(), false);
+    return;
+  }
+
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await PluginSDK.fs.writeBase64File(path, bytesToBase64(bytes), false);
 }
 
 export async function offerOpenSavedFile(

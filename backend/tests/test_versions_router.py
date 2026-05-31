@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -88,6 +89,49 @@ class _DesignDeletePM:
     def update_project(self, project_name, mutate_fn):
         mutate_fn(self.project)
         return self.project
+
+
+class _ExternalUploadPM:
+    def __init__(self, project_path):
+        self.project_path = project_path
+        self.project = {"style": "", "default_duration": 5}
+        self.script = {
+            "episode": 1,
+            "segments": [
+                {
+                    "segment_id": "E1S01",
+                    "image_prompt": "image prompt",
+                    "video_prompt": "video prompt",
+                    "duration_seconds": 4,
+                    "generated_assets": {},
+                    "characters_in_segment": [],
+                    "scenes": [],
+                    "props": [],
+                }
+            ],
+        }
+        self.update_calls = []
+
+    def get_project_path(self, project_name):
+        return self.project_path
+
+    def load_project(self, project_name):
+        return self.project
+
+    def load_script(self, project_name, filename):
+        return self.script
+
+    def update_scene_asset(self, project_name, script_filename, scene_id, asset_type, asset_path):
+        self.update_calls.append((scene_id, asset_type, asset_path))
+        self.script["segments"][0].setdefault("generated_assets", {})[asset_type] = asset_path
+
+
+class _UnreadableUploadStream:
+    def read(self, *args, **kwargs):
+        raise AssertionError("video path upload should copy the local file path instead of reading the stream")
+
+    def seek(self, *args, **kwargs):
+        raise AssertionError("video path upload should not touch the upload stream")
 
 
 def _client(monkeypatch):
@@ -444,3 +488,40 @@ class TestVersionsRouter:
         remaining = VersionManager(project_path).get_versions("characters", "Alice")
         assert [item["version"] for item in remaining["versions"]] == [2]
         assert v1_file.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_external_video_upload_copies_desktop_path_without_reading_stream(self, monkeypatch, tmp_path):
+        project_path = tmp_path / "demo"
+        source = tmp_path / "external.mp4"
+        source.write_bytes(b"video-data")
+        fake_pm = _ExternalUploadPM(project_path)
+
+        monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
+
+        async def _fake_thumbnail(current_file, thumbnail_file):
+            return None
+
+        monkeypatch.setattr(versions, "extract_video_thumbnail", _fake_thumbnail)
+        monkeypatch.setattr(versions, "emit_project_change_batch", lambda *args, **kwargs: None)
+
+        upload = SimpleNamespace(
+            filename="external.mp4",
+            path=source,
+            file=_UnreadableUploadStream(),
+        )
+
+        result = await versions.upload_external_media_version(
+            project_name="demo",
+            resource_type="videos",
+            resource_id="E1S01",
+            _user=None,
+            _t=lambda key, **kwargs: key,
+            script_file="episode_1.json",
+            file=upload,
+        )
+
+        current_path = project_path / result["file_path"]
+        assert result["success"] is True
+        assert current_path.read_bytes() == b"video-data"
+        assert ("E1S01", "video_clip", result["file_path"]) in fake_pm.update_calls

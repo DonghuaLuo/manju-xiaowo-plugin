@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { API } from "@/api";
 import { GlassModal } from "@/components/ui/GlassModal";
 import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
+import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -230,7 +231,7 @@ export function SegmentRefsEditModal({
               aria-label={t("segment_refs_search_placeholder")}
               autoComplete="off"
               spellCheck={false}
-              className="focus-ring min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
               style={{ color: "var(--color-text)" }}
             />
           </div>
@@ -468,6 +469,9 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
   const isCharacter = row.kind === "character";
   const thumbShape = isCharacter ? "rounded-full" : "rounded-md";
   const showImage = !!row.thumbPath && !row.isStale;
+  const thumbSrc = showImage && row.thumbPath
+    ? API.getFileUrl(projectName, row.thumbPath, sheetFp)
+    : null;
 
   const baseStyle = row.isStale
     ? {
@@ -488,9 +492,24 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
         };
 
   return (
-    <button
-      type="button"
-      onClick={onToggle}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        if (
+          e.target instanceof Element &&
+          e.target.closest("[data-ref-preview-trigger='true']")
+        ) {
+          return;
+        }
+        onToggle();
+      }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        onToggle();
+      }}
       aria-pressed={selected}
       title={row.isStale ? staleHint : row.name}
       className="focus-ring group flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors"
@@ -517,12 +536,29 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
         }
       }}
     >
-      {showImage ? (
-        <img
-          src={API.getFileUrl(projectName, row.thumbPath!, sheetFp)}
-          alt={row.name}
-          className={`h-8 w-8 shrink-0 object-cover ${thumbShape}`}
-        />
+      {thumbSrc && row.thumbPath ? (
+        <span
+          data-ref-preview-trigger="true"
+          className={`shrink-0 ${thumbShape}`}
+        >
+          <PreviewableImageFrame
+            src={thumbSrc}
+            alt="资产图片"
+            showPreviewIcon={false}
+            downloadSource={{
+              kind: "project",
+              projectName,
+              path: row.thumbPath,
+            }}
+          >
+            <img
+              src={thumbSrc}
+              alt="资产图片"
+              className={`h-8 w-8 shrink-0 object-cover ${thumbShape}`}
+              draggable={false}
+            />
+          </PreviewableImageFrame>
+        </span>
       ) : (
         <span
           className={`grid h-8 w-8 shrink-0 place-items-center text-[10px] font-semibold text-white ${thumbShape} ${
@@ -587,6 +623,6 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
       >
         <Check className="h-3 w-3" strokeWidth={3} />
       </span>
-    </button>
+    </div>
   );
 }

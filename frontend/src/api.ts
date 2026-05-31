@@ -96,6 +96,7 @@ interface ImportErrorPayload {
 /** Version metadata returned by the versions API. */
 export interface VersionInfo {
   version: number;
+  file?: string;
   filename: string;
   created_at: string;
   file_size: number;
@@ -114,6 +115,31 @@ export interface DesignResourceUsage {
   episode?: number | string | null;
   kind: string;
   item_id?: string | null;
+}
+
+export interface ExternalGenerationReference {
+  index: number;
+  filename: string;
+  label: string;
+  path: string;
+  url: string;
+  description?: string;
+}
+
+export interface ExternalGenerationPackage {
+  project_name: string;
+  script_file: string;
+  segment_id: string;
+  storyboard: {
+    prompt: string;
+    external_prompt: string;
+    references: ExternalGenerationReference[];
+  };
+  video: {
+    prompt: string;
+    external_prompt: string;
+    references: ExternalGenerationReference[];
+  };
 }
 
 /** Options for {@link API.openTaskStream}. */
@@ -376,20 +402,22 @@ function projectFileToLocalUrl(
   return filePath ? convertLocalFileSrc(filePath, "v", cacheBust) : null;
 }
 
-function globalAssetToLocalUrl(
-  path: string,
-  cacheBust?: number | string | null,
-): string | null {
-  if (isAbsoluteLocalPath(path)) {
-    return convertLocalFileSrc(path, "fp", cacheBust);
-  }
+function globalAssetToLocalPath(path: string): string | null {
+  if (isAbsoluteLocalPath(path)) return path;
   if (!localAssetRoots?.projects_root) return null;
   const cleaned = cleanRelativePath(path);
   if (!cleaned?.startsWith("_global_assets/")) return null;
   const root = localAssetRoots.global_assets_root
     ? normalizeLocalPath(localAssetRoots.global_assets_root).replace(/\/_global_assets$/, "")
     : localAssetRoots.projects_root;
-  const filePath = joinLocalPath(root, cleaned);
+  return joinLocalPath(root, cleaned);
+}
+
+function globalAssetToLocalUrl(
+  path: string,
+  cacheBust?: number | string | null,
+): string | null {
+  const filePath = globalAssetToLocalPath(path);
   return filePath ? convertLocalFileSrc(filePath, "fp", cacheBust) : null;
 }
 
@@ -1190,6 +1218,22 @@ class API {
     return `${base}?v=${encodeURIComponent(String(cacheBust))}`;
   }
 
+  static async getProjectFileLocalPath(
+    projectName: string,
+    path: string,
+  ): Promise<string | null> {
+    await ensureLocalAssetRoots();
+    if (isAbsoluteLocalPath(path)) return path;
+    if (!localAssetRoots?.projects_root) return null;
+    return joinLocalPath(localAssetRoots.projects_root, projectName, path);
+  }
+
+  static async getGlobalAssetLocalPath(path: string | null): Promise<string | null> {
+    if (!path) return null;
+    await ensureLocalAssetRoots();
+    return globalAssetToLocalPath(path);
+  }
+
   // ==================== Source 文件管理 ====================
 
   /**
@@ -1341,6 +1385,16 @@ class API {
   }
 
   // ==================== 生成 API ====================
+
+  static async getExternalGenerationPackage(
+    projectName: string,
+    segmentId: string,
+    scriptFile: string,
+  ): Promise<ExternalGenerationPackage> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generate/external-package/${encodeURIComponent(segmentId)}?script_file=${encodeURIComponent(scriptFile)}`,
+    );
+  }
 
   /**
    * 生成分镜图
@@ -1739,6 +1793,39 @@ class API {
       `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/${version}`,
       { method: "DELETE" },
     );
+  }
+
+  static async uploadExternalMediaVersion(
+    projectName: string,
+    resourceType: "storyboards" | "videos",
+    resourceId: string,
+    file: UploadFileInput,
+    options: { scriptFile: string },
+  ): Promise<SuccessResponse & {
+    resource_type: "storyboards" | "videos";
+    resource_id: string;
+    version: number;
+    created_at?: string | null;
+    file_path?: string;
+    asset_fingerprints?: Record<string, number>;
+  }> {
+    const url = `${API_BASE}/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/upload`;
+    const response = await requestWithLocalFiles(
+      url,
+      {
+        script_file: options.scriptFile,
+      },
+      [{ fieldName: "file", file }],
+    );
+    await throwIfNotOk(response, "上传外部生成结果失败");
+    return (await response.json()) as SuccessResponse & {
+      resource_type: "storyboards" | "videos";
+      resource_id: string;
+      version: number;
+      created_at?: string | null;
+      file_path?: string;
+      asset_fingerprints?: Record<string, number>;
+    };
   }
 
   // ==================== 风格参考图 API ====================

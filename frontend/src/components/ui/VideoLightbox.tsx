@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { Download, Loader2, X } from "lucide-react";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
 import { UI_LAYERS } from "@/utils/ui-layers";
 
@@ -8,10 +8,19 @@ interface VideoLightboxProps {
   src: string;
   title: string;
   poster?: string | null;
+  downloading?: boolean;
+  onDownload?: () => Promise<void> | void;
   onClose: () => void;
 }
 
-export function VideoLightbox({ src, title, poster, onClose }: VideoLightboxProps) {
+export function VideoLightbox({
+  src,
+  title,
+  poster,
+  downloading,
+  onDownload,
+  onClose,
+}: VideoLightboxProps) {
   useEscapeClose(onClose);
 
   useEffect(() => {
@@ -33,7 +42,23 @@ export function VideoLightbox({ src, title, poster, onClose }: VideoLightboxProp
         onClick={onClose}
       />
 
-      <div className="absolute right-4 top-4 sm:right-6 sm:top-6">
+      <div className="absolute right-4 top-4 flex gap-2 sm:right-6 sm:top-6">
+        {onDownload && (
+          <button
+            type="button"
+            onClick={() => void onDownload()}
+            disabled={downloading}
+            aria-label="下载视频"
+            title="下载视频"
+            className="relative z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-black/55 text-white shadow-lg shadow-black/30 backdrop-blur transition-colors hover:bg-black/75 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {downloading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Download className="h-5 w-5" />
+            )}
+          </button>
+        )}
         <button
           type="button"
           onClick={onClose}

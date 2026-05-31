@@ -170,7 +170,7 @@ export function GridPreviewPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; path: string } | null>(null);
   const { t } = useTranslation("dashboard");
 
   const hasGrids = gridIds.length > 0;
@@ -370,7 +370,11 @@ export function GridPreviewPanel({
                     <div className="overflow-hidden rounded-md border border-gray-800/50 bg-gray-900/40">
                       <button
                         type="button"
-                        onClick={() => setPreviewImageUrl(imageUrl)}
+                        onClick={() => {
+                          if (grid.grid_image_path) {
+                            setPreviewImage({ src: imageUrl, path: grid.grid_image_path });
+                          }
+                        }}
                         aria-label={`${t("grid_composite_image_alt")} 全屏预览`}
                         className="block w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
                       >
@@ -418,11 +422,12 @@ export function GridPreviewPanel({
           </motion.div>
         )}
       </AnimatePresence>
-      {previewImageUrl && (
+      {previewImage && (
         <ImageLightbox
-          src={previewImageUrl}
+          src={previewImage.src}
           alt={t("grid_composite_image_alt")}
-          onClose={() => setPreviewImageUrl(null)}
+          downloadSource={{ kind: "project", projectName, path: previewImage.path }}
+          onClose={() => setPreviewImage(null)}
         />
       )}
     </div>

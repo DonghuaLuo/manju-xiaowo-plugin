@@ -211,6 +211,11 @@ export function SceneCard({
           <PreviewableImageFrame
             src={sheetUrl && !imgError ? sheetUrl : null}
             alt={`${name} ${t("scene_design")}`}
+            downloadSource={
+              scene.scene_sheet
+                ? { kind: "project", projectName, path: scene.scene_sheet }
+                : undefined
+            }
           >
             <AspectFrame ratio="16:9">
               {sheetUrl && !imgError ? (

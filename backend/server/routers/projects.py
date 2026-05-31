@@ -37,6 +37,7 @@ from lib.project_change_hints import project_change_source
 from lib.project_manager import ProjectManager
 from lib.status_calculator import StatusCalculator
 from lib.style_templates import is_known_template, list_style_templates, resolve_template_prompt
+from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
 from server.auth import CurrentUser, create_download_token, verify_download_token
 from server.routers._validators import validate_backend_value
 from server.services.project_archive import (
@@ -164,26 +165,18 @@ async def import_project_archive(
     """从 ZIP 导入项目。"""
     upload_path: str | None = None
     try:
-        fd, upload_path = tempfile.mkstemp(prefix="arcreel-upload-", suffix=".zip")
-        os.close(fd)
-
-        # 使用底层 SpooledTemporaryFile 的同步句柄，整循环 offload 到线程，
-        # 避免 async 读取 + 同步写入的混合模式阻塞事件循环 (#230)
-        raw_file = file.file
-
-        def _write_upload():
-            with open(upload_path, "wb") as target:
-                while True:
-                    chunk = raw_file.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    target.write(chunk)
-
-        await asyncio.to_thread(_write_upload)
+        source_path = local_upload_path(file)
+        if source_path is not None:
+            archive_path = source_path
+        else:
+            fd, upload_path = tempfile.mkstemp(prefix="arcreel-upload-", suffix=".zip")
+            os.close(fd)
+            archive_path = Path(upload_path)
+            await asyncio.to_thread(copy_upload_file, file, archive_path)
 
         def _sync():
             return get_archive_service().import_project_archive(
-                Path(upload_path),
+                archive_path,
                 uploaded_filename=file.filename,
                 conflict_policy=conflict_policy,
             )
@@ -997,7 +990,7 @@ async def set_project_source(
                 raise HTTPException(status_code=400, detail=_t("unsupported_file_type", name=suffix))
             if file.size is not None and file.size > MAX_CHARS * 4:
                 raise HTTPException(status_code=400, detail=_t("file_too_large", max_chars=MAX_CHARS))
-            raw = await file.read()
+            raw = await asyncio.to_thread(read_upload_bytes, file)
         text_content: str = content or ""
 
         # 同步文件 I/O 在线程中执行

@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_TYPES
 from lib.i18n import Translator
-from lib.image_utils import normalize_uploaded_image
+from lib.image_utils import normalize_uploaded_image, save_normalized_uploaded_image_file
 from lib.project_change_hints import emit_project_change_batch, project_change_source
 from lib.project_manager import ProjectManager, effective_mode
 from lib.source_loader import (
@@ -32,6 +32,7 @@ from lib.source_loader import (
     SourceLoader,
     UnsupportedFormatError,
 )
+from lib.upload_utils import local_upload_path, read_upload_bytes
 from server.auth import CurrentUser
 
 router = APIRouter()
@@ -159,8 +160,6 @@ async def upload_file(
         )
 
     try:
-        content = await file.read()
-
         def _sync():
             project_dir = get_project_manager().get_project_path(project_name)
 
@@ -206,18 +205,31 @@ async def upload_file(
 
             target_dir.mkdir(parents=True, exist_ok=True)
 
+            target_path = target_dir / filename
+
             # 保存文件（大于 2MB 时压缩为 JPEG，否则校验后原样保存）
-            nonlocal content
             if upload_type in ("character", "character_ref", "scene", "prop", "storyboard"):
                 try:
-                    content, ext = normalize_uploaded_image(content, Path(original_filename).suffix.lower())
+                    source_path = local_upload_path(file)
+                    if source_path is not None:
+                        target_path, ext = save_normalized_uploaded_image_file(
+                            source_path,
+                            target_path,
+                            Path(original_filename).suffix.lower(),
+                        )
+                    else:
+                        content = read_upload_bytes(file)
+                        content, ext = normalize_uploaded_image(content, Path(original_filename).suffix.lower())
+                        target_path = target_path.with_suffix(ext)
+                        with open(target_path, "wb") as f:
+                            f.write(content)
                 except ValueError:
                     raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
-                filename = Path(filename).with_suffix(ext).name
-
-            target_path = target_dir / filename
-            with open(target_path, "wb") as f:
-                f.write(content)
+                filename = target_path.name
+            else:
+                content = read_upload_bytes(file)
+                with open(target_path, "wb") as f:
+                    f.write(content)
 
             # 更新元数据
             if upload_type == "source":
@@ -312,6 +324,15 @@ async def _handle_source_upload(
     source_dir.mkdir(parents=True, exist_ok=True)
 
     def _sync() -> NormalizeResult:
+        source_path = local_upload_path(file)
+        if source_path is not None:
+            return SourceLoader.load(
+                source_path,
+                source_dir,
+                original_filename=original_filename,
+                on_conflict=on_conflict,
+            )
+
         # 流式写入 tmp，避免把上传 body 整体拉进 Python 堆；
         # UploadFile.file 是 SpooledTemporaryFile，此处已是请求体完整到位状态。
         # 在 with 外包 try/finally：即使 copyfileobj 抛异常（如磁盘满），
@@ -821,13 +842,24 @@ async def analyze_style_image(_user: CurrentUser, _t: Translator, file: UploadFi
     tmp_path: Path | None = None
 
     try:
-        content = await file.read()
-
         def _sync_prepare():
+            source_path = local_upload_path(file)
+            if source_path is not None:
+                temp_dir = Path(tempfile.mkdtemp(prefix="arcreel-style-analysis-"))
+                target = temp_dir / f"style_reference{Path(original_filename).suffix.lower() or '.png'}"
+                output_path, _new_ext = save_normalized_uploaded_image_file(
+                    source_path,
+                    target,
+                    Path(original_filename).suffix.lower(),
+                )
+                return output_path
+
+            content = read_upload_bytes(file)
             content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
-            with tempfile.NamedTemporaryFile(prefix="arcreel-style-analysis-", suffix=new_ext, delete=False) as tmp:
-                tmp.write(content_norm)
-                return Path(tmp.name)
+            temp_dir = Path(tempfile.mkdtemp(prefix="arcreel-style-analysis-"))
+            output_path = temp_dir / f"style_reference{new_ext}"
+            output_path.write_bytes(content_norm)
+            return output_path
 
         tmp_path = await asyncio.to_thread(_sync_prepare)
         style_description = await _analyze_style_image(tmp_path, None)
@@ -841,7 +873,7 @@ async def analyze_style_image(_user: CurrentUser, _t: Translator, file: UploadFi
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
+            shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
 
 @router.post("/projects/{project_name}/style-image")
@@ -862,10 +894,20 @@ async def upload_style_image(
     original_filename = _validate_style_image(file, _t)
 
     try:
-        content = await file.read()
-
         def _sync_prepare():
             project_dir = get_project_manager().get_project_path(project_name)
+            original_suffix = Path(original_filename).suffix.lower()
+            source_path = local_upload_path(file)
+            if source_path is not None:
+                output_path, new_ext = save_normalized_uploaded_image_file(
+                    source_path,
+                    project_dir / f"style_reference{original_suffix or '.png'}",
+                    original_suffix,
+                )
+                style_filename = output_path.name
+                return output_path, style_filename
+
+            content = read_upload_bytes(file)
             content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
             style_filename = f"style_reference{new_ext}"
 

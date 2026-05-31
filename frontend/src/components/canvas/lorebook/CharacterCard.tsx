@@ -282,6 +282,11 @@ export function CharacterCard({
             <PreviewableImageFrame
               src={sheetUrl && !imgError ? sheetUrl : null}
               alt={`${name} ${t("character_design")}`}
+              downloadSource={
+                character.character_sheet
+                  ? { kind: "project", projectName, path: character.character_sheet }
+                  : undefined
+              }
             >
               <AspectFrame ratio="16:9">
                 <ImageFlipReveal
@@ -327,6 +332,11 @@ export function CharacterCard({
               src={displayedReferenceUrl}
               alt={`${name} ${t("reference_image")}`}
               buttonClassName="right-2.5 top-2.5"
+              downloadSource={
+                !referencePreview && character.reference_image
+                  ? { kind: "project", projectName, path: character.reference_image }
+                  : undefined
+              }
             >
               <div
                 className="relative mt-1.5 overflow-hidden rounded-lg"

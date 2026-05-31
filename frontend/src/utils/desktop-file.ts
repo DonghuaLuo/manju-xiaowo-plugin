@@ -14,6 +14,10 @@ export interface PickDesktopFileOptions {
   preview?: boolean;
 }
 
+export interface PickDesktopDirectoryOptions {
+  title?: string;
+}
+
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".gif": "image/gif",
   ".jpg": "image/jpeg",
@@ -89,6 +93,18 @@ export async function pickDesktopFile(
   if (!selected || Array.isArray(selected)) return null;
 
   return desktopFileRefFromPath(selected, { preview: options.preview });
+}
+
+export async function pickDesktopDirectory(
+  options: PickDesktopDirectoryOptions = {},
+): Promise<string | null> {
+  const selected = await PluginSDK.dialog.open({
+    title: options.title,
+    multiple: false,
+    directory: true,
+  });
+  if (!selected || Array.isArray(selected)) return null;
+  return selected;
 }
 
 export async function readDesktopFileAsDataUrl(

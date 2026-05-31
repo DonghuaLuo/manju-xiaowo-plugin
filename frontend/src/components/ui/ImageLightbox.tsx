@@ -2,17 +2,26 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
   type WheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { Copy, Download, Loader2, X } from "lucide-react";
 import { UI_LAYERS } from "@/utils/ui-layers";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
+import { useAppStore } from "@/stores/app-store";
+import {
+  copyImageToClipboard,
+  downloadImageWithDialog,
+  type ImageDownloadSource,
+} from "@/utils/image-export";
+import { errMsg } from "@/utils/async";
 
 export interface ImageLightboxProps {
   src: string;
   alt: string;
+  downloadSource?: ImageDownloadSource;
   onClose: () => void;
 }
 
@@ -30,6 +39,8 @@ interface DragState {
   originY: number;
 }
 
+type MenuAction = "copy" | "download";
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const WHEEL_ZOOM_FACTOR = 1.12;
@@ -38,7 +49,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
+export function ImageLightbox({ src, alt, downloadSource, onClose }: ImageLightboxProps) {
   const dragRef = useRef<DragState | null>(null);
   const [viewport, setViewport] = useState<ImageViewport>({
     scale: 1,
@@ -46,6 +57,8 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
     y: 0,
   });
   const [dragging, setDragging] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [busyAction, setBusyAction] = useState<MenuAction | null>(null);
 
   useEscapeClose(onClose);
 
@@ -64,6 +77,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setMenuPos(null);
     const direction = event.deltaY < 0 ? 1 : -1;
 
     setViewport((current) => {
@@ -88,6 +102,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    setMenuPos(null);
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -120,6 +135,36 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
     setDragging(false);
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const openContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenuPos({ x: event.clientX, y: event.clientY });
+  };
+
+  const runMenuAction = async (action: MenuAction) => {
+    if (busyAction) return;
+    setBusyAction(action);
+    try {
+      if (action === "copy") {
+        await copyImageToClipboard(src);
+        useAppStore.getState().pushToast("图片已复制", "success");
+      } else {
+        if (!downloadSource) {
+          throw new Error("缺少可下载的本地图片文件路径");
+        }
+        const savedPath = await downloadImageWithDialog(downloadSource, alt);
+        if (savedPath) {
+          useAppStore.getState().pushToast("图片已保存", "success");
+        }
+      }
+      setMenuPos(null);
+    } catch (error) {
+      useAppStore.getState().pushToast(errMsg(error), "error");
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -162,6 +207,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
           <img
             src={src}
             alt={alt}
+            onContextMenu={openContextMenu}
             className="max-h-[calc(100vh-3rem)] max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-black/35 object-contain shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:max-h-[calc(100vh-5rem)] sm:max-w-[calc(100vw-4rem)]"
             draggable={false}
             style={{
@@ -171,6 +217,45 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
           />
         </div>
       </div>
+
+      {menuPos && (
+        <div
+          className="fixed z-50 min-w-32 overflow-hidden rounded-lg border border-white/10 bg-slate-950/95 p-1 text-[12px] text-white shadow-2xl shadow-black/50 backdrop-blur"
+          style={{
+            left: menuPos.x,
+            top: menuPos.y,
+          }}
+        >
+          <button
+            type="button"
+            disabled={busyAction !== null}
+            onClick={() => void runMenuAction("copy")}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-white/10 disabled:opacity-60"
+          >
+            {busyAction === "copy" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            <span>复制</span>
+          </button>
+          {downloadSource && (
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() => void runMenuAction("download")}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-white/10 disabled:opacity-60"
+            >
+              {busyAction === "download" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span>下载</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>,
     document.body,
   );

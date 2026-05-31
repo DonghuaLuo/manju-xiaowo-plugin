@@ -59,6 +59,31 @@ describe("SegmentRefsEditModal", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("clicking a thumbnail opens preview without toggling the row", () => {
+    render(
+      <SegmentRefsEditModal
+        {...baseProps}
+        characters={{
+          ...characters,
+          Villain: {
+            ...characters.Villain,
+            character_sheet: "assets/villain.png",
+          },
+        }}
+      />,
+    );
+
+    const villainRow = screen.getByRole("button", { name: /Villain/ });
+    expect(villainRow).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "资产图片 全屏预览" }));
+
+    expect(villainRow).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("dialog", { name: "资产图片 全屏预览" }),
+    ).toBeInTheDocument();
+  });
+
   it("save button is disabled until at least one change is made", () => {
     render(<SegmentRefsEditModal {...baseProps} />);
     const saveBtn = screen.getByRole("button", { name: "保存" });

@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { PluginSDK } from "xiaowo-sdk";
-import { Sparkles, ImageIcon, Film, Maximize2 } from "lucide-react";
+import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
+import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { ImageFlipReveal } from "@/components/ui/ImageFlipReveal";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
 import { VideoLightbox } from "@/components/ui/VideoLightbox";
 import { formatCost } from "@/utils/cost-format";
+import { errMsg } from "@/utils/async";
+import { pickDesktopFile } from "@/utils/desktop-file";
+import { downloadProjectVideoWithDialog } from "@/utils/video-export";
 import type { CostBreakdown } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
 
@@ -20,6 +24,8 @@ interface MediaCardProps {
   segmentId: string;
   /** 资产相对路径，如 storyboards/E1S2_v1.png */
   assetPath: string | null;
+  /** 当前剧集脚本文件名，用于外部上传后回写 generated_assets */
+  scriptFile?: string;
   /** 视频海报缩略图（仅 kind=video 用） */
   posterPath?: string | null;
   /** 渲染比例 */
@@ -28,6 +34,8 @@ interface MediaCardProps {
   hideGenerateButton?: boolean;
   /** 生成按钮是否禁用（视频生成需要先有分镜图） */
   generateDisabled?: boolean;
+  /** 外部上传按钮是否禁用（通常仅在当前提示词有未保存编辑时禁用） */
+  uploadDisabled?: boolean;
   /** 自定义禁用 tooltip，未提供时使用默认（"分镜图未生成"）的视频禁用提示 */
   generateDisabledHint?: string;
   /** 进行中状态 */
@@ -38,6 +46,8 @@ interface MediaCardProps {
   onGenerate?: () => void;
   /** 版本恢复回调 */
   onRestore?: () => Promise<void> | void;
+  /** 外部上传成新版本后的回调 */
+  onUploaded?: () => Promise<void> | void;
 }
 
 export function MediaCard({
@@ -45,18 +55,23 @@ export function MediaCard({
   projectName,
   segmentId,
   assetPath,
+  scriptFile,
   posterPath,
   aspectRatio,
   hideGenerateButton,
   generateDisabled,
+  uploadDisabled,
   generateDisabledHint,
   generating,
   estimatedCost,
   onGenerate,
   onRestore,
+  onUploaded,
 }: MediaCardProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   const [videoLightboxOpen, setVideoLightboxOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const assetFp = useProjectsStore((s) =>
     assetPath ? s.getAssetFingerprint(assetPath) : null,
@@ -93,6 +108,64 @@ export function MediaCard({
     setVideoLightboxOpen(true);
   };
 
+  const handleVideoDownload = async () => {
+    if (downloading || kind !== "video" || !assetPath || !assetUrl) return;
+    setDownloading(true);
+    try {
+      const savedPath = await downloadProjectVideoWithDialog(
+        projectName,
+        assetPath,
+        `${segmentId} ${title}.mp4`,
+      );
+      if (savedPath) {
+        useAppStore.getState().pushToast("视频已保存", "success");
+      }
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleExternalUpload = async () => {
+    if (uploading) return;
+    if (!scriptFile) {
+      useAppStore.getState().pushToast("缺少剧本文件，无法上传外部生成结果", "error");
+      return;
+    }
+    const file = await pickDesktopFile({
+      title: kind === "storyboard" ? "上传外部分镜图" : "上传外部视频",
+      filters:
+        kind === "storyboard"
+          ? [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }]
+          : [{ name: "MP4 Video", extensions: ["mp4"] }],
+      preview: false,
+    });
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      const result = await API.uploadExternalMediaVersion(
+        projectName,
+        resourceType,
+        segmentId,
+        file,
+        { scriptFile },
+      );
+      if (result.asset_fingerprints) {
+        useProjectsStore.getState().updateAssetFingerprints(result.asset_fingerprints);
+      }
+      await onUploaded?.();
+      useAppStore
+        .getState()
+        .pushToast(`已作为 v${result.version} 接入当前${title}`, "success");
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div>
       {/* Header */}
@@ -105,6 +178,21 @@ export function MediaCard({
           {title}
         </span>
         <span className="flex-1" />
+        <button
+          type="button"
+          onClick={() => void handleExternalUpload()}
+          disabled={uploading || uploadDisabled}
+          title={uploadDisabled ? generateDisabledHint : kind === "storyboard" ? "上传外部分镜图为新版本" : "上传外部视频为新版本"}
+          aria-label={kind === "storyboard" ? "上传外部分镜图为新版本" : "上传外部视频为新版本"}
+          className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)] disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ color: "var(--color-text-3)" }}
+        >
+          {uploading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Upload className="h-3.5 w-3.5" />
+          )}
+        </button>
         <VersionTimeMachine
           projectName={projectName}
           resourceType={resourceType}
@@ -116,7 +204,13 @@ export function MediaCard({
       {/* Media */}
       {assetUrl ? (
         kind === "storyboard" ? (
-          <PreviewableImageFrame src={assetUrl} alt={`${segmentId} ${title}`}>
+          <PreviewableImageFrame
+            src={assetUrl}
+            alt={`${segmentId} ${title}`}
+            downloadSource={
+              assetPath ? { kind: "project", projectName, path: assetPath } : undefined
+            }
+          >
             <AspectFrame ratio={aspectRatio} className="relative">
               <ImageFlipReveal
                 src={assetUrl}
@@ -129,7 +223,7 @@ export function MediaCard({
           </PreviewableImageFrame>
         ) : (
           <div
-            className="overflow-hidden rounded-[10px]"
+            className="group overflow-hidden rounded-[10px]"
             style={{
               boxShadow:
                 "0 16px 40px -16px oklch(0 0 0 / 0.7), 0 0 0 1px var(--color-hairline)",
@@ -149,15 +243,31 @@ export function MediaCard({
                 className="h-full w-full object-contain"
                 preload="metadata"
               />
-              <button
-                type="button"
-                onClick={() => void openVideoLightbox()}
-                aria-label={t("common:titlebar.maximize")}
-                title={t("common:titlebar.maximize")}
-                className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/90 shadow-lg shadow-black/25 backdrop-blur transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35"
-              >
-                <Maximize2 className="h-3.5 w-3.5" />
-              </button>
+              <div className="absolute right-2 top-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
+                <button
+                  type="button"
+                  onClick={() => void handleVideoDownload()}
+                  disabled={downloading}
+                  aria-label="下载视频"
+                  title="下载视频"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/90 shadow-lg shadow-black/25 backdrop-blur transition-colors hover:bg-black/70 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35"
+                >
+                  {downloading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void openVideoLightbox()}
+                  aria-label={t("common:titlebar.maximize")}
+                  title={t("common:titlebar.maximize")}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/90 shadow-lg shadow-black/25 backdrop-blur transition-colors hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </AspectFrame>
           </div>
         )
@@ -210,6 +320,8 @@ export function MediaCard({
           src={assetUrl}
           poster={posterUrl}
           title={previewTitle}
+          downloading={downloading}
+          onDownload={handleVideoDownload}
           onClose={() => setVideoLightboxOpen(false)}
         />
       )}

@@ -29,6 +29,7 @@ from lib.db.base import dt_to_iso
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.gemini_shared import VERTEX_SCOPES
 from lib.i18n import Translator
+from lib.upload_utils import read_upload_bytes
 from server.dependencies import get_config_service
 
 if TYPE_CHECKING:
@@ -434,7 +435,7 @@ async def upload_vertex_credential(
 ) -> CredentialResponse:
     """上传 Vertex AI 服务账号 JSON 凭证文件，同时创建凭证记录。"""
     try:
-        contents = await file.read(MAX_VERTEX_CREDENTIALS_BYTES + 1)
+        contents = await asyncio.to_thread(read_upload_bytes, file, MAX_VERTEX_CREDENTIALS_BYTES + 1)
     except Exception:
         raise HTTPException(status_code=400, detail=_t("vertex_json_read_failed"))
 

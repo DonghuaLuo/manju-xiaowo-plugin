@@ -6,12 +6,15 @@ import {
 } from "react";
 import { ZoomIn } from "lucide-react";
 import { ImageLightbox } from "./ImageLightbox";
+import type { ImageDownloadSource } from "@/utils/image-export";
 
 interface PreviewableImageFrameProps {
   src: string | null;
   alt: string;
   children: ReactNode;
   buttonClassName?: string;
+  downloadSource?: ImageDownloadSource;
+  showPreviewIcon?: boolean;
 }
 
 const INTERACTIVE_CHILD_SELECTOR =
@@ -31,6 +34,8 @@ export function PreviewableImageFrame({
   alt,
   children,
   buttonClassName,
+  downloadSource,
+  showPreviewIcon = true,
 }: PreviewableImageFrameProps) {
   const [open, setOpen] = useState(false);
   const previewLabel = `${alt} 全屏预览`;
@@ -67,7 +72,7 @@ export function PreviewableImageFrame({
         }
       >
         {children}
-        {src && (
+        {src && showPreviewIcon && (
           <span
             aria-hidden="true"
             className={
@@ -84,6 +89,7 @@ export function PreviewableImageFrame({
         <ImageLightbox
           src={src}
           alt={alt}
+          downloadSource={downloadSource}
           onClose={() => setOpen(false)}
         />
       )}

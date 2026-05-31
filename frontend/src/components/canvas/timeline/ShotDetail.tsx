@@ -6,9 +6,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Copy,
+  FolderDown,
   Loader2,
   Undo2,
 } from "lucide-react";
+import { API } from "@/api";
 import type {
   NarrationSegment,
   DramaScene,
@@ -16,6 +19,7 @@ import type {
   VideoPrompt,
   Dialogue,
 } from "@/types";
+import { useAppStore } from "@/stores/app-store";
 import { ImagePromptEditor } from "./ImagePromptEditor";
 import { VideoPromptEditor } from "./VideoPromptEditor";
 import { DialogueListEditor } from "./DialogueListEditor";
@@ -31,6 +35,10 @@ import {
   isStructuredVideoPrompt,
 } from "@/utils/prompt-shape";
 import { isContinuousIntegerRange } from "@/utils/duration_format";
+import { copyText } from "@/utils/clipboard";
+import { errMsg } from "@/utils/async";
+import { pickDesktopDirectory } from "@/utils/desktop-file";
+import { exportExternalGenerationPackage } from "@/utils/external-generation-export";
 
 type Segment = NarrationSegment | DramaScene;
 type ImagePromptValue = ImagePrompt | string;
@@ -42,6 +50,7 @@ interface ShotDetailProps {
   contentMode: "narration" | "drama";
   aspectRatio: "9:16" | "16:9";
   projectName: string;
+  scriptFile?: string;
   isGridMode?: boolean;
   /** Total shot count for "1/N" indicator */
   selectedIndex: number;
@@ -271,6 +280,7 @@ export function ShotDetail({
   contentMode,
   aspectRatio,
   projectName,
+  scriptFile,
   isGridMode,
   selectedIndex,
   totalCount,
@@ -302,6 +312,8 @@ export function ShotDetail({
     video_prompt: vp,
   }));
   const [saving, setSaving] = useState(false);
+  const [copyingPrompt, setCopyingPrompt] = useState<"storyboard" | "video" | null>(null);
+  const [exportingRefs, setExportingRefs] = useState<"storyboard" | "video" | null>(null);
 
   const upstreamSig = useMemo(
     () => stableSig({ ip, vp }),
@@ -408,13 +420,113 @@ export function ShotDetail({
     setDraft({ image_prompt: ip, video_prompt: vp });
   };
 
+  const dirtyHint = t("shot_detail_save_first");
+
+  const loadExternalGenerationSection = async (kind: "storyboard" | "video") => {
+    const pkg = await API.getExternalGenerationPackage(projectName, segmentId, scriptFile || "");
+    return kind === "storyboard" ? pkg.storyboard : pkg.video;
+  };
+
+  const handleCopyExternalPrompt = async (kind: "storyboard" | "video") => {
+    if (dirty || saving) {
+      useAppStore.getState().pushToast(dirtyHint, "warning");
+      return;
+    }
+    if (!scriptFile) {
+      useAppStore.getState().pushToast("缺少剧本文件，无法复制外部生成提示词", "error");
+      return;
+    }
+    setCopyingPrompt(kind);
+    try {
+      const section = await loadExternalGenerationSection(kind);
+      await copyText(section.external_prompt);
+      const refText = section.references.length
+        ? `，参考图 ${section.references.length} 张已写入提示词清单，图片内容优先`
+        : "";
+      useAppStore
+        .getState()
+        .pushToast(`${kind === "storyboard" ? "分镜图" : "视频"}提示词已复制${refText}`, "success");
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setCopyingPrompt(null);
+    }
+  };
+
+  const handleExportExternalReferences = async (kind: "storyboard" | "video") => {
+    if (dirty || saving) {
+      useAppStore.getState().pushToast(dirtyHint, "warning");
+      return;
+    }
+    if (!scriptFile) {
+      useAppStore.getState().pushToast("缺少剧本文件，无法导出外部生成参考图", "error");
+      return;
+    }
+
+    const label = kind === "storyboard" ? "分镜图" : "视频";
+    setExportingRefs(kind);
+    try {
+      const section = await loadExternalGenerationSection(kind);
+      let promptCopied = true;
+      try {
+        await copyText(section.external_prompt);
+      } catch {
+        promptCopied = false;
+      }
+
+      const targetDirectory = await pickDesktopDirectory({
+        title: `选择${label}参考图导出目录`,
+      });
+      if (!targetDirectory) {
+        useAppStore
+          .getState()
+          .pushToast(
+            promptCopied
+              ? `${label}提示词已复制，已取消导出参考图`
+              : `已取消导出参考图，${label}提示词未能自动复制`,
+            promptCopied ? "success" : "warning",
+          );
+        return;
+      }
+
+      const result = await exportExternalGenerationPackage(
+        projectName,
+        section.references,
+        section.external_prompt,
+        targetDirectory,
+      );
+
+      const copiedText = result.copiedCount > 0
+        ? `参考图已导出 ${result.copiedCount} 张`
+        : "没有可导出的参考图";
+      const failedText = result.failed.length > 0
+        ? `，${result.failed.length} 张参考图导出失败`
+        : "";
+      const promptFileText = result.promptPath
+        ? "，提示词文件已保存"
+        : result.promptWriteError
+          ? "，提示词文件保存失败"
+          : "";
+      const clipboardText = promptCopied ? "，提示词已复制" : "，提示词未能自动复制";
+      const type = result.failed.length > 0 || result.promptWriteError || !promptCopied
+        ? "warning"
+        : "success";
+
+      useAppStore
+        .getState()
+        .pushToast(`${label}${copiedText}${failedText}${promptFileText}${clipboardText}`, type);
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setExportingRefs(null);
+    }
+  };
+
   const sbEstimate = segCost?.estimate?.image;
   const vidEstimate = segCost?.estimate?.video;
 
   const assets = segment.generated_assets;
   const hasStoryboard = !!assets?.storyboard_image;
-
-  const dirtyHint = t("shot_detail_save_first");
 
   const characterNames =
     contentMode === "drama"
@@ -441,34 +553,6 @@ export function ShotDetail({
         disabled={dirty || saving || refsReadOnly}
         disabledHint={dirty ? dirtyHint : undefined}
       />
-      <div>
-        <div
-          className="mb-2 text-[10.5px] font-bold uppercase"
-          style={{
-            color: "var(--color-text-4)",
-            letterSpacing: "1px",
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          {t("detail_section_dialogue")}
-        </div>
-        {vidDraft ? (
-          <DialogueListEditor
-            dialogue={vidDraft.dialogue ?? []}
-            onChange={handleDialogueChange}
-          />
-        ) : (
-          <div
-            className="rounded-md py-3 text-center text-[11.5px] italic"
-            style={{
-              border: "1px dashed var(--color-hairline)",
-              color: "var(--color-text-4)",
-            }}
-          >
-            {t("detail_dialogue_empty")}
-          </div>
-        )}
-      </div>
 
       {(novelText || contentMode === "narration") && (
         <div>
@@ -529,6 +613,36 @@ export function ShotDetail({
             {t("detail_image_prompt_title")}
           </span>
           <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => void handleCopyExternalPrompt("storyboard")}
+            disabled={saving || copyingPrompt !== null || exportingRefs !== null}
+            title="复制外部生成提示词"
+            aria-label="复制分镜图外部生成提示词"
+            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ color: "var(--color-text-3)" }}
+          >
+            {copyingPrompt === "storyboard" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportExternalReferences("storyboard")}
+            disabled={saving || copyingPrompt !== null || exportingRefs !== null}
+            title="导出参考图并复制提示词"
+            aria-label="导出分镜图参考图并复制提示词"
+            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ color: "var(--color-text-3)" }}
+          >
+            {exportingRefs === "storyboard" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FolderDown className="h-3.5 w-3.5" />
+            )}
+          </button>
           {imgDraft && (
             <span
               className="num text-[10px]"
@@ -566,6 +680,36 @@ export function ShotDetail({
             {t("detail_video_prompt_title")}
           </span>
           <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => void handleCopyExternalPrompt("video")}
+            disabled={saving || copyingPrompt !== null || exportingRefs !== null}
+            title="复制外部生成提示词"
+            aria-label="复制视频外部生成提示词"
+            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ color: "var(--color-text-3)" }}
+          >
+            {copyingPrompt === "video" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportExternalReferences("video")}
+            disabled={saving || copyingPrompt !== null || exportingRefs !== null}
+            title="导出参考图并复制提示词"
+            aria-label="导出视频参考图并复制提示词"
+            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ color: "var(--color-text-3)" }}
+          >
+            {exportingRefs === "video" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FolderDown className="h-3.5 w-3.5" />
+            )}
+          </button>
           {vidDraft && (
             <span
               className="num text-[10px]"
@@ -589,6 +733,38 @@ export function ShotDetail({
           />
         )}
       </section>
+
+      {characterNames.length > 0 && (
+        <section>
+          <div
+            className="mb-2 text-[10.5px] font-bold uppercase"
+            style={{
+              color: "var(--color-text-4)",
+              letterSpacing: "1px",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {t("detail_section_dialogue")}
+          </div>
+          {vidDraft ? (
+            <DialogueListEditor
+              dialogue={vidDraft.dialogue ?? []}
+              speakerOptions={characterNames}
+              onChange={handleDialogueChange}
+            />
+          ) : (
+            <div
+              className="rounded-md py-3 text-center text-[11.5px] italic"
+              style={{
+                border: "1px dashed var(--color-hairline)",
+                color: "var(--color-text-4)",
+              }}
+            >
+              {t("detail_dialogue_empty")}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 
@@ -599,13 +775,16 @@ export function ShotDetail({
         projectName={projectName}
         segmentId={segmentId}
         assetPath={assets?.storyboard_image ?? null}
+        scriptFile={scriptFile}
         aspectRatio={aspectRatio}
         hideGenerateButton={isGridMode}
         generating={generatingStoryboard}
         estimatedCost={sbEstimate ?? undefined}
         onGenerate={() => onGenerateStoryboard?.(segmentId)}
         onRestore={onRestoreStoryboard}
+        onUploaded={onRestoreStoryboard}
         generateDisabled={dirty || saving}
+        uploadDisabled={dirty || saving}
         generateDisabledHint={dirty ? dirtyHint : undefined}
       />
       <MediaCard
@@ -613,6 +792,7 @@ export function ShotDetail({
         projectName={projectName}
         segmentId={segmentId}
         assetPath={assets?.video_clip ?? null}
+        scriptFile={scriptFile}
         posterPath={assets?.video_thumbnail ?? null}
         aspectRatio={aspectRatio}
         generating={generatingVideo}
@@ -621,6 +801,8 @@ export function ShotDetail({
         estimatedCost={vidEstimate ?? undefined}
         onGenerate={() => onGenerateVideo?.(segmentId)}
         onRestore={onRestoreVideo}
+        onUploaded={onRestoreVideo}
+        uploadDisabled={dirty || saving}
       />
     </div>
   );

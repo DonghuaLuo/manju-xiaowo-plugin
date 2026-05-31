@@ -59,8 +59,25 @@ export function WelcomeCanvas({
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const dropActiveRef = useRef(false);
+  const dropResetTimerRef = useRef<number | null>(null);
   const sourceFilesVersion = useAppStore((s) => s.sourceFilesVersion);
   const displayProjectTitle = getProjectDisplayName(projectTitle, t("untitled_project"));
+
+  const clearDropResetTimer = useCallback(() => {
+    if (dropResetTimerRef.current !== null) {
+      window.clearTimeout(dropResetTimerRef.current);
+      dropResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDropReset = useCallback(() => {
+    clearDropResetTimer();
+    dropResetTimerRef.current = window.setTimeout(() => {
+      dropActiveRef.current = false;
+      setIsDragging(false);
+      dropResetTimerRef.current = null;
+    }, 1200);
+  }, [clearDropResetTimer]);
 
   // 拉取已有源文件，决定初始 phase
   useEffect(() => {
@@ -164,19 +181,17 @@ export function WelcomeCanvas({
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      dropActiveRef.current = false;
+      dropActiveRef.current = true;
       setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) {
-        voidCall(processFile(file));
-      }
+      scheduleDropReset();
     },
-    [processFile],
+    [scheduleDropReset],
   );
 
   useEffect(() => {
     const handleFileDrop = (paths: string[]) => {
       if (!dropActiveRef.current) return;
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragging(false);
       const file = paths[0] ? desktopFileRefFromPath(paths[0]) : null;
@@ -185,16 +200,18 @@ export function WelcomeCanvas({
       }
     };
     const handleCancelled = () => {
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragging(false);
     };
     PluginSDK.onFileDrop(handleFileDrop);
     PluginSDK.onFileDropCancelled(handleCancelled);
     return () => {
+      clearDropResetTimer();
       PluginSDK.offFileDrop(handleFileDrop);
       PluginSDK.offFileDropCancelled(handleCancelled);
     };
-  }, [processFile]);
+  }, [clearDropResetTimer, processFile]);
 
   if (phase === "loading") {
     return (

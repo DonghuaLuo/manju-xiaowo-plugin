@@ -96,6 +96,9 @@ function AssetCardImpl({ asset, onEdit, onDelete }: Props) {
         <ImageLightbox
           src={imageUrl}
           alt={asset.name}
+          downloadSource={
+            asset.image_path ? { kind: "global", path: asset.image_path } : undefined
+          }
           onClose={() => setPreviewOpen(false)}
         />
       )}

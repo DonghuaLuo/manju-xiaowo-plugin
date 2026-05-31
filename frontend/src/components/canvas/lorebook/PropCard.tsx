@@ -211,6 +211,11 @@ export function PropCard({
           <PreviewableImageFrame
             src={sheetUrl && !imgError ? sheetUrl : null}
             alt={`${name} ${t("prop_design")}`}
+            downloadSource={
+              prop.prop_sheet
+                ? { kind: "project", projectName, path: prop.prop_sheet }
+                : undefined
+            }
           >
             <AspectFrame ratio="16:9">
               {sheetUrl && !imgError ? (

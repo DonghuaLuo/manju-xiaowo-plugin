@@ -247,7 +247,7 @@ export function AssetSidebar({ className }: AssetSidebarProps) {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("dashboard:episode_search_placeholder")}
                 aria-label={t("dashboard:episode_search_placeholder")}
-                className="min-w-0 flex-1 bg-transparent text-xs outline-none focus-ring"
+                className="min-w-0 flex-1 bg-transparent text-xs outline-none"
                 style={{ color: "var(--color-text)" }}
               />
             </div>

@@ -68,7 +68,7 @@ export function VersionTimeMachine({
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VersionInfo | null>(null);
   const [deletingVersion, setDeletingVersion] = useState<number | null>(null);
-  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string; path?: string } | null>(null);
 
   // Reset version list when the underlying resource changes so it's re-fetched
   // on next open. Do NOT close the panel — if it's open and a new generation
@@ -435,6 +435,7 @@ export function VersionTimeMachine({
                               alt: t("version_preview_alt", {
                                 version: selectedInfo.version,
                               }),
+                              path: selectedInfo.file,
                             })
                           }
                           aria-label={`${t("version_preview_alt", { version: selectedInfo.version })} 全屏预览`}
@@ -466,6 +467,11 @@ export function VersionTimeMachine({
         <ImageLightbox
           src={previewImage.src}
           alt={previewImage.alt}
+          downloadSource={
+            previewImage.path
+              ? { kind: "project", projectName, path: previewImage.path }
+              : undefined
+          }
           onClose={() => setPreviewImage(null)}
         />
       )}

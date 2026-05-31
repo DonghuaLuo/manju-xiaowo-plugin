@@ -53,9 +53,26 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
   } | null>(null);
   const uploadInFlightRef = useRef(false);
   const dropActiveRef = useRef(false);
+  const dropResetTimerRef = useRef<number | null>(null);
   const projectNameRef = useRef(projectName);
   projectNameRef.current = projectName;
   const sourceFilesVersion = useAppStore((s) => s.sourceFilesVersion);
+
+  const clearDropResetTimer = useCallback(() => {
+    if (dropResetTimerRef.current !== null) {
+      window.clearTimeout(dropResetTimerRef.current);
+      dropResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDropReset = useCallback(() => {
+    clearDropResetTimer();
+    dropResetTimerRef.current = window.setTimeout(() => {
+      dropActiveRef.current = false;
+      setIsDragging(false);
+      dropResetTimerRef.current = null;
+    }, 1200);
+  }, [clearDropResetTimer]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,34 +233,36 @@ export function SourceFilesPage({ projectName }: SourceFilesPageProps) {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      dropActiveRef.current = false;
       setIsDragging(false);
       if (uploadInFlightRef.current) return;
-      const file = e.dataTransfer.files[0];
-      if (file) void handleUpload(file);
+      dropActiveRef.current = true;
+      scheduleDropReset();
     },
-    [handleUpload],
+    [scheduleDropReset],
   );
 
   useEffect(() => {
     const handleFileDrop = (paths: string[]) => {
       if (!dropActiveRef.current || uploadInFlightRef.current) return;
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragging(false);
       const file = paths[0] ? desktopFileRefFromPath(paths[0]) : null;
       if (file) void handleUpload(file);
     };
     const handleCancelled = () => {
+      clearDropResetTimer();
       dropActiveRef.current = false;
       setIsDragging(false);
     };
     PluginSDK.onFileDrop(handleFileDrop);
     PluginSDK.onFileDropCancelled(handleCancelled);
     return () => {
+      clearDropResetTimer();
       PluginSDK.offFileDrop(handleFileDrop);
       PluginSDK.offFileDropCancelled(handleCancelled);
     };
-  }, [handleUpload]);
+  }, [clearDropResetTimer, handleUpload]);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">

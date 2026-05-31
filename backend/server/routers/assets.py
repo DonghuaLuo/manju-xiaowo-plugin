@@ -18,6 +18,7 @@ from lib.db import async_session_factory
 from lib.db.repositories.asset_repo import AssetRepository
 from lib.i18n import Translator
 from lib.project_manager import ProjectManager
+from lib.upload_utils import local_upload_path, read_upload_bytes
 from server.auth import CurrentUser
 
 logger = logging.getLogger(__name__)
@@ -64,14 +65,26 @@ async def _save_upload(file: UploadFile, asset_type: str, _t: Translator) -> str
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=415, detail=_t("asset_unsupported_format"))
 
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=_t("asset_upload_too_large"))
-
     root = get_project_manager().get_global_assets_root() / asset_type
     uid = uuid.uuid4().hex
     target = root / f"{uid}{ext}"
-    await asyncio.to_thread(target.write_bytes, data)
+
+    source_path = local_upload_path(file)
+    if source_path is not None:
+        if source_path.stat().st_size > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=_t("asset_upload_too_large"))
+
+        def _copy() -> None:
+            root.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, target)
+
+        await asyncio.to_thread(_copy)
+    else:
+        data = await asyncio.to_thread(read_upload_bytes, file)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=_t("asset_upload_too_large"))
+        root.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(target.write_bytes, data)
     # 存相对路径（相对 projects_root）
     return f"_global_assets/{asset_type}/{uid}{ext}"
 
