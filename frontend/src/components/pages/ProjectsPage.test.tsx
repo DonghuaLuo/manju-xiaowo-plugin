@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { API } from "@/api";
+import zhDashboard from "@/i18n/zh/dashboard";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
-import { ProjectsPage } from "@/components/pages/ProjectsPage";
+import { getGreetingKey, ProjectsPage } from "@/components/pages/ProjectsPage";
 
 const desktopFileMock = vi.hoisted(() => ({
   pickDesktopFile: vi.fn(),
@@ -73,6 +74,25 @@ describe("ProjectsPage", () => {
     // 0 项目时仅渲染 NewProjectTile 占位卡（lobby_new_project_title）
     expect(await screen.findByText("新建项目")).toBeInTheDocument();
     expect(API.listProjects).toHaveBeenCalledWith({ check_extmodel: true });
+  });
+
+  it("uses the correct greeting bucket for the local time", () => {
+    expect(getGreetingKey(new Date(2026, 0, 1, 4, 59))).toBe("lobby_hero_greeting_late");
+    expect(getGreetingKey(new Date(2026, 0, 1, 5, 0))).toBe("lobby_hero_greeting_morning");
+    expect(getGreetingKey(new Date(2026, 0, 1, 10, 59))).toBe("lobby_hero_greeting_morning");
+    expect(getGreetingKey(new Date(2026, 0, 1, 11, 0))).toBe("lobby_hero_greeting_afternoon");
+    expect(getGreetingKey(new Date(2026, 0, 1, 17, 59))).toBe("lobby_hero_greeting_afternoon");
+    expect(getGreetingKey(new Date(2026, 0, 1, 18, 0))).toBe("lobby_hero_greeting_evening");
+    expect(getGreetingKey(new Date(2026, 0, 1, 21, 59))).toBe("lobby_hero_greeting_evening");
+    expect(getGreetingKey(new Date(2026, 0, 1, 22, 0))).toBe("lobby_hero_greeting_late");
+  });
+
+  it("uses neutral Chinese lobby copy instead of clock-sensitive wording", () => {
+    expect(zhDashboard.lobby_hero_greeting_morning).toBe("欢迎回来，导演。");
+    expect(zhDashboard.lobby_hero_greeting_afternoon).toBe("欢迎回来，导演。");
+    expect(zhDashboard.lobby_hero_greeting_evening).toBe("欢迎回来，导演。");
+    expect(zhDashboard.lobby_hero_greeting_late).toBe("欢迎回来，导演。");
+    expect(zhDashboard.lobby_hero_subtitle_quiet).toBe("当前没有作品在制作中。");
   });
 
   it("renders project cards when data exists", async () => {

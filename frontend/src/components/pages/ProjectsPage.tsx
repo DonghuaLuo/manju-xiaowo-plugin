@@ -62,6 +62,7 @@ type GreetingKey =
 
 const PROJECTS_FETCH_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000];
 const PLUGIN_READY_WAIT_TIMEOUT_MS = 1500;
+const MINUTE_MS = 60_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -180,12 +181,40 @@ function styleLabelOf(p: ProjectSummary, t: TFunction): string {
   return t("dashboard:style_not_set");
 }
 
-function getGreetingKey(d = new Date()): GreetingKey {
+export function getGreetingKey(d = new Date()): GreetingKey {
   const h = d.getHours();
   if (h >= 5 && h < 11) return "lobby_hero_greeting_morning";
-  if (h >= 11 && h < 14) return "lobby_hero_greeting_afternoon";
-  if (h >= 14 && h < 22) return "lobby_hero_greeting_evening";
+  if (h >= 11 && h < 18) return "lobby_hero_greeting_afternoon";
+  if (h >= 18 && h < 22) return "lobby_hero_greeting_evening";
   return "lobby_hero_greeting_late";
+}
+
+function useCurrentMinute(): Date {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const syncNow = () => setNow(new Date());
+    const delayToNextMinute = MINUTE_MS - (Date.now() % MINUTE_MS);
+    let intervalId: ReturnType<typeof window.setInterval> | null = null;
+    const timeoutId = window.setTimeout(() => {
+      syncNow();
+      intervalId = window.setInterval(syncNow, MINUTE_MS);
+    }, delayToNextMinute);
+    const syncWhenVisible = () => {
+      if (!document.hidden) syncNow();
+    };
+
+    window.addEventListener("focus", syncNow);
+    document.addEventListener("visibilitychange", syncWhenVisible);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId !== null) window.clearInterval(intervalId);
+      window.removeEventListener("focus", syncNow);
+      document.removeEventListener("visibilitychange", syncWhenVisible);
+    };
+  }, []);
+
+  return now;
 }
 
 // -- Poster -------------------------------------------------------------------
@@ -934,10 +963,11 @@ interface HeroStripProps {
 
 function HeroStrip({ totals, t }: HeroStripProps) {
   const { i18n } = useTranslation();
-  const greetingKey = useMemo<GreetingKey>(() => getGreetingKey(), []);
+  const now = useCurrentMinute();
+  const greetingKey = useMemo<GreetingKey>(() => getGreetingKey(now), [now]);
   const dateLine = useMemo(
-    () => formatDate(new Date(), i18n.language || "zh", KICKER_DATE_OPTS, new Date().toISOString().slice(0, 10)),
-    [i18n.language],
+    () => formatDate(now, i18n.language || "zh", KICKER_DATE_OPTS, now.toISOString().slice(0, 10)),
+    [i18n.language, now],
   );
 
   let subtitle: string;

@@ -570,7 +570,7 @@ export function ProjectSettingsPage() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col text-text"
+      className="relative flex h-full min-h-0 flex-col text-text"
       style={
         {
           background:
@@ -616,9 +616,9 @@ export function ProjectSettingsPage() {
               }}
               title={getProjectDisplayName(projectTitle, t("untitled_project"))}
             >
-              {t("project_settings")}
+              {t("common:settings")}
               <span className="ml-2 align-middle font-mono text-[11.5px] font-medium uppercase tracking-[0.08em] text-text-3">
-                {getProjectDisplayName(projectTitle, t("untitled_project"))}
+                {t("project_settings")} · {getProjectDisplayName(projectTitle, t("untitled_project"))}
               </span>
             </h1>
           </div>
