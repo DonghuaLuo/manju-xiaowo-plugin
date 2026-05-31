@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -159,6 +162,7 @@ async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSess
         ("newapi-video", "newapi-video-model", 0),
         ("v2-video-generations", "bytedance/seedance-1-0-lite-i2v", 4),
         ("ark-seedance", "doubao-seedance-2-0", 9),
+        ("ark-seedance", "doubao-seedance-1-0", 0),
         ("vidu-video", "viduq3-turbo", 7),
     ],
 )
@@ -197,6 +201,136 @@ async def test_custom_video_capabilities_uses_endpoint_reference_limit(
     project = {"video_backend": f"{provider_id_str}/{model_id}"}
     factory = async_sessionmaker(bind=db_session.get_bind(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload]
     resolver = ConfigResolver(factory, _bound_session=db_session)
+    with patch("lib.config.resolver.CustomProviderRepository.get_provider", side_effect=AssertionError("unused")) as gp:
+        caps = await resolver._resolve_video_capabilities_from_project(ConfigService(db_session), db_session, project)
+
+    gp.assert_not_called()
+    assert caps["max_reference_images"] == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_video_caps_resolved_without_api_key(db_session: AsyncSession):
+    from lib.config.resolver import ConfigResolver
+    from lib.config.service import ConfigService
+    from lib.custom_provider import make_provider_id
+
+    provider = CustomProvider(
+        display_name="NoKeyVideoProv",
+        discovery_format="openai",
+        base_url="https://api.example.com",
+        api_key="",
+    )
+    db_session.add(provider)
+    await db_session.flush()
+
+    model = CustomProviderModel(
+        provider_id=provider.id,
+        model_id="bytedance/seedance-1-0-lite-i2v",
+        display_name="Video",
+        endpoint="v2-video-generations",
+        is_default=True,
+        is_enabled=True,
+        supported_durations="[4, 8]",
+    )
+    db_session.add(model)
+    await db_session.flush()
+
+    provider_id_str = make_provider_id(provider.id)
+    project = {"video_backend": f"{provider_id_str}/{model.model_id}"}
+    factory = async_sessionmaker(bind=db_session.get_bind(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload]
+    resolver = ConfigResolver(factory, _bound_session=db_session)
+
     caps = await resolver._resolve_video_capabilities_from_project(ConfigService(db_session), db_session, project)
 
-    assert caps["max_reference_images"] == expected
+    assert caps["max_reference_images"] == 4
+
+
+@pytest.mark.asyncio
+async def test_custom_video_max_refs_missing_caps_fn_raises(db_session: AsyncSession, monkeypatch):
+    from lib.config.resolver import ConfigResolver
+    from lib.config.service import ConfigService
+    from lib.custom_provider import make_provider_id
+    from lib.custom_provider.endpoints import ENDPOINT_REGISTRY
+
+    provider = CustomProvider(
+        display_name="VideoProv",
+        discovery_format="openai",
+        base_url="https://api.example.com",
+        api_key="k",
+    )
+    db_session.add(provider)
+    await db_session.flush()
+    model = CustomProviderModel(
+        provider_id=provider.id,
+        model_id="m",
+        display_name="Video",
+        endpoint="v2-video-generations",
+        is_default=True,
+        is_enabled=True,
+        supported_durations="[4, 8]",
+    )
+    db_session.add(model)
+    await db_session.flush()
+
+    spec = ENDPOINT_REGISTRY["v2-video-generations"]
+    monkeypatch.setitem(
+        ENDPOINT_REGISTRY,
+        "v2-video-generations",
+        replace(spec, video_max_reference_images=None, video_caps_for_model=None),
+    )
+
+    provider_id_str = make_provider_id(provider.id)
+    project = {"video_backend": f"{provider_id_str}/m"}
+    factory = async_sessionmaker(bind=db_session.get_bind(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload]
+    resolver = ConfigResolver(factory, _bound_session=db_session)
+
+    with pytest.raises(ValueError, match="declares neither"):
+        await resolver._resolve_video_capabilities_from_project(ConfigService(db_session), db_session, project)
+
+
+@pytest.mark.asyncio
+async def test_custom_video_negative_caps_fn_raises(db_session: AsyncSession, monkeypatch):
+    from lib.config.resolver import ConfigResolver
+    from lib.config.service import ConfigService
+    from lib.custom_provider import make_provider_id
+    from lib.custom_provider.endpoints import ENDPOINT_REGISTRY
+    from lib.video_backends.base import VideoCapabilities
+
+    provider = CustomProvider(
+        display_name="VideoProv",
+        discovery_format="openai",
+        base_url="https://api.example.com",
+        api_key="k",
+    )
+    db_session.add(provider)
+    await db_session.flush()
+    model = CustomProviderModel(
+        provider_id=provider.id,
+        model_id="m",
+        display_name="Video",
+        endpoint="v2-video-generations",
+        is_default=True,
+        is_enabled=True,
+        supported_durations="[4, 8]",
+    )
+    db_session.add(model)
+    await db_session.flush()
+
+    spec = ENDPOINT_REGISTRY["v2-video-generations"]
+    monkeypatch.setitem(
+        ENDPOINT_REGISTRY,
+        "v2-video-generations",
+        replace(
+            spec,
+            video_max_reference_images=None,
+            video_caps_for_model=lambda model_id: VideoCapabilities(max_reference_images=-1),
+        ),
+    )
+
+    provider_id_str = make_provider_id(provider.id)
+    project = {"video_backend": f"{provider_id_str}/m"}
+    factory = async_sessionmaker(bind=db_session.get_bind(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload]
+    resolver = ConfigResolver(factory, _bound_session=db_session)
+
+    with pytest.raises(ValueError, match="invalid backend max_reference_images"):
+        await resolver._resolve_video_capabilities_from_project(ConfigService(db_session), db_session, project)

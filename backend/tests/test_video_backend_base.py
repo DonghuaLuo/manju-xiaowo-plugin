@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from sqlalchemy.exc import OperationalError
 
@@ -9,9 +10,12 @@ from lib.video_backends.base import (
     VideoCapability,
     VideoGenerationRequest,
     VideoGenerationResult,
+    is_retryable_http_status,
     persist_api_call_id,
     persist_provider_job_id,
     poll_with_retry,
+    should_retry_poll,
+    should_retry_submit,
 )
 
 
@@ -136,6 +140,23 @@ class TestPollWithRetry:
         assert result == "done"
         assert poll_fn.await_count == 2
 
+    async def test_custom_retry_if_overrides_string_fallback(self):
+        """retry_if 可关闭 `_should_retry` 的异常字符串兜底。"""
+        poll_fn = AsyncMock(side_effect=[RuntimeError("upstream 503"), "done"])
+
+        with pytest.raises(RuntimeError, match="503"):
+            with patch("lib.video_backends.base.asyncio.sleep", new_callable=AsyncMock):
+                await poll_with_retry(
+                    poll_fn=poll_fn,
+                    is_done=lambda r: r == "done",
+                    is_failed=lambda r: None,
+                    poll_interval=1,
+                    max_wait=60,
+                    retry_if=lambda e: isinstance(e, ConnectionError),
+                )
+
+        assert poll_fn.await_count == 1
+
     async def test_non_retryable_error_propagates(self):
         """不可重试的错误立即抛出。"""
         poll_fn = AsyncMock(side_effect=ValueError("invalid"))
@@ -202,6 +223,39 @@ class TestPollWithRetry:
             )
 
         assert progress_calls == ["pending"]
+
+
+def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://example.test/video")
+    response = httpx.Response(status_code, request=request, text=f"status={status_code}")
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+class TestVideoHttpRetryPolicy:
+    @pytest.mark.parametrize("status_code", [408, 425, 429, 500, 502, 503, 504, 599])
+    def test_retryable_status_codes(self, status_code: int):
+        assert is_retryable_http_status(status_code) is True
+
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+    def test_non_retryable_submit_status_codes(self, status_code: int):
+        assert is_retryable_http_status(status_code) is False
+        assert should_retry_submit(_http_status_error(status_code)) is False
+
+    def test_poll_can_retry_not_found(self):
+        assert is_retryable_http_status(404, retry_not_found=True) is True
+        assert should_retry_poll(_http_status_error(404)) is True
+
+    def test_poll_rejects_deterministic_4xx(self):
+        assert should_retry_poll(_http_status_error(400)) is False
+        assert should_retry_poll(_http_status_error(401)) is False
+        assert should_retry_poll(_http_status_error(422)) is False
+
+    def test_transport_errors_are_retryable(self):
+        assert should_retry_submit(httpx.ConnectError("reset")) is True
+        assert should_retry_poll(TimeoutError("timeout")) is True
+
+    def test_business_errors_are_not_retryable_even_with_503_text(self):
+        assert should_retry_submit(ValueError("business 503 marker")) is False
 
 
 def _make_operational_error(msg: str) -> OperationalError:

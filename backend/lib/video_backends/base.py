@@ -124,6 +124,38 @@ IMAGE_MIME_TYPES: dict[str, str] = {
 }
 
 
+def is_retryable_http_status(status_code: int, *, retry_not_found: bool = False) -> bool:
+    """HTTP 状态码 → 是否可重试。
+
+    瞬态错误恒重试：408 / 425 / 429 / 5xx。404 默认快速失败（端点拼错、资源不存在），
+    轮询/下载场景可传 retry_not_found=True，把它视为任务或资源短暂未就绪。
+    """
+    if status_code in (408, 425, 429):
+        return True
+    if 500 <= status_code <= 599:
+        return True
+    if status_code == 404:
+        return retry_not_found
+    return False
+
+
+def _retry_http_error(exc: Exception, *, retry_not_found: bool) -> bool:
+    """中转视频后端统一重试谓词，避免 `_should_retry` 的字符串兜底误判确定性 4xx。"""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return is_retryable_http_status(exc.response.status_code, retry_not_found=retry_not_found)
+    return isinstance(exc, (httpx.RequestError,) + BASE_RETRYABLE_ERRORS)
+
+
+def should_retry_submit(exc: Exception) -> bool:
+    """创建/提交阶段（POST）重试谓词：404 视为确定性端点错误，快速失败。"""
+    return _retry_http_error(exc, retry_not_found=False)
+
+
+def should_retry_poll(exc: Exception) -> bool:
+    """轮询/下载阶段（GET）重试谓词：404 视为短暂未就绪，可重试。"""
+    return _retry_http_error(exc, retry_not_found=True)
+
+
 async def poll_with_retry[T](
     *,
     poll_fn: Callable[[], Awaitable[T]],
@@ -132,6 +164,7 @@ async def poll_with_retry[T](
     poll_interval: float,
     max_wait: float,
     retryable_errors: tuple[type[Exception], ...] = BASE_RETRYABLE_ERRORS,
+    retry_if: Callable[[Exception], bool] | None = None,
     label: str = "",
     on_progress: Callable[[T, float], None] | None = None,
 ) -> T:
@@ -143,19 +176,22 @@ async def poll_with_retry[T](
         is_failed: 判断轮询结果是否表示任务失败，返回错误信息或 None。
         poll_interval: 两次轮询之间的间隔（秒）。
         max_wait: 最大等待时间（秒），超时抛出 TimeoutError。
-        retryable_errors: 可重试的异常类型元组。
+        retryable_errors: 可重试的异常类型元组（未指定 retry_if 时生效）。
+        retry_if: 自定义重试谓词，指定时替代默认的 `_should_retry`，让调用方精确控制
+            哪些异常应当重试（如按 HTTP status_code 区分确定性 4xx 与瞬态错误）。
         label: 日志前缀（如 "Ark"、"Gemini"）。
         on_progress: 可选的进度回调，每次非终态轮询后调用。
     """
     start = time.monotonic()
     prefix = f"{label} " if label else ""
+    predicate = retry_if if retry_if is not None else (lambda e: _should_retry(e, retryable_errors))
 
     # 先查询再等待：已完成/缓存命中的任务立刻返回，不被 poll_interval 白等一轮。
     while True:
         try:
             result = await poll_fn()
         except Exception as e:
-            if not _should_retry(e, retryable_errors):
+            if not predicate(e):
                 raise
             logger.warning("%s轮询异常（将重试）: %s - %s", prefix, type(e).__name__, str(e)[:200])
         else:

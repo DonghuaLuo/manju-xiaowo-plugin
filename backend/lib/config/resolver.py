@@ -28,9 +28,7 @@ from lib.config.service import (
     ConfigService,
 )
 from lib.custom_provider import is_custom_provider, parse_provider_id
-from lib.custom_provider.backends import CustomVideoBackend
 from lib.custom_provider.endpoints import get_endpoint_spec
-from lib.custom_provider.factory import create_custom_backend
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.project_manager import ProjectManager
@@ -431,21 +429,13 @@ class ConfigResolver:
             if endpoint_cap is not None:
                 max_reference_images = endpoint_cap
             else:
-                provider = await repo.get_provider(db_pid)
-                if provider is None:
-                    raise ValueError(f"custom provider not found: {provider_id}")
-                try:
-                    backend = create_custom_backend(provider=provider, model_id=model_id, endpoint=model.endpoint)
-                except Exception as exc:
+                caps_fn = endpoint_spec.video_caps_for_model
+                if caps_fn is None:
                     raise ValueError(
-                        f"failed to construct backend for max_reference_images fallthrough: "
-                        f"{provider_id}/{model_id} endpoint={model.endpoint!r}"
-                    ) from exc
-                if not isinstance(backend, CustomVideoBackend):
-                    raise ValueError(
-                        f"video endpoint built non-video backend: {provider_id}/{model_id} endpoint={model.endpoint!r}"
+                        f"video endpoint {model.endpoint!r} declares neither video_max_reference_images "
+                        f"nor video_caps_for_model: {provider_id}/{model_id}"
                     )
-                max_reference_images = backend.video_capabilities.max_reference_images
+                max_reference_images = caps_fn(model_id).max_reference_images
                 if max_reference_images < 0:
                     raise ValueError(
                         f"invalid backend max_reference_images: {provider_id}/{model_id} "

@@ -89,9 +89,10 @@ class ArkVideoBackend:
     def capabilities(self) -> set[VideoCapability]:
         return self._capabilities
 
-    @property
-    def video_capabilities(self) -> VideoCapabilities:
-        model_lower = self._model.lower()
+    @staticmethod
+    def video_capabilities_for_model(model: str) -> VideoCapabilities:
+        """按 model_id 纯计算 caps，不构造 Ark SDK client。"""
+        model_lower = model.lower()
         if "seedance-2" in model_lower or "seedance2" in model_lower:
             return VideoCapabilities(last_frame=True, reference_images=True, max_reference_images=9)
         if "seedance-1-0-pro-fast" in model_lower:
@@ -99,6 +100,10 @@ class ArkVideoBackend:
         if "seedance-1-0-pro" in model_lower:
             return VideoCapabilities(first_frame=True, last_frame=True, reference_images=False, max_reference_images=0)
         return VideoCapabilities()
+
+    @property
+    def video_capabilities(self) -> VideoCapabilities:
+        return self.video_capabilities_for_model(self._model)
 
     def _effective_generate_audio(self, request: VideoGenerationRequest) -> bool:
         return bool(request.generate_audio and VideoCapability.GENERATE_AUDIO in self._capabilities)

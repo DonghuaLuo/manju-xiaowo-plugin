@@ -29,6 +29,16 @@ export const DROPDOWN_PANEL_STYLE: CSSProperties = {
   WebkitBackdropFilter: "blur(12px)",
 };
 
+export const DROPDOWN_PANEL_CLS =
+  "overflow-hidden rounded-lg border border-white/10 p-1 shadow-2xl shadow-black/35";
+
+export const SELECT_MENU_PANEL_STYLE: CSSProperties = {
+  background:
+    "linear-gradient(180deg, oklch(0.205 0.012 265 / 0.98), oklch(0.165 0.010 265 / 0.98))",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
+};
+
 const ACCENT_BTN_BASE_CLS =
   "inline-flex cursor-pointer items-center rounded-[8px] font-semibold transition-transform motion-safe:hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0";
 

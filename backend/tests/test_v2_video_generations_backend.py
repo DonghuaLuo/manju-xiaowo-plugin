@@ -15,6 +15,7 @@ from lib.video_backends.base import (
     ResumeExpiredError,
     VideoCapability,
     VideoGenerationRequest,
+    should_retry_submit,
 )
 from lib.video_backends.v2_video_generations import (
     _TASK_ID_PATHS,
@@ -23,7 +24,6 @@ from lib.video_backends.v2_video_generations import (
     _dig,
     _extract_failure,
     _first_str_by_paths,
-    _is_v2_retryable_error,
     _log_fields,
     _normalize_root,
     build_request_body,
@@ -113,15 +113,15 @@ class TestNormalizeStatus:
 class TestV2RetryPolicy:
     @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
     def test_http_client_errors_are_not_retryable(self, status_code):
-        assert _is_v2_retryable_error(_make_http_error(status_code, "client error")) is False
+        assert should_retry_submit(_make_http_error(status_code, "client error")) is False
 
     @pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
     def test_rate_limit_and_server_errors_are_retryable(self, status_code):
-        assert _is_v2_retryable_error(_make_http_error(status_code, "transient error")) is True
+        assert should_retry_submit(_make_http_error(status_code, "transient error")) is True
 
     def test_network_errors_are_retryable(self):
         request = httpx.Request("GET", "https://x/v2/video/generations")
-        assert _is_v2_retryable_error(httpx.ReadTimeout("timed out", request=request)) is True
+        assert should_retry_submit(httpx.ReadTimeout("timed out", request=request)) is True
 
 
 class TestDig:
@@ -413,6 +413,21 @@ class TestV2BackendHttp:
             req = VideoGenerationRequest(prompt="p", output_path=tmp_path / "o.mp4", duration_seconds=5)
             with pytest.raises(RuntimeError, match="task_id"):
                 await self._backend().generate(req)
+
+    @pytest.mark.asyncio
+    async def test_create_non_retryable_4xx_fails_fast(self, tmp_path: Path):
+        resp400 = _make_response(400, {})
+        resp400.raise_for_status = MagicMock(side_effect=_make_http_error(400, "bad request"))
+        client = _mock_client(post=resp400)
+        with (
+            patch("httpx.AsyncClient", return_value=client),
+            patch("lib.video_backends.v2_video_generations.download_video", AsyncMock()),
+        ):
+            req = VideoGenerationRequest(prompt="p", output_path=tmp_path / "o.mp4", duration_seconds=5)
+            with pytest.raises(httpx.HTTPStatusError):
+                await self._backend().generate(req)
+        assert client.post.await_count == 1
+        client.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_generate_missing_video_url_raises(self, tmp_path: Path):

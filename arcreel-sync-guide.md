@@ -22,12 +22,13 @@
 ## 本次对齐记录
 
 - 本次同步来源：`E:\rust_python\ArcReel`
-- 本次 pull 记录：`2026-05-29` 复审本地 ArcReel HEAD，`E:\rust_python\ArcReel` 当前为 `d0fcf676fc4283a5a7a2ec1458d73e37a143964f`
-- 本次检查范围：`c27c30c3568558d1ce3d238feb39d1c72bd69adb..d0fcf676fc4283a5a7a2ec1458d73e37a143964f`
-- 本次已评估到 ArcReel commit：`d0fcf676fc4283a5a7a2ec1458d73e37a143964f`（短 hash：`d0fcf67`）
+- 本次 pull 记录：`2026-05-31` 复审本地 ArcReel HEAD，`E:\rust_python\ArcReel` 当前为 `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`
+- 本次检查范围：`35493a15666aa614a25ede39327a2a2a49f3faee..cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`
+- 本次已评估到 ArcReel commit：`cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`（短 hash：`cbf7e8f`）
 - `2026-05-29` 评估项对应功能已完成同步，旧评估文档已删除；后续默认以 `d0fcf676fc4283a5a7a2ec1458d73e37a143964f` 作为已完成同步基线，只评估 ArcReel 在此之后新增的更新。
 - `2026-05-30` 已评估并同步到 ArcReel `1c71c18e9581544398645d080bf622b5c9ba4ca3`：本轮评估项 A1-A5 已完成同步；K1 仅作知识采纳；X1 明确不采纳。对应旧执行清单已删除，不再作为后续待办或审查来源。后续继续评估可把 `1c71c18e9581544398645d080bf622b5c9ba4ca3` 作为已评估且已同步边界。
 - `2026-05-31` 已评估并同步到 ArcReel `35493a15666aa614a25ede39327a2a2a49f3faee`：采纳 `c40608c` Base URL 占位符修复、`b7efac2` 声明式 pricing 重构、`35493a1` 自定义视频 endpoint 扩展与 content-first 推断；同步时保留 manju 的桌面插件边界、本地多语言、Vidu/Ark 本地增强和 retired model 规则。后续继续评估可把 `35493a15666aa614a25ede39327a2a2a49f3faee` 作为已评估且已同步边界。
+- `2026-05-31` 已评估并同步到 ArcReel `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`：采纳 `a377d0d` 中转视频后端按 status_code 闸门重试、`cbf7e8f` 参考视频能力纯函数解析；同步时保留 manju 的 resume-expired 终态转换、Ark Seedance 1.x 本地能力细分和桌面插件自定义供应商边界。后续继续评估可把 `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d` 作为已评估且已同步边界。
 
 ## 本地审查待处理问题
 

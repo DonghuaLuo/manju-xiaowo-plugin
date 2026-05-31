@@ -4,3 +4,4 @@ export { GenerateButton } from "./GenerateButton";
 export { DropdownPill } from "./DropdownPill";
 export { ImageFlipReveal } from "./ImageFlipReveal";
 export { ProviderModelSelect } from "./ProviderModelSelect";
+export { SelectMenu } from "./SelectMenu";

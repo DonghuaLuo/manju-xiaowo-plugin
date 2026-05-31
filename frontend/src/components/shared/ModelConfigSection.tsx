@@ -130,10 +130,10 @@ export function ModelConfigSection({
     const res = lookupResolutions(providers, backend, customProviders, endpointToMediaType);
     if (res.options.length === 0) return null;
     return (
-      <div className="mt-3 flex items-center gap-2">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+      <div className="mt-3">
+        <div className="mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
           {t("resolution_label")}
-        </span>
+        </div>
         <ResolutionPicker
           mode={res.isCustom ? "combobox" : "select"}
           options={res.options}

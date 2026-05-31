@@ -22,6 +22,7 @@ from lib.image_backends.openai import OpenAIImageBackend
 from lib.text_backends.gemini import GeminiTextBackend
 from lib.text_backends.openai import OpenAITextBackend
 from lib.video_backends.ark import ArkVideoBackend
+from lib.video_backends.base import VideoCapabilities
 from lib.video_backends.newapi import NewAPIVideoBackend
 from lib.video_backends.openai import OpenAIVideoBackend
 from lib.video_backends.v2_video_generations import V2VideoGenerationsBackend
@@ -48,8 +49,11 @@ class EndpointSpec:
     image_capabilities: frozenset[ImageCapability] | None = None  # image 类才填，非 image 类省略
     # 参考生视频单镜头参考图上限；仅 video 类有意义。
     # 显式 int：原样下传作为硬约束（0 表示不接受参考图）。
-    # None：未声明，由 resolver fallthrough 到 backend video_capabilities 读取真实上限。
+    # None：未声明，由 resolver 调 video_caps_for_model 按 model_id 读取真实上限。
     video_max_reference_images: int | None = None
+    # 当 video_max_reference_images 为 None 时，resolver 用此纯函数按 model_id 读 backend 声明的
+    # caps，不构造 SDK client、不查 provider 行。video endpoint 恰填 int cap 或 caps_fn 其一。
+    video_caps_for_model: Callable[[str], VideoCapabilities] | None = None
 
 
 # ── 各 endpoint 的 build_backend 闭包 ──────────────────────────────
@@ -236,6 +240,7 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_method="POST",
         request_path_template="/v2/video/generations",
         build_backend=_build_v2_video_generations,
+        video_caps_for_model=V2VideoGenerationsBackend.video_capabilities_for_model,
     ),
     "ark-seedance": EndpointSpec(
         key="ark-seedance",
@@ -245,6 +250,7 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_method="POST",
         request_path_template="/api/v3/contents/generations/tasks",
         build_backend=_build_ark_seedance,
+        video_caps_for_model=ArkVideoBackend.video_capabilities_for_model,
     ),
     "vidu-video": EndpointSpec(
         key="vidu-video",
@@ -254,6 +260,7 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_method="POST",
         request_path_template="/ent/v2/img2video",
         build_backend=_build_vidu_video,
+        video_caps_for_model=ViduVideoBackend.video_capabilities_for_model,
     ),
 }
 
@@ -262,6 +269,30 @@ ENDPOINT_KEYS_BY_MEDIA_TYPE: dict[str, tuple[str, ...]] = {
     media_type: tuple(k for k, s in ENDPOINT_REGISTRY.items() if s.media_type == media_type)
     for media_type in {s.media_type for s in ENDPOINT_REGISTRY.values()}
 }
+
+
+def _validate_video_caps_declarations() -> None:
+    """import 期校验 video endpoint 的参考图上限来源，防止请求期才发现注册表配置坏掉。"""
+    for key, spec in ENDPOINT_REGISTRY.items():
+        cap = spec.video_max_reference_images
+        caps_fn = spec.video_caps_for_model
+        has_int = cap is not None
+        if caps_fn is not None and not callable(caps_fn):
+            raise ValueError(f"endpoint {key!r} declares non-callable video_caps_for_model: {caps_fn!r}")
+        has_fn = callable(caps_fn)
+        if spec.media_type == "video":
+            if has_int == has_fn:
+                raise ValueError(
+                    f"video endpoint {key!r} must declare exactly one of video_max_reference_images "
+                    f"or video_caps_for_model"
+                )
+            if cap is not None and cap < 0:
+                raise ValueError(f"video endpoint {key!r} declares negative video_max_reference_images: {cap}")
+        elif has_int or has_fn:
+            raise ValueError(f"non-video endpoint {key!r} must not declare video caps")
+
+
+_validate_video_caps_declarations()
 
 
 # ── 工具函数 ───────────────────────────────────────────────────────
@@ -294,6 +325,7 @@ def endpoint_spec_to_dict(spec: EndpointSpec) -> dict:
     """把 EndpointSpec 转成可序列化的纯数据 dict（剥掉不可 JSON 化的 build_backend 闭包）。"""
     data = asdict(spec)
     data.pop("build_backend", None)
+    data.pop("video_caps_for_model", None)
     if spec.image_capabilities is not None:
         data["image_capabilities"] = sorted(c.value for c in spec.image_capabilities)
     else:

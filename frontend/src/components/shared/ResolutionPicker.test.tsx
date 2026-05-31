@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ResolutionPicker } from "./ResolutionPicker";
 
 describe("ResolutionPicker", () => {
   it("select mode renders options + default and maps empty to null", () => {
     const onChange = vi.fn();
-    render(
+    const { rerender } = render(
       <ResolutionPicker
         mode="select"
         options={["720p", "1080p"]}
@@ -17,9 +17,20 @@ describe("ResolutionPicker", () => {
     const select = screen.getByRole("combobox");
     expect(select).toBeInTheDocument();
     expect(screen.getByText("默认（不传）")).toBeInTheDocument();
-    fireEvent.change(select, { target: { value: "720p" } });
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole("option", { name: "720p" }));
     expect(onChange).toHaveBeenCalledWith("720p");
-    fireEvent.change(select, { target: { value: "" } });
+    rerender(
+      <ResolutionPicker
+        mode="select"
+        options={["720p", "1080p"]}
+        value="720p"
+        onChange={onChange}
+        placeholder="默认（不传）"
+      />
+    );
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "默认（不传）" }));
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
@@ -51,5 +62,28 @@ describe("ResolutionPicker", () => {
     expect(onChange).toHaveBeenCalledWith("1024x1024");
     fireEvent.change(input, { target: { value: "" } });
     expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("combobox mode closes after choosing a listed option", async () => {
+    const onChange = vi.fn();
+    render(
+      <ResolutionPicker
+        mode="combobox"
+        options={["720p", "1080p", "4K"]}
+        value={null}
+        onChange={onChange}
+        placeholder="默认（不传）"
+        aria-label="分辨率"
+      />
+    );
+
+    const input = screen.getByRole("combobox", { name: "分辨率" });
+    fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("option", { name: "720p" }));
+
+    expect(onChange).toHaveBeenCalledWith("720p");
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "分辨率" })).not.toBeInTheDocument();
+    });
   });
 });

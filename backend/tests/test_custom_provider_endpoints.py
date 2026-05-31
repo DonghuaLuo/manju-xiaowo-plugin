@@ -6,6 +6,8 @@ import pytest
 
 from lib.custom_provider.endpoints import (
     ENDPOINT_REGISTRY,
+    EndpointSpec,
+    _validate_video_caps_declarations,
     endpoint_spec_to_dict,
     endpoint_to_media_type,
     get_endpoint_spec,
@@ -58,8 +60,53 @@ class TestRegistry:
     def test_new_video_endpoints_have_unset_cap(self):
         for key in ("v2-video-generations", "ark-seedance", "vidu-video"):
             assert ENDPOINT_REGISTRY[key].video_max_reference_images is None
+            assert callable(ENDPOINT_REGISTRY[key].video_caps_for_model)
         assert ENDPOINT_REGISTRY["openai-video"].video_max_reference_images == 1
+        assert ENDPOINT_REGISTRY["openai-video"].video_caps_for_model is None
         assert ENDPOINT_REGISTRY["newapi-video"].video_max_reference_images == 0
+        assert ENDPOINT_REGISTRY["newapi-video"].video_caps_for_model is None
+
+    def test_video_caps_declaration_bindings(self):
+        assert ENDPOINT_REGISTRY["v2-video-generations"].video_caps_for_model("any").max_reference_images == 4
+        assert ENDPOINT_REGISTRY["ark-seedance"].video_caps_for_model("doubao-seedance-2-0").max_reference_images == 9
+        assert ENDPOINT_REGISTRY["ark-seedance"].video_caps_for_model("doubao-seedance-1-0").max_reference_images == 0
+        assert ENDPOINT_REGISTRY["vidu-video"].video_caps_for_model("viduq3-turbo").max_reference_images == 7
+
+    def test_video_caps_declaration_rejects_negative_cap(self, monkeypatch):
+        monkeypatch.setitem(
+            ENDPOINT_REGISTRY,
+            "bad-video",
+            EndpointSpec(
+                key="bad-video",
+                media_type="video",
+                family="openai",
+                display_name_key="endpoint_bad_video_display",
+                request_method="POST",
+                request_path_template="/bad",
+                build_backend=lambda provider, model: None,
+                video_max_reference_images=-1,
+            ),
+        )
+        with pytest.raises(ValueError, match="negative"):
+            _validate_video_caps_declarations()
+
+    def test_video_caps_declaration_rejects_non_callable_caps_fn(self, monkeypatch):
+        monkeypatch.setitem(
+            ENDPOINT_REGISTRY,
+            "bad-video",
+            EndpointSpec(
+                key="bad-video",
+                media_type="video",
+                family="openai",
+                display_name_key="endpoint_bad_video_display",
+                request_method="POST",
+                request_path_template="/bad",
+                build_backend=lambda provider, model: None,
+                video_caps_for_model="not callable",
+            ),
+        )
+        with pytest.raises(ValueError, match="non-callable"):
+            _validate_video_caps_declarations()
 
     def test_media_type_groups(self):
         text_keys = {s.key for s in ENDPOINT_REGISTRY.values() if s.media_type == "text"}
