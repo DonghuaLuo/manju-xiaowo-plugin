@@ -1,11 +1,11 @@
 {
   "id": "manju",
   "title": "AI 短剧 / 漫剧生成",
-  "version": "1.05",
+  "version": "1.06",
   "description": "剧本拆解、角色设计、分镜到成片一键合成。",
   "author": "小蜗工具（封装）",
   "icon": "frontend/public/logo.png",
-  "dev_mode": true,
+  "dev_mode": false,
   "frontend": {
     "entry": "frontend/dist/index.html",
     "theme": "dark",
