@@ -2,6 +2,7 @@
   "project_exclude": [
     "arcreel-sync-guide.md",
     "backend/projects",
-    "backend/tests"
+    "backend/tests",
+    "backend/logs"
   ]
 }

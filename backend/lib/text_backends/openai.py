@@ -6,6 +6,7 @@ import json
 import logging
 
 from openai import AsyncOpenAI, BadRequestError
+from pydantic import BaseModel, ValidationError
 
 from lib.logging_utils import format_kwargs_for_log
 from lib.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
@@ -104,6 +105,12 @@ class OpenAITextBackend:
                 "原生 response_format 返回非 JSON 内容（代理可能未支持 response_format），降级到 Instructor 路径",
             )
             return await _instructor_fallback(self._client, self._model, request, messages)
+        if request.response_schema and _pydantic_validation_error(text, request.response_schema):
+            logger.warning(
+                "原生 response_format 返回 JSON 但不符合 Pydantic schema（代理可能未支持 json_schema），"
+                "降级到 Instructor 路径",
+            )
+            return await _instructor_fallback(self._client, self._model, request, messages)
 
         warn_if_truncated(
             getattr(choice, "finish_reason", None),
@@ -168,6 +175,21 @@ def _is_valid_json(text: str) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+def _pydantic_validation_error(text: str, schema: dict | type | None) -> bool:
+    """判断 Pydantic schema 的原生 JSON 响应是否结构不匹配。
+
+    一些 OpenAI 兼容代理会返回合法 JSON，但忽略 json_schema 的必填字段约束；
+    如果这里不拦截，错误会延迟到业务层的 model_validate_json 才暴露。
+    """
+    if not isinstance(schema, type) or not issubclass(schema, BaseModel):
+        return False
+    try:
+        schema.model_validate_json(text)
+    except ValidationError:
+        return True
+    return False
 
 
 def _is_schema_error(exc: BaseException) -> bool:

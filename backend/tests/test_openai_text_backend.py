@@ -244,6 +244,43 @@ class TestInstructorFallback:
         assert result.input_tokens == 50
         assert result.output_tokens == 20
 
+    async def test_valid_json_wrong_schema_triggers_instructor_fallback_pydantic(self):
+        """原生返回可解析 JSON 但不符合 Pydantic schema 时，也应降级到 Instructor。"""
+        wrong_schema_json = json.dumps({"title": "Wrong shape", "language": "zh"})
+        instructor_result = _PersonSchema(name="Bob", age=25)
+        instructor_completion = MagicMock()
+        instructor_completion.usage = MagicMock()
+        instructor_completion.usage.prompt_tokens = 50
+        instructor_completion.usage.completion_tokens = 20
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_make_mock_response(wrong_schema_json, 100, 60)
+        )
+
+        mock_patched = AsyncMock()
+        mock_patched.chat.completions.create_with_completion = AsyncMock(
+            return_value=(instructor_result, instructor_completion)
+        )
+
+        with (
+            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
+            patch("instructor.from_openai", return_value=mock_patched),
+        ):
+            from lib.text_backends.openai import OpenAITextBackend
+
+            backend = OpenAITextBackend(api_key="test-key")
+            request = TextGenerationRequest(
+                prompt="Extract info",
+                response_schema=_PersonSchema,
+            )
+            result = await backend.generate(request)
+
+        assert result.text == instructor_result.model_dump_json()
+        assert result.provider == PROVIDER_OPENAI
+        assert result.input_tokens == 50
+        assert result.output_tokens == 20
+
     async def test_bad_request_error_triggers_instructor_fallback_pydantic(self):
         """原生 response_format 抛 BadRequestError 且 schema 为 Pydantic 类时，走 Instructor 降级。"""
         mock_client = AsyncMock()
