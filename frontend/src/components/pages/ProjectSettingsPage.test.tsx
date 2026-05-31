@@ -115,6 +115,54 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
+  it("favorites a complete custom style and refreshes templates", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style_image: "style_reference.png",
+        style_description: "manual noir lighting",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const updateSpy = vi.spyOn(API, "updateProject").mockResolvedValue({
+      success: true,
+      project: { title: "Demo" } as unknown as Awaited<ReturnType<typeof API.updateProject>>["project"],
+    });
+    const favoriteSpy = vi.spyOn(API, "createFavoriteStyleTemplate").mockResolvedValue({
+      success: true,
+      template: {
+        id: "favorite_abc123",
+        category: "favorite",
+        prompt: "manual noir lighting",
+        thumbnail_file: "favorite_abc123.png",
+        thumbnail_url: "/api/v1/style-templates/favorites/favorite_abc123.png",
+        name: "收藏风格 1",
+        tagline: "自定义上传",
+      },
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    const favoriteBtn = await screen.findByRole("button", { name: /收藏风格|Favorite style/ });
+    expect(favoriteBtn).not.toBeDisabled();
+    fireEvent.click(favoriteBtn);
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith("demo", {
+        style_template_id: null,
+        style_description: "manual noir lighting",
+      });
+      expect(favoriteSpy).toHaveBeenCalledWith({
+        stylePrompt: "manual noir lighting",
+        projectName: "demo",
+        file: null,
+      });
+    });
+  });
+
   it("clearing the reference image keeps save enabled and triggers clear PATCH", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
@@ -150,7 +198,7 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
-  it("clicking 取消风格 when project has a template sends clear PATCH", async () => {
+  it("clicking 清空风格 when project has a template sends clear PATCH", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo",
@@ -172,7 +220,7 @@ describe("ProjectSettingsPage – style picker", () => {
     // 等到 style picker 已经 mount（能找到保存按钮）
     await screen.findByRole("button", { name: /保存风格|Save style/ });
 
-    const clearBtn = screen.getByRole("button", { name: /取消风格|Remove style/ });
+    const clearBtn = screen.getByRole("button", { name: /清空风格|Clear style/ });
     fireEvent.click(clearBtn);
 
     const saveBtn = screen.getByRole("button", { name: /保存风格|Save style/ });

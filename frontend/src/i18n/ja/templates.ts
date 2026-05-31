@@ -3,6 +3,7 @@ export default {
     custom: "カスタム",
     live: "実写",
     anim: "アニメーション",
+    favorite: "お気に入り",
   }
 ,  name: {
     live_cinematic_ancient: "映画的な歴史劇",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "分析中",
   analyze_style_failed: "スタイル分析に失敗しました: {{message}}",
   template_selected_default: "（既定）",
+  favorite_empty: "お気に入りのスタイルはまだありません",
   wizard_step_basics: "基本",
   wizard_step_models: "モデル",
   wizard_step_style: "スタイル",

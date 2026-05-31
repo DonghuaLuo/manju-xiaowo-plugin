@@ -3,6 +3,7 @@ export default {
     custom: "Personalizado",
     live: "Acción real",
     anim: "Animación",
+    favorite: "Favoritos",
   }
 ,  name: {
     live_cinematic_ancient: "Histórico cinematográfico",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "Analizando",
   analyze_style_failed: "Error al analizar el estilo: {{message}}",
   template_selected_default: "(predeterminado)",
+  favorite_empty: "Aún no hay estilos favoritos",
   wizard_step_basics: "Básicos",
   wizard_step_models: "Modelos",
   wizard_step_style: "Estilo",

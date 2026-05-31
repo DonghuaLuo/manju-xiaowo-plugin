@@ -3,6 +3,7 @@ export default {
     custom: "Personnalisé",
     live: "Prise de vues réelles",
     anim: "Animation",
+    favorite: "Favoris",
   }
 ,  name: {
     live_cinematic_ancient: "Historique cinématographique",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "Analyse",
   analyze_style_failed: "Échec de l'analyse du style : {{message}}",
   template_selected_default: "(par défaut)",
+  favorite_empty: "Aucun style favori",
   wizard_step_basics: "Bases",
   wizard_step_models: "Modèles",
   wizard_step_style: "Style",

@@ -168,7 +168,14 @@ function pickFeaturedProject(projects: ProjectSummary[]): ProjectSummary | null 
 }
 
 function styleLabelOf(p: ProjectSummary, t: TFunction): string {
-  if (p.style_template_id) return t(`templates:name.${p.style_template_id}`);
+  if (p.style_template_id) {
+    const label = t(`templates:name.${p.style_template_id}`, { defaultValue: "" });
+    if (label) return label;
+    if (p.style_template_id.startsWith("favorite_")) {
+      return t("templates:category.favorite", { defaultValue: "Style Favorites" });
+    }
+    return p.style_template_id;
+  }
   if (p.style_image) return t("dashboard:style_custom");
   return t("dashboard:style_not_set");
 }

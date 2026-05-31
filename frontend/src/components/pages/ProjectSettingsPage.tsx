@@ -2,7 +2,7 @@ import { useParams, useLocation } from "wouter";
 import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { BookmarkPlus, ChevronLeft, Loader2 } from "lucide-react";
 import { API, type StyleTemplateInfo } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
@@ -47,6 +47,23 @@ function deriveStyleValue(
     uploadedFile: null,
     uploadedPreview: null,
     stylePrompt: existingStyle.trim() ? existingStyle : (templatePrompts[effectiveId] ?? ""),
+  };
+}
+
+function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
+  templates: StyleTemplate[];
+  prompts: Record<string, string>;
+} {
+  return {
+    prompts: Object.fromEntries(templates.map((tpl) => [tpl.id, tpl.prompt])),
+    templates: templates.map((tpl) => ({
+      id: tpl.id,
+      category: tpl.category,
+      thumbnailFile: tpl.thumbnail_file,
+      thumbnailUrl: tpl.thumbnail_url ?? null,
+      name: tpl.name ?? null,
+      tagline: tpl.tagline ?? null,
+    })),
   };
 }
 
@@ -161,6 +178,7 @@ export function ProjectSettingsPage() {
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
   const [savingStyle, setSavingStyle] = useState(false);
+  const [savingFavoriteStyle, setSavingFavoriteStyle] = useState(false);
   const [analyzingStyle, setAnalyzingStyle] = useState(false);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
@@ -170,7 +188,7 @@ export function ProjectSettingsPage() {
     aspectRatio: "", generationMode: "storyboard",
     defaultDuration: null as number | null,
     episodeTargetUnits: String(DEFAULT_EPISODE_TARGET_UNITS),
-    sourceLanguage: "zh" as SourceLanguage,
+    sourceLanguage: "zh",
     videoResolution: null as string | null,
     imageResolution: null as string | null,
   });
@@ -188,14 +206,7 @@ export function ProjectSettingsPage() {
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
     ]).then(([configRes, projectRes, styleTemplatesRes, providerList, customProviderList]) => {
       if (disposed) return;
-      const templatePrompts = Object.fromEntries(
-        styleTemplatesRes.templates.map((tpl) => [tpl.id, tpl.prompt]),
-      );
-      const templates = styleTemplatesRes.templates.map((tpl) => ({
-        id: tpl.id,
-        category: tpl.category,
-        thumbnailFile: tpl.thumbnail_file,
-      }));
+      const { templates, prompts: templatePrompts } = normalizeStyleTemplatePayload(styleTemplatesRes.templates);
       setStyleTemplates(templates);
       setStyleTemplatePrompts(templatePrompts);
 
@@ -367,13 +378,20 @@ export function ProjectSettingsPage() {
   // Cross-tab switch from custom → template may leave {mode:"template", templateId:null}
   // while an uploaded preview still lingers — no user-chosen card. Block save so
   // clicking it can't silently route to the "clear style" PATCH branch. The
-  // explicit 取消风格 action zeroes uploadedFile/uploadedPreview too, bypassing this.
+  // explicit 清空风格 action zeroes uploadedFile/uploadedPreview too, bypassing this.
   const isStyleIncomplete =
     !!styleValue
     && styleValue.mode === "template"
     && !styleValue.templateId
     && (styleValue.uploadedFile !== null || !!styleValue.uploadedPreview);
-  const isStyleSaveDisabled = savingStyle || !styleIsDirty || isStyleIncomplete;
+  const isStyleSaveDisabled = savingStyle || savingFavoriteStyle || !styleIsDirty || isStyleIncomplete;
+  const canFavoriteStyle = !!styleValue
+    && styleValue.mode === "custom"
+    && !savingStyle
+    && !savingFavoriteStyle
+    && !analyzingStyle
+    && (styleValue.uploadedFile !== null || !!styleValue.uploadedPreview)
+    && !!styleValue.stylePrompt.trim();
 
   const handleSaveStyle = useCallback(async () => {
     if (!styleValue) return;
@@ -401,7 +419,7 @@ export function ProjectSettingsPage() {
           style: stylePrompt,
         });
       } else {
-        // 取消风格：显式清掉模板 ID 与自定义图
+        // 清空风格：显式清掉模板 ID 与自定义图
         await API.updateProject(projectName, {
           style_template_id: null,
           clear_style_image: true,
@@ -424,6 +442,57 @@ export function ProjectSettingsPage() {
       setSavingStyle(false);
     }
   }, [styleValue, projectName, styleTemplates, styleTemplatePrompts, t]);
+
+  const handleFavoriteStyle = useCallback(async () => {
+    if (!styleValue || styleValue.mode !== "custom") return;
+    const stylePrompt = styleValue.stylePrompt.trim();
+    if (!stylePrompt || (!styleValue.uploadedFile && !styleValue.uploadedPreview)) {
+      useAppStore.getState().pushToast(t("style_favorite_invalid"), "warning");
+      return;
+    }
+
+    setSavingFavoriteStyle(true);
+    try {
+      if (styleValue.uploadedFile) {
+        await API.uploadStyleImage(projectName, styleValue.uploadedFile, {
+          styleDescription: stylePrompt,
+        });
+      } else {
+        await API.updateProject(projectName, {
+          style_template_id: null,
+          style_description: stylePrompt,
+        });
+      }
+
+      await API.createFavoriteStyleTemplate({
+        stylePrompt,
+        projectName,
+        file: styleValue.uploadedFile,
+      });
+
+      const [templatesRes, refreshed] = await Promise.all([
+        API.getStyleTemplates(),
+        API.getProject(projectName),
+      ]);
+      const { templates, prompts } = normalizeStyleTemplatePayload(templatesRes.templates);
+      setStyleTemplates(templates);
+      setStyleTemplatePrompts(prompts);
+
+      const nextStyle = deriveStyleValue(
+        refreshed.project as unknown as Record<string, unknown>,
+        projectName,
+        templates,
+        prompts,
+      );
+      setStyleValue(nextStyle);
+      initialStyleRef.current = nextStyle;
+      useAppStore.getState().pushToast(t("style_favorite_saved"), "success");
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(t("style_favorite_failed", { message: errMsg(e) }), "error");
+    } finally {
+      setSavingFavoriteStyle(false);
+    }
+  }, [projectName, styleValue, t]);
 
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
@@ -589,7 +658,25 @@ export function ProjectSettingsPage() {
                     )}
                     {savingStyle ? t("style_saving") : t("style_save")}
                   </button>
-                  {hasInitialStyle && !isStyleCleared && !savingStyle && (
+                  {styleValue.mode === "custom" && (
+                    <button
+                      type="button"
+                      // handleFavoriteStyle 在 onClick 时才执行，ref 写入是合法的；规则误报。
+                      // eslint-disable-next-line react-hooks/refs
+                      onClick={voidPromise(handleFavoriteStyle)}
+                      disabled={!canFavoriteStyle}
+                      title={!canFavoriteStyle ? t("style_favorite_invalid") : undefined}
+                      className="inline-flex items-center gap-1.5 rounded-[7px] border border-hairline-soft bg-bg-grad-a/55 px-2.5 py-1.5 text-[12px] font-medium text-text-2 transition-colors hover:border-accent/45 hover:bg-accent-dim hover:text-accent-2 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      {savingFavoriteStyle ? (
+                        <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
+                      ) : (
+                        <BookmarkPlus aria-hidden className="h-3.5 w-3.5" />
+                      )}
+                      {savingFavoriteStyle ? t("style_favoriting") : t("style_favorite")}
+                    </button>
+                  )}
+                  {hasInitialStyle && !isStyleCleared && !savingStyle && !savingFavoriteStyle && (
                     <button
                       type="button"
                       onClick={handleClearStyle}
@@ -598,7 +685,7 @@ export function ProjectSettingsPage() {
                       {t("style_clear")}
                     </button>
                   )}
-                  {isStyleCleared && !savingStyle && styleIsDirty && (
+                  {isStyleCleared && !savingStyle && !savingFavoriteStyle && styleIsDirty && (
                     <p className="text-[11.5px] text-text-3">{t("style_cleared_hint")}</p>
                   )}
                 </div>

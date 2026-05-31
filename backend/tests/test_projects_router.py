@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lib.style_templates import add_favorite_style_template
 from server.auth import CurrentUserInfo, get_current_user
 from server.routers import projects
 
@@ -182,13 +183,23 @@ def _client(monkeypatch, fake_pm, fake_calc):
 
 class TestProjectsRouter:
     def test_list_style_templates_endpoint(self, tmp_path, monkeypatch):
-        client = _client(monkeypatch, _FakePM(tmp_path), _FakeCalc())
+        fake_pm = _FakePM(tmp_path)
+        add_favorite_style_template(
+            template_id="favorite_router_test",
+            prompt="画风：路由收藏",
+            thumbnail_file="favorite_router_test.png",
+            data_root=fake_pm.base,
+        )
+        client = _client(monkeypatch, fake_pm, _FakeCalc())
         with client:
             resp = client.get("/api/v1/style-templates")
             assert resp.status_code == 200
             payload = resp.json()
             assert payload["success"] is True
-            assert len(payload["templates"]) == 36
+            assert len(payload["templates"]) >= 36
+            favorite_tpl = [tpl for tpl in payload["templates"] if tpl["id"] == "favorite_router_test"][0]
+            assert favorite_tpl["category"] == "favorite"
+            assert favorite_tpl["prompt"] == "画风：路由收藏"
             default_tpl = [tpl for tpl in payload["templates"] if tpl["id"] == "live_premium_drama"][0]
             assert default_tpl["category"] == "live"
             assert "精品短剧" in default_tpl["prompt"]

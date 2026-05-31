@@ -6,6 +6,12 @@ prompt 文本来自 docs/生图画风前置提示词4.10.docx。
 
 from __future__ import annotations
 
+import json
+import threading
+from pathlib import Path
+from time import time
+from uuid import uuid4
+
 # 完整 36 条，顺序即 UI 展示顺序
 STYLE_TEMPLATES: dict[str, dict] = {
     # ===== 真人 AI 漫剧 (18) =====
@@ -115,33 +121,194 @@ LEGACY_STYLE_MAP: dict[str, str] = {
     "3D Animation": "anim_3d_cg",
 }
 
+FAVORITE_STYLE_CATEGORY = "favorite"
+_FAVORITES_DIR = "_style_favorites"
+_FAVORITE_IMAGES_DIR = "images"
+_FAVORITES_FILE = "templates.json"
+_favorites_lock = threading.RLock()
 
-def resolve_template_prompt(template_id: str) -> str:
+
+def _resolve_data_root(data_root: str | Path | None = None) -> Path:
+    if data_root is not None:
+        return Path(data_root)
+    from lib.app_data_dir import app_data_dir
+
+    return app_data_dir()
+
+
+def favorite_style_templates_root(data_root: str | Path | None = None) -> Path:
+    root = _resolve_data_root(data_root) / _FAVORITES_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def favorite_style_images_root(data_root: str | Path | None = None) -> Path:
+    root = favorite_style_templates_root(data_root) / _FAVORITE_IMAGES_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _clean_favorite_thumbnail_file(value: object) -> str | None:
+    clean = str(value or "").replace("\\", "/").strip().lstrip("/")
+    if not clean or "/" in clean or clean in {".", ".."}:
+        return None
+    return clean
+
+
+def favorite_style_thumbnail_path(filename: str, data_root: str | Path | None = None) -> Path:
+    clean = _clean_favorite_thumbnail_file(filename)
+    if clean is None:
+        raise ValueError("invalid favorite style thumbnail filename")
+    return favorite_style_images_root(data_root) / clean
+
+
+def new_favorite_style_template_id() -> str:
+    return f"favorite_{uuid4().hex[:12]}"
+
+
+def _favorites_file_path(data_root: str | Path | None = None) -> Path:
+    return favorite_style_templates_root(data_root) / _FAVORITES_FILE
+
+
+def _normalize_favorite_item(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    tpl_id = str(raw.get("id") or "").strip()
+    prompt = str(raw.get("prompt") or "").strip()
+    thumbnail_file = _clean_favorite_thumbnail_file(raw.get("thumbnail_file"))
+    if not tpl_id.startswith("favorite_") or not prompt or not thumbnail_file:
+        return None
+
+    item = {
+        "id": tpl_id,
+        "category": FAVORITE_STYLE_CATEGORY,
+        "prompt": prompt,
+        "thumbnail_file": thumbnail_file,
+        "name": str(raw.get("name") or "").strip() or tpl_id,
+        "tagline": str(raw.get("tagline") or "").strip(),
+        "source": "favorite",
+    }
+    if raw.get("created_at") is not None:
+        item["created_at"] = raw["created_at"]
+    return item
+
+
+def _load_favorite_style_items(data_root: str | Path | None = None) -> list[dict]:
+    path = _favorites_file_path(data_root)
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    raw_items = raw.get("templates", []) if isinstance(raw, dict) else raw
+    if not isinstance(raw_items, list):
+        return []
+    items: list[dict] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        item = _normalize_favorite_item(raw_item)
+        if item is None or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        items.append(item)
+    return items
+
+
+def _save_favorite_style_items(items: list[dict], data_root: str | Path | None = None) -> None:
+    path = _favorites_file_path(data_root)
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps({"templates": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+
+
+def add_favorite_style_template(
+    *,
+    template_id: str,
+    prompt: str,
+    thumbnail_file: str,
+    name: str | None = None,
+    tagline: str | None = None,
+    data_root: str | Path | None = None,
+) -> dict:
+    """持久化一个用户收藏风格，并返回与内置模板一致的前端 payload。"""
+    tpl_id = template_id.strip()
+    style_prompt = prompt.strip()
+    thumbnail_name = _clean_favorite_thumbnail_file(thumbnail_file)
+    if not tpl_id.startswith("favorite_"):
+        raise ValueError("favorite style template id must start with favorite_")
+    if not style_prompt:
+        raise ValueError("favorite style prompt is required")
+    if thumbnail_name is None:
+        raise ValueError("favorite style thumbnail is required")
+
+    with _favorites_lock:
+        items = [item for item in _load_favorite_style_items(data_root) if item["id"] != tpl_id]
+        item = {
+            "id": tpl_id,
+            "category": FAVORITE_STYLE_CATEGORY,
+            "prompt": style_prompt,
+            "thumbnail_file": thumbnail_name,
+            "name": (name or "").strip() or f"收藏风格 {len(items) + 1}",
+            "tagline": (tagline or "").strip() or "自定义上传",
+            "source": "favorite",
+            "created_at": time(),
+        }
+        items.append(item)
+        _save_favorite_style_items(items, data_root)
+    return _template_payload(tpl_id, item)
+
+
+def _favorite_template_map(data_root: str | Path | None = None) -> dict[str, dict]:
+    return {item["id"]: item for item in _load_favorite_style_items(data_root)}
+
+
+def resolve_template_prompt(template_id: str, data_root: str | Path | None = None) -> str:
     """查表取 prompt。未知 id 抛 KeyError（交给调用方转成 HTTPException）。"""
-    return STYLE_TEMPLATES[template_id]["prompt"]
+    if template_id in STYLE_TEMPLATES:
+        return STYLE_TEMPLATES[template_id]["prompt"]
+    favorite = _favorite_template_map(data_root).get(template_id)
+    if favorite is None:
+        raise KeyError(template_id)
+    return favorite["prompt"]
 
 
-def is_known_template(template_id: str) -> bool:
-    return template_id in STYLE_TEMPLATES
+def is_known_template(template_id: str, data_root: str | Path | None = None) -> bool:
+    return template_id in STYLE_TEMPLATES or template_id in _favorite_template_map(data_root)
 
 
 def _template_payload(tpl_id: str, data: dict) -> dict:
-    return {
+    payload = {
         "id": tpl_id,
         "category": data["category"],
         "prompt": data["prompt"],
         "thumbnail_file": data.get("thumbnail_file") or f"{tpl_id}.png",
     }
+    if data.get("name"):
+        payload["name"] = data["name"]
+    if data.get("tagline"):
+        payload["tagline"] = data["tagline"]
+    if data.get("source"):
+        payload["source"] = data["source"]
+    if data.get("category") == FAVORITE_STYLE_CATEGORY:
+        payload["thumbnail_url"] = f"/api/v1/style-templates/favorites/{payload['thumbnail_file']}"
+    return payload
 
 
-def list_style_templates() -> list[dict]:
+def list_style_templates(data_root: str | Path | None = None) -> list[dict]:
     """返回前端可展示的预设风格清单，顺序保持注册表定义顺序。"""
-    return [_template_payload(tpl_id, data) for tpl_id, data in STYLE_TEMPLATES.items()]
+    builtins = [_template_payload(tpl_id, data) for tpl_id, data in STYLE_TEMPLATES.items()]
+    favorites = [_template_payload(item["id"], item) for item in _load_favorite_style_items(data_root)]
+    return [*builtins, *favorites]
 
 
-def list_templates_by_category() -> dict[str, list[dict]]:
+def list_templates_by_category(data_root: str | Path | None = None) -> dict[str, list[dict]]:
     """按 category 分组，返回列表保持定义顺序。"""
-    grouped: dict[str, list[dict]] = {"live": [], "anim": []}
-    for item in list_style_templates():
+    grouped: dict[str, list[dict]] = {"live": [], "anim": [], FAVORITE_STYLE_CATEGORY: []}
+    for item in list_style_templates(data_root):
         grouped[item["category"]].append(item)
     return grouped

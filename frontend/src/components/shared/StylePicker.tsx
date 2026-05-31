@@ -12,7 +12,7 @@ import { resolveStyleThumbnailUrl } from "@/utils/style-thumbnails";
 export interface StylePickerValue {
   mode: "template" | "custom";
   templateId: string | null;
-  activeCategory: "live" | "anim";
+  activeCategory: StyleCategory;
   uploadedFile: UploadFileInput | null;
   /** Either a blob: URL (just-uploaded) or an existing desktop resource URL. */
   uploadedPreview: string | null;
@@ -256,6 +256,7 @@ export function StylePicker({
   const isCustomActive = value.mode === "custom";
   const isLiveActive = value.mode === "template" && value.activeCategory === "live";
   const isAnimActive = value.mode === "template" && value.activeCategory === "anim";
+  const isFavoriteActive = value.mode === "template" && value.activeCategory === "favorite";
   const templates = useMemo(
     () => (value.mode === "template"
       ? styleTemplates.filter((tpl) => tpl.category === value.activeCategory)
@@ -268,7 +269,7 @@ export function StylePicker({
 
     let cancelled = false;
     void Promise.all(
-      templates.map(async (tpl) => [
+      templates.filter((tpl) => !tpl.thumbnailUrl).map(async (tpl) => [
         tpl.id,
         await resolveStyleThumbnailUrl(tpl.thumbnailFile),
       ] as const),
@@ -310,6 +311,13 @@ export function StylePicker({
           className={tabCls(isAnimActive)}
         >
           {t("templates:category.anim")}
+        </button>
+        <button
+          type="button"
+          onClick={() => handleCategoryTab("favorite")}
+          className={tabCls(isFavoriteActive)}
+        >
+          {t("templates:category.favorite")}
         </button>
       </div>
 
@@ -358,26 +366,34 @@ export function StylePicker({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-4">
-          <div className="grid max-h-[360px] grid-cols-4 gap-3 overflow-y-auto p-1 pr-2">
-            {templates.map((tpl) => (
-              <TemplateCard
-                key={tpl.id}
-                thumbnail={thumbnailUrls[tpl.id] ?? null}
-                label={t(`templates:name.${tpl.id}`)}
-                tagline={t(`templates:tagline.${tpl.id}`, "")}
-                isSelected={value.templateId === tpl.id}
-                isDefault={tpl.id === DEFAULT_TEMPLATE_ID}
-                defaultLabel={t("templates:template_selected_default")}
-                onClick={() => onChange({
-                  ...value,
-                  mode: "template",
-                  templateId: tpl.id,
-                  stylePrompt: templatePrompts[tpl.id] ?? "",
-                })}
-              />
-            ))}
-          </div>
-          {promptEditor(false)}
+          {templates.length > 0 ? (
+            <>
+              <div className="grid max-h-[360px] grid-cols-4 gap-3 overflow-y-auto p-1 pr-2">
+                {templates.map((tpl) => (
+                  <TemplateCard
+                    key={tpl.id}
+                    thumbnail={tpl.thumbnailUrl ?? thumbnailUrls[tpl.id] ?? null}
+                    label={tpl.name || t(`templates:name.${tpl.id}`)}
+                    tagline={tpl.tagline || t(`templates:tagline.${tpl.id}`, "")}
+                    isSelected={value.templateId === tpl.id}
+                    isDefault={tpl.id === DEFAULT_TEMPLATE_ID}
+                    defaultLabel={t("templates:template_selected_default")}
+                    onClick={() => onChange({
+                      ...value,
+                      mode: "template",
+                      templateId: tpl.id,
+                      stylePrompt: templatePrompts[tpl.id] ?? "",
+                    })}
+                  />
+                ))}
+              </div>
+              {promptEditor(false)}
+            </>
+          ) : (
+            <div className="flex min-h-[220px] items-center justify-center rounded-[10px] border border-dashed border-hairline-soft bg-bg-grad-a/35 px-4 text-center text-[12.5px] text-text-3">
+              {t("templates:favorite_empty")}
+            </div>
+          )}
         </div>
       )}
     </div>

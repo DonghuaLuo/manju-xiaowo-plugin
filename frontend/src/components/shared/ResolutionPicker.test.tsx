@@ -34,6 +34,26 @@ describe("ResolutionPicker", () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
+  it("select mode renders its dropdown above modal settings overlays", () => {
+    render(
+      <div className="fixed inset-0 z-50">
+        <ResolutionPicker
+          mode="select"
+          options={["720p", "1080p"]}
+          value={null}
+          onChange={() => {}}
+          placeholder="默认（不传）"
+          aria-label="分辨率"
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "分辨率" }));
+
+    expect(screen.getByRole("listbox", { name: "分辨率" }).parentElement).toHaveClass("z-50");
+    expect(screen.getByRole("option", { name: "720p" })).toBeInTheDocument();
+  });
+
   it("empty options not rendered", () => {
     const { container } = render(
       <ResolutionPicker

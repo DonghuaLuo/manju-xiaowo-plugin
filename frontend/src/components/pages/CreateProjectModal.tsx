@@ -239,6 +239,9 @@ export function CreateProjectModal() {
           id: tpl.id,
           category: tpl.category,
           thumbnailFile: tpl.thumbnail_file,
+          thumbnailUrl: tpl.thumbnail_url ?? null,
+          name: tpl.name ?? null,
+          tagline: tpl.tagline ?? null,
         })));
         setStyleTemplatePrompts(prompts);
         setStyle((prev) => {

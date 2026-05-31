@@ -3,6 +3,7 @@ export default {
     custom: "Пользовательский",
     live: "Живое действие",
     anim: "Анимация",
+    favorite: "Избранное",
   }
 ,  name: {
     live_cinematic_ancient: "Кинематографическая история",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "Анализ",
   analyze_style_failed: "Не удалось проанализировать стиль: {{message}}",
   template_selected_default: "(по умолчанию)",
+  favorite_empty: "Избранных стилей пока нет",
   wizard_step_basics: "Основы",
   wizard_step_models: "Модели",
   wizard_step_style: "Стиль",

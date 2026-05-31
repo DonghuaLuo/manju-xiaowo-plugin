@@ -66,6 +66,10 @@ def get_status_calculator() -> StatusCalculator:
     return calc
 
 
+def _manager_data_root(manager: ProjectManager) -> Path:
+    return Path(getattr(manager, "projects_root", getattr(manager, "base", app_data_dir())))
+
+
 def get_archive_service() -> ProjectArchiveService:
     return ProjectArchiveService(get_project_manager())
 
@@ -141,7 +145,8 @@ def _validate_episode_target_units(value: int | None) -> int | None:
 @router.get("/style-templates")
 async def get_style_templates(_user: CurrentUser):
     """返回后端注册的预设风格清单，prompt 以后端为唯一来源。"""
-    return {"success": True, "templates": list_style_templates()}
+    manager = get_project_manager()
+    return {"success": True, "templates": list_style_templates(data_root=_manager_data_root(manager))}
 
 
 def _cleanup_temp_file(path: str) -> None:
@@ -462,12 +467,13 @@ async def create_project(
 
             style_prompt = (req.style or "").strip()
             if req.style_template_id:
-                if not is_known_template(req.style_template_id):
+                data_root = _manager_data_root(manager)
+                if not is_known_template(req.style_template_id, data_root=data_root):
                     raise HTTPException(
                         status_code=400,
                         detail=_t("unknown_style_template", template_id=req.style_template_id),
                     )
-                style_prompt = style_prompt or resolve_template_prompt(req.style_template_id)
+                style_prompt = style_prompt or resolve_template_prompt(req.style_template_id, data_root=data_root)
 
             # legacy image_backend 已退役（拆为 image_provider_t2i/i2i）；写路径直接拒绝，
             # 避免迁移后再写时被解析链忽略、静默落到全局默认的另一供应商。
@@ -693,19 +699,23 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                         project.pop("style_template_id", None)
                         project["style"] = style_override or ""
                     else:
-                        if not is_known_template(req.style_template_id):
+                        data_root = _manager_data_root(manager)
+                        if not is_known_template(req.style_template_id, data_root=data_root):
                             raise HTTPException(
                                 status_code=400,
                                 detail=_t("unknown_style_template", template_id=req.style_template_id),
                             )
                         project["style_template_id"] = req.style_template_id
-                        project["style"] = style_override or resolve_template_prompt(req.style_template_id)
+                        project["style"] = style_override or resolve_template_prompt(
+                            req.style_template_id,
+                            data_root=data_root,
+                        )
                         # 强互斥:模版与参考图二选一
                         project.pop("style_image", None)
                         project.pop("style_description", None)
 
                 if req.clear_style_image:
-                    # 显式清除自定义参考图，用于"取消风格"流程
+                    # 显式清除自定义参考图，用于"清空风格"流程
                     project.pop("style_image", None)
                     project.pop("style_description", None)
 

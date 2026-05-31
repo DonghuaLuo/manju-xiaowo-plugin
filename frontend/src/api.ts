@@ -248,6 +248,16 @@ export interface StyleTemplateInfo {
   category: StyleCategory;
   prompt: string;
   thumbnail_file: string;
+  thumbnail_url?: string | null;
+  name?: string | null;
+  tagline?: string | null;
+  source?: string;
+}
+
+export interface CreateFavoriteStyleTemplatePayload {
+  stylePrompt: string;
+  projectName?: string | null;
+  file?: UploadFileInput | null;
 }
 
 /** Draft metadata returned by listDrafts. */
@@ -755,6 +765,21 @@ class API {
 
   static async getStyleTemplates(): Promise<{ success: boolean; templates: StyleTemplateInfo[] }> {
     return this.request("/style-templates");
+  }
+
+  static async createFavoriteStyleTemplate(
+    payload: CreateFavoriteStyleTemplatePayload,
+  ): Promise<{ success: boolean; template: StyleTemplateInfo }> {
+    const response = await requestWithLocalFiles(
+      `${API_BASE}/style-templates/favorites`,
+      {
+        style_prompt: payload.stylePrompt,
+        project_name: payload.projectName ?? "",
+      },
+      payload.file ? [{ fieldName: "file", file: payload.file }] : [],
+    );
+    await throwIfNotOk(response, "收藏风格失败");
+    return response.json() as Promise<{ success: boolean; template: StyleTemplateInfo }>;
   }
 
 

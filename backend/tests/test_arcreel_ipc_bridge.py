@@ -102,3 +102,19 @@ def test_open_desktop_path_rejects_missing_directory(tmp_path):
         assert str(missing_dir) in str(exc)
     else:
         raise AssertionError("expected FileNotFoundError")
+
+
+def test_resolve_media_path_supports_favorite_style_thumbnail(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCREEL_DATA_DIR", str(tmp_path))
+    from lib.app_data_dir import _reset_for_tests
+
+    _reset_for_tests()
+    thumbnail = tmp_path / "_style_favorites" / "images" / "favorite_demo.png"
+    thumbnail.parent.mkdir(parents=True)
+    thumbnail.write_bytes(b"png")
+
+    result = arcreel_ipc_bridge.resolve_media_path({
+        "resource": "style-templates/favorites/favorite_demo.png",
+    })
+
+    assert result == {"ok": True, "path": str(thumbnail)}

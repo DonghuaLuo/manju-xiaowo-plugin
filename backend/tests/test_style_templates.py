@@ -5,6 +5,8 @@ import pytest
 from lib.style_templates import (
     LEGACY_STYLE_MAP,
     STYLE_TEMPLATES,
+    add_favorite_style_template,
+    is_known_template,
     list_style_templates,
     list_templates_by_category,
     resolve_template_prompt,
@@ -46,7 +48,7 @@ def test_resolve_template_prompt_unknown_raises():
 
 def test_list_templates_by_category():
     grouped = list_templates_by_category()
-    assert set(grouped.keys()) == {"live", "anim"}
+    assert set(grouped.keys()) == {"live", "anim", "favorite"}
     assert len(grouped["live"]) == 18
     assert len(grouped["anim"]) == 18
     assert grouped["live"][0]["id"].startswith("live_")
@@ -55,7 +57,25 @@ def test_list_templates_by_category():
 
 def test_list_style_templates_exposes_frontend_payload():
     templates = list_style_templates()
-    assert len(templates) == 36
+    assert len(templates) >= 36
     first = templates[0]
     assert set(first) == {"id", "category", "prompt", "thumbnail_file"}
     assert first["thumbnail_file"] == f"{first['id']}.png"
+
+
+def test_favorite_style_template_roundtrip(tmp_path):
+    template = add_favorite_style_template(
+        template_id="favorite_unit_test",
+        prompt="画风：收藏的自定义风格",
+        thumbnail_file="favorite_unit_test.png",
+        data_root=tmp_path,
+    )
+
+    assert template["category"] == "favorite"
+    assert template["prompt"] == "画风：收藏的自定义风格"
+    assert template["thumbnail_url"] == "/api/v1/style-templates/favorites/favorite_unit_test.png"
+    assert is_known_template("favorite_unit_test", data_root=tmp_path)
+    assert resolve_template_prompt("favorite_unit_test", data_root=tmp_path) == "画风：收藏的自定义风格"
+
+    grouped = list_templates_by_category(data_root=tmp_path)
+    assert [item["id"] for item in grouped["favorite"]] == ["favorite_unit_test"]

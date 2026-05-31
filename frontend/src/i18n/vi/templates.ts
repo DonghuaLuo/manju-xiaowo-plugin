@@ -3,6 +3,7 @@ export default {
     custom: "Tùy chỉnh",
     live: "Người đóng",
     anim: "Hoạt hình",
+    favorite: "Yêu thích",
   }
 ,  name: {
     live_cinematic_ancient: "Cổ trang điện ảnh",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "Đang phân tích",
   analyze_style_failed: "Phân tích phong cách thất bại: {{message}}",
   template_selected_default: "(mặc định)",
+  favorite_empty: "Chưa có phong cách yêu thích",
   wizard_step_basics: "Cơ bản",
   wizard_step_models: "Mô hình",
   wizard_step_style: "Phong cách",

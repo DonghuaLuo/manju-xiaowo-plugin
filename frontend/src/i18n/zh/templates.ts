@@ -3,6 +3,7 @@ export default {
     custom: "自定义",
     live: "AI 真人剧",
     anim: "AI 漫剧",
+    favorite: "风格收藏",
   }
 ,  name: {
     live_cinematic_ancient: "精品古装",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "分析中",
   analyze_style_failed: "风格分析失败：{{message}}",
   template_selected_default: "（默认）",
+  favorite_empty: "暂无收藏风格",
   wizard_step_basics: "基础信息",
   wizard_step_models: "模型",
   wizard_step_style: "风格",

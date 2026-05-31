@@ -3,6 +3,7 @@ export default {
     custom: "自訂",
     live: "真人實拍",
     anim: "動畫",
+    favorite: "風格收藏",
   }
 ,  name: {
     live_cinematic_ancient: "精品古裝",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "分析中",
   analyze_style_failed: "風格分析失敗：{{message}}",
   template_selected_default: "（預設）",
+  favorite_empty: "尚無收藏風格",
   wizard_step_basics: "基本",
   wizard_step_models: "模型",
   wizard_step_style: "風格",

@@ -3,6 +3,7 @@ export default {
     custom: "사용자 지정",
     live: "실사",
     anim: "애니메이션",
+    favorite: "스타일 즐겨찾기",
   }
 ,  name: {
     live_cinematic_ancient: "영화풍 사극",
@@ -105,6 +106,7 @@ export default {
   analyzing_style: "분석 중",
   analyze_style_failed: "스타일 분석 실패: {{message}}",
   template_selected_default: "(기본값)",
+  favorite_empty: "아직 즐겨찾는 스타일이 없습니다",
   wizard_step_basics: "기본",
   wizard_step_models: "모델",
   wizard_step_style: "스타일",

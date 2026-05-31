@@ -208,6 +208,17 @@ class TestFilesRouter:
             assert manual_style.json()["style_description"] == "manual noir lighting"
             assert pm.load_project("demo")["style_description"] == "manual noir lighting"
 
+            favorite_style = client.post(
+                "/api/v1/style-templates/favorites",
+                data={"project_name": "demo", "style_prompt": "manual noir lighting"},
+            )
+            assert favorite_style.status_code == 200
+            favorite_template = favorite_style.json()["template"]
+            assert favorite_template["category"] == "favorite"
+            assert favorite_template["prompt"] == "manual noir lighting"
+            served_favorite = client.get(favorite_template["thumbnail_url"])
+            assert served_favorite.status_code == 200
+
             analyze_style = client.post(
                 "/api/v1/style-image/analyze",
                 files={"file": ("style.jpg", _img_bytes("JPEG"), "image/jpeg")},

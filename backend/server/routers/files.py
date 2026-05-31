@@ -32,6 +32,12 @@ from lib.source_loader import (
     SourceLoader,
     UnsupportedFormatError,
 )
+from lib.style_templates import (
+    add_favorite_style_template,
+    favorite_style_images_root,
+    favorite_style_thumbnail_path,
+    new_favorite_style_template_id,
+)
 from lib.upload_utils import local_upload_path, read_upload_bytes
 from server.auth import CurrentUser
 
@@ -874,6 +880,106 @@ async def analyze_style_image(_user: CurrentUser, _t: Translator, file: UploadFi
     finally:
         if tmp_path is not None:
             shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+@router.get("/style-templates/favorites/{filename}")
+async def serve_favorite_style_thumbnail(filename: str, _t: Translator):
+    """服务用户收藏风格缩略图。"""
+    try:
+        image_path = favorite_style_thumbnail_path(
+            filename,
+            data_root=get_project_manager().projects_root,
+        )
+        if not image_path.exists() or not image_path.is_file():
+            raise HTTPException(status_code=404, detail=_t("file_not_found", path=filename))
+        return FileResponse(str(image_path), headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    except ValueError:
+        raise HTTPException(status_code=400, detail=_t("forbidden_access"))
+
+
+@router.post("/style-templates/favorites")
+async def create_favorite_style_template(
+    _user: CurrentUser,
+    _t: Translator,
+    style_prompt: str = Form(...),
+    project_name: str | None = Form(None),
+    file: UploadFile | None = File(None),
+):
+    """把自定义上传风格收藏为可切换的用户预设。"""
+    prompt = (style_prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="请先填写风格提示词")
+    if file is None and not (project_name or "").strip():
+        raise HTTPException(status_code=400, detail="请先上传风格参考图")
+
+    try:
+        def _sync_create():
+            manager = get_project_manager()
+            data_root = manager.projects_root
+            template_id = new_favorite_style_template_id()
+            images_root = favorite_style_images_root(data_root)
+            target_base = images_root / template_id
+
+            if file is not None:
+                original_filename = _validate_style_image(file, _t)
+                original_suffix = Path(original_filename).suffix.lower()
+                source_path = local_upload_path(file)
+                if source_path is not None:
+                    output_path, _new_ext = save_normalized_uploaded_image_file(
+                        source_path,
+                        target_base.with_suffix(original_suffix or ".png"),
+                        original_suffix,
+                    )
+                else:
+                    content = read_upload_bytes(file)
+                    content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
+                    output_path = target_base.with_suffix(new_ext)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_bytes(content_norm)
+            else:
+                project_name_clean = (project_name or "").strip()
+                project = manager.load_project(project_name_clean)
+                style_image = str(project.get("style_image") or "").strip()
+                if not style_image:
+                    raise HTTPException(status_code=400, detail="请先上传风格参考图")
+                project_dir = manager.get_project_path(project_name_clean)
+                source_path = (project_dir / style_image).resolve()
+                try:
+                    source_path.relative_to(project_dir.resolve())
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=_t("forbidden_access"))
+                if not source_path.is_file():
+                    raise HTTPException(status_code=404, detail=_t("file_not_found", path=style_image))
+                original_suffix = source_path.suffix.lower()
+                if original_suffix not in STYLE_IMAGE_EXTENSIONS:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=_t("unsupported_image_type", ext=original_suffix, allowed=".png, .jpg, .jpeg, .webp"),
+                    )
+                output_path, _new_ext = save_normalized_uploaded_image_file(
+                    source_path,
+                    target_base.with_suffix(original_suffix or ".png"),
+                    original_suffix,
+                )
+
+            template = add_favorite_style_template(
+                template_id=template_id,
+                prompt=prompt,
+                thumbnail_file=output_path.name,
+                data_root=data_root,
+            )
+            return {"success": True, "template": template}
+
+        return await asyncio.to_thread(_sync_create)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=_t("project_not_found", name=project_name))
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as e:
+        logger.exception("收藏风格失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/projects/{project_name}/style-image")

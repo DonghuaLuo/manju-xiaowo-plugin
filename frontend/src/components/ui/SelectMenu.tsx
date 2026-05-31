@@ -166,6 +166,7 @@ export function SelectMenu({
         onClose={() => setOpen(false)}
         anchorRef={triggerRef}
         align="start"
+        layer="modal"
         sideOffset={5}
         width=""
         className={DROPDOWN_PANEL_CLS}

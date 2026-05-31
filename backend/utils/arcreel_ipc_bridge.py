@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """ArcReel desktop IPC bridge for Xiaowo plugin.
 
 The frontend keeps ArcReel's typed API surface, but requests arrive through
@@ -13,14 +12,14 @@ from __future__ import annotations
 import asyncio
 import atexit
 import base64
-import mimetypes
 import hashlib
 import json
+import mimetypes
 import os
 import platform
-import threading
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import MutableMapping
@@ -28,9 +27,8 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import unquote
 from uuid import uuid4
-
 
 _runtime_ready = False
 _runtime_lock = asyncio.Lock()
@@ -486,6 +484,13 @@ def resolve_media_path(params: dict[str, Any]) -> dict[str, Any]:
             ):
                 raise ValueError("Invalid asset type")
             path = _safe_child_path(projects_root / "_global_assets" / asset_type, *_clean_relative_parts(parts[2:]))
+        elif len(parts) == 3 and parts[0] == "style-templates" and parts[1] == "favorites":
+            from lib.style_templates import favorite_style_thumbnail_path
+
+            filename_parts = _clean_relative_parts(parts[2:])
+            if len(filename_parts) != 1:
+                raise ValueError("Invalid favorite style thumbnail path")
+            path = favorite_style_thumbnail_path(filename_parts[0], data_root=projects_root)
         else:
             return {"ok": False, "detail": "Unsupported media resource"}
 
