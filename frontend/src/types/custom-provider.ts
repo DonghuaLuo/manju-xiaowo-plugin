@@ -16,6 +16,8 @@ export interface EndpointDescriptor {
   request_path_template: string;
   /** image 类 endpoint 填能力数组，其他媒体类型为 null。 */
   image_capabilities: ImageCap[] | null;
+  /** video 类 endpoint 的显式参考图上限；null 表示由后端能力动态决定。 */
+  video_max_reference_images?: number | null;
 }
 
 export interface CustomProviderInfo {

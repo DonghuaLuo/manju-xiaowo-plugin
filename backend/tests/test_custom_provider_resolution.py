@@ -153,15 +153,19 @@ async def test_video_capabilities_endpoint_mismatch_raises(db_session: AsyncSess
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("endpoint", "expected"),
+    ("endpoint", "model_id", "expected"),
     [
-        ("openai-video", 1),
-        ("newapi-video", 0),
+        ("openai-video", "openai-video-model", 1),
+        ("newapi-video", "newapi-video-model", 0),
+        ("v2-video-generations", "bytedance/seedance-1-0-lite-i2v", 4),
+        ("ark-seedance", "doubao-seedance-2-0", 9),
+        ("vidu-video", "viduq3-turbo", 7),
     ],
 )
 async def test_custom_video_capabilities_uses_endpoint_reference_limit(
     db_session: AsyncSession,
     endpoint: str,
+    model_id: str,
     expected: int,
 ):
     from lib.config.resolver import ConfigResolver
@@ -179,7 +183,7 @@ async def test_custom_video_capabilities_uses_endpoint_reference_limit(
 
     model = CustomProviderModel(
         provider_id=provider.id,
-        model_id=f"{endpoint}-model",
+        model_id=model_id,
         display_name="Video",
         endpoint=endpoint,
         is_default=True,
@@ -190,7 +194,7 @@ async def test_custom_video_capabilities_uses_endpoint_reference_limit(
     await db_session.flush()
 
     provider_id_str = make_provider_id(provider.id)
-    project = {"video_backend": f"{provider_id_str}/{model.model_id}"}
+    project = {"video_backend": f"{provider_id_str}/{model_id}"}
     factory = async_sessionmaker(bind=db_session.get_bind(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload]
     resolver = ConfigResolver(factory, _bound_session=db_session)
     caps = await resolver._resolve_video_capabilities_from_project(ConfigService(db_session), db_session, project)

@@ -11,3 +11,4 @@ backend/compile/
 .env.*
 *.log
 /MIGRATION_CONSTRAINTS.md
+/backend/logs/

@@ -12,6 +12,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from lib.config.url_utils import ensure_google_base_url, ensure_openai_base_url
 from lib.custom_provider.backends import CustomImageBackend, CustomTextBackend, CustomVideoBackend
@@ -20,8 +21,11 @@ from lib.image_backends.gemini import GeminiImageBackend
 from lib.image_backends.openai import OpenAIImageBackend
 from lib.text_backends.gemini import GeminiTextBackend
 from lib.text_backends.openai import OpenAITextBackend
+from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.newapi import NewAPIVideoBackend
 from lib.video_backends.openai import OpenAIVideoBackend
+from lib.video_backends.v2_video_generations import V2VideoGenerationsBackend
+from lib.video_backends.vidu import ViduVideoBackend
 
 if TYPE_CHECKING:
     from lib.db.models.custom_provider import CustomProvider
@@ -42,8 +46,10 @@ class EndpointSpec:
     request_path_template: str  # "/v1/chat/completions"，可含 {model} 等占位
     build_backend: Callable[[CustomProvider, str], CustomTextBackend | CustomImageBackend | CustomVideoBackend]
     image_capabilities: frozenset[ImageCapability] | None = None  # image 类才填，非 image 类省略
-    # 参考生视频单镜头参考图上限；仅 video 类有意义。0 是显式硬约束，不代表未知。
-    video_max_reference_images: int = 0
+    # 参考生视频单镜头参考图上限；仅 video 类有意义。
+    # 显式 int：原样下传作为硬约束（0 表示不接受参考图）。
+    # None：未声明，由 resolver fallthrough 到 backend video_capabilities 读取真实上限。
+    video_max_reference_images: int | None = None
 
 
 # ── 各 endpoint 的 build_backend 闭包 ──────────────────────────────
@@ -106,6 +112,36 @@ def _build_newapi_video(provider, model_id: str) -> CustomVideoBackend:
     if not base_url:
         raise ValueError("NewAPI 视频后端需要 base_url")
     delegate = NewAPIVideoBackend(api_key=provider.api_key, base_url=base_url, model=model_id)
+    return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
+def _ensure_url_path_suffix(base_url: str | None, suffix: str) -> str | None:
+    """用户只填到 host 时补全协议和已知挂载路径；已带路径则原样信任。"""
+    s = (base_url or "").strip().rstrip("/")
+    if not s:
+        return None
+    normalized = s if "://" in s else f"https://{s}"
+    if urlsplit(normalized).path in ("", "/"):
+        return normalized + suffix
+    return normalized
+
+
+def _build_v2_video_generations(provider, model_id: str) -> CustomVideoBackend:
+    if not provider.base_url:
+        raise ValueError("v2-video-generations 端点需要 base_url")
+    delegate = V2VideoGenerationsBackend(api_key=provider.api_key, base_url=provider.base_url, model=model_id)
+    return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
+def _build_ark_seedance(provider, model_id: str) -> CustomVideoBackend:
+    base_url = _ensure_url_path_suffix(provider.base_url, "/api/v3")
+    delegate = ArkVideoBackend(api_key=provider.api_key, base_url=base_url, model=model_id)
+    return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
+def _build_vidu_video(provider, model_id: str) -> CustomVideoBackend:
+    base_url = _ensure_url_path_suffix(provider.base_url, "/ent/v2")
+    delegate = ViduVideoBackend(api_key=provider.api_key, base_url=base_url, model=model_id)
     return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 
 
@@ -190,6 +226,34 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_method="POST",
         request_path_template="/v1/video/generations",
         build_backend=_build_newapi_video,
+        video_max_reference_images=0,
+    ),
+    "v2-video-generations": EndpointSpec(
+        key="v2-video-generations",
+        media_type="video",
+        family="v2",
+        display_name_key="endpoint_v2_video_generations_display",
+        request_method="POST",
+        request_path_template="/v2/video/generations",
+        build_backend=_build_v2_video_generations,
+    ),
+    "ark-seedance": EndpointSpec(
+        key="ark-seedance",
+        media_type="video",
+        family="ark",
+        display_name_key="endpoint_ark_seedance_display",
+        request_method="POST",
+        request_path_template="/api/v3/contents/generations/tasks",
+        build_backend=_build_ark_seedance,
+    ),
+    "vidu-video": EndpointSpec(
+        key="vidu-video",
+        media_type="video",
+        family="vidu",
+        display_name_key="endpoint_vidu_video_display",
+        request_method="POST",
+        request_path_template="/ent/v2/img2video",
+        build_backend=_build_vidu_video,
     ),
 }
 
@@ -249,19 +313,21 @@ _VIDEO_PATTERN = re.compile(
 
 
 def infer_endpoint(model_id: str, discovery_format: str) -> str:
-    """根据模型 id 与 discovery_format 推默认 endpoint。
+    """根据模型 id 与 discovery_format 推默认 endpoint（content-first）。"""
+    lowered = model_id.lower()
+    is_video = bool(_VIDEO_PATTERN.search(model_id))
+    is_image = bool(_IMAGE_PATTERN.search(model_id))
 
-    1) 视频家族 → 一律 "openai-video"（OpenAI /v1/videos 协议为首选默认，
-       newapi-video 仅在用户手动选择时使用）
-    2) 图像家族 → discovery_format=google 走 "gemini-image" 否则 "openai-images"
-    3) 文本（默认）→ discovery_format=google 走 "gemini-generate" 否则 "openai-chat"
-    """
-    if _VIDEO_PATTERN.search(model_id):
+    if "imagen" in lowered:
+        return "gemini-image"
+    if "gemini" in lowered and not is_video:
+        return "gemini-image" if is_image else "gemini-generate"
+    if is_video:
+        if "seedance" in lowered:
+            return "ark-seedance"
+        if "viduq3" in lowered:
+            return "vidu-video"
         return "openai-video"
-    if _IMAGE_PATTERN.search(model_id):
-        if discovery_format == "google":
-            return "gemini-image"
-        return "openai-images"
-    if discovery_format == "google":
-        return "gemini-generate"
-    return "openai-chat"
+    if is_image:
+        return "gemini-image" if discovery_format == "google" else "openai-images"
+    return "gemini-generate" if discovery_format == "google" else "openai-chat"

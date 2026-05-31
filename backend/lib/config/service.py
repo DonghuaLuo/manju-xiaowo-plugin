@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,7 +124,10 @@ class ConfigService:
             else:
                 status = "unconfigured"
                 missing = list(meta.required_keys)
-            models_dict = {mid: asdict(mi) for mid, mi in meta.models.items()}
+            models_dict = {
+                mid: deepcopy({k: v for k, v in mi.__dict__.items() if k != "pricing"})
+                for mid, mi in meta.models.items()
+            }
             statuses.append(
                 ProviderStatus(
                     name=name,
