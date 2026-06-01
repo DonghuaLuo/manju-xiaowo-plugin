@@ -13,6 +13,11 @@ from lib.generation_queue_client import (
 )
 from lib.project_manager import ProjectManager
 from server.agent_runtime.sdk_tools._context import ToolContext, tool_error
+from server.agent_runtime.sdk_tools._generation_quality import (
+    QUALITY_SCHEMA,
+    normalize_quality,
+    route_summary,
+)
 
 # Asset-type emoji shown in tool output. Other display fields (bucket_key,
 # label_zh, subdir) come from lib.asset_types.ASSET_SPECS — the cross-app
@@ -38,6 +43,7 @@ def _build_specs(
     asset_type: str,
     names: list[str] | None,
     warnings: list[str],
+    quality: str = "final",
 ) -> list[TaskSpec]:
     spec: AssetSpec = ASSET_SPECS[asset_type]
     project = pm.load_project(project_name)
@@ -73,6 +79,7 @@ def _build_specs(
             media_type="image",
             resource_id=name,
             prompt=assets_dict[name]["description"],
+            extra_payload={"quality": quality},
         )
         for name in resolved
     ]
@@ -143,6 +150,10 @@ def generate_assets_tool(ctx: ToolContext):
                     "type": "boolean",
                     "description": "是否扫描所有 pending（与 names 互斥；默认 false 但当未提供 names 时等同 true）",
                 },
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 final（母资产高质量）",
+                },
             },
         },
     )
@@ -163,6 +174,7 @@ def generate_assets_tool(ctx: ToolContext):
                     "content": [{"type": "text", "text": "all 与 names 互斥，不能同时使用"}],
                     "is_error": True,
                 }
+            quality = normalize_quality(args, "final")
 
             types = (asset_type,) if asset_type else ALL_TYPES
             warnings: list[str] = []
@@ -172,7 +184,7 @@ def generate_assets_tool(ctx: ToolContext):
 
             for t in types:
                 spec = ASSET_SPECS[t]
-                specs = _build_specs(ctx.pm, ctx.project_name, t, names, warnings)
+                specs = _build_specs(ctx.pm, ctx.project_name, t, names, warnings, quality)
                 if not specs:
                     continue
 
@@ -185,7 +197,10 @@ def generate_assets_tool(ctx: ToolContext):
                     version = (br.result or {}).get("version")
                     version_text = f" (v{version})" if version is not None else ""
                     file_path = (br.result or {}).get("file_path") or f"{spec.subdir}/{br.resource_id}.png"
-                    details.append(f"  ✓ {spec.label_zh} '{br.resource_id}' → {file_path}{version_text}")
+                    details.append(
+                        f"  ✓ {spec.label_zh} '{br.resource_id}' → {file_path}{version_text}"
+                        f"{route_summary(br.result)}"
+                    )
                 for br in failures_acc:
                     details.append(f"  ✗ {spec.label_zh} '{br.resource_id}': {br.error}")
                 total_success += len(successes_acc)

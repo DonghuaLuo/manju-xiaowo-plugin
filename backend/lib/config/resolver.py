@@ -100,6 +100,53 @@ def _parse_project_provider(raw: object, media_type: str) -> tuple[str, str] | N
     return None
 
 
+def _seedance_model_family(model_id: str) -> str:
+    model = model_id.lower()
+    if "seedance-2" in model or "seedance2" in model or "seedance-2.0" in model:
+        return "seedance_2"
+    if "seedance-1-0" in model or "seedance-1.0" in model:
+        return "seedance_1_0"
+    return "seedance_1_5"
+
+
+def _custom_video_capability_strings(endpoint: str, model_id: str) -> list[str]:
+    """Best-effort capability flags for custom video endpoints.
+
+    Custom endpoints are usually provider-compatible relays. Keep this conservative:
+    expose only flags the delegate backend is known to pass through.
+    """
+
+    capabilities = {"text_to_video", "image_to_video"}
+    if endpoint == "ark-seedance":
+        family = _seedance_model_family(model_id)
+        capabilities.add("seed_control")
+        if family != "seedance_1_0":
+            capabilities.add("generate_audio")
+        if family != "seedance_2":
+            capabilities.add("flex_tier")
+    elif endpoint == "vidu-video":
+        capabilities.add("seed_control")
+        if "viduq3" in model_id.lower():
+            capabilities.add("generate_audio")
+    elif endpoint == "v2-video-generations":
+        capabilities.add("seed_control")
+    elif endpoint == "newapi-video":
+        capabilities.add("seed_control")
+    return sorted(capabilities)
+
+
+def _video_capability_fields(capabilities: list[str]) -> dict[str, object]:
+    capability_set = set(capabilities)
+    supports_service_tier = "flex_tier" in capability_set
+    return {
+        "capabilities": sorted(capability_set),
+        "supports_generate_audio": "generate_audio" in capability_set,
+        "supports_seed": "seed_control" in capability_set,
+        "supports_service_tier": supports_service_tier,
+        "service_tiers": ["default", "flex"] if supports_service_tier else ["default"],
+    }
+
+
 def _trusted_payload_provider(provider_id: object) -> str | None:
     """仅信任 registry/custom 中存在的 payload provider。"""
     if not isinstance(provider_id, str):
@@ -371,6 +418,9 @@ class ConfigResolver:
         payload: dict | None,
     ) -> ProviderModel:
         if payload:
+            pair = _split_pair(payload.get("video_backend"))
+            if pair is not None and _trusted_payload_provider(pair[0]) is not None:
+                return ProviderModel(*pair)
             provider_id = _trusted_payload_provider(payload.get("video_provider"))
             if provider_id is not None:
                 settings = payload.get("video_provider_settings")
@@ -425,6 +475,11 @@ class ConfigResolver:
                     f"endpoint media_type mismatch: {provider_id}/{model_id} endpoint={model.endpoint!r} "
                     f"is {endpoint_spec.media_type}, not video"
                 )
+            endpoint_key = model.endpoint
+            endpoint_family = endpoint_spec.family
+            capabilities = _custom_video_capability_strings(model.endpoint, model_id)
+            resolutions = [model.resolution] if model.resolution else []
+            duration_resolution_constraints: dict[str, list[int]] = {}
             endpoint_cap = endpoint_spec.video_max_reference_images
             if endpoint_cap is not None:
                 max_reference_images = endpoint_cap
@@ -454,6 +509,8 @@ class ConfigResolver:
                     supported_durations = [int(d) for d in parsed]
         else:
             source = "registry"
+            endpoint_key = None
+            endpoint_family = provider_id
             provider_meta = PROVIDER_REGISTRY.get(provider_id)
             if provider_meta is None:
                 raise ValueError(f"provider not in PROVIDER_REGISTRY: {provider_id}")
@@ -462,6 +519,11 @@ class ConfigResolver:
                 raise ValueError(f"model not found in registry: {provider_id}/{model_id}")
             supported_durations = list(model_info.supported_durations or [])
             max_reference_images = model_info.max_reference_images
+            capabilities = list(model_info.capabilities or [])
+            resolutions = list(model_info.resolutions or [])
+            duration_resolution_constraints = {
+                key: list(value) for key, value in (model_info.duration_resolution_constraints or {}).items()
+            }
 
         if not supported_durations:
             raise ValueError(f"supported_durations is empty for {provider_id}/{model_id}; cannot derive capabilities")
@@ -490,6 +552,11 @@ class ConfigResolver:
             "supported_durations": supported_durations,
             "max_duration": max_duration,
             "max_reference_images": max_reference_images,
+            "resolutions": resolutions,
+            "duration_resolution_constraints": duration_resolution_constraints,
+            **_video_capability_fields(capabilities),
+            "endpoint": endpoint_key,
+            "endpoint_family": endpoint_family,
             "source": source,
             "default_duration": default_duration,
             "content_mode": content_mode,

@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ from lib.i18n import Translator
 from lib.project_manager import EpisodeScriptReboundError, ProjectManager, effective_mode
 from lib.reference_video import assemble_shots_text, parse_prompt
 from server.auth import CurrentUser
+from server.services.generation_route_resolver import compact_generation_payload
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,19 @@ class AddUnitRequest(BaseModel):
     duration_seconds: int | None = None
     transition_to_next: str = Field(default="cut", pattern=r"^(cut|fade|dissolve)$")
     note: str | None = None
+
+
+class GenerateUnitRequest(BaseModel):
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    video_backend: str | None = None
+    video_provider: str | None = None
+    video_model: str | None = None
+    duration_seconds: int | None = None
+    generate_audio: bool | None = None
+    service_tier: str | None = None
+    seed: int | None = None
 
 
 # ============ 辅助 ============
@@ -326,6 +340,7 @@ async def generate_unit(
     unit_id: str,
     _user: CurrentUser,
     _t: Translator,
+    req: GenerateUnitRequest | None = None,
 ) -> dict[str, Any]:
     _project, script, script_file = _load_episode_script(project_name, episode, _t)
     unit = _find_unit(script, unit_id, _t)  # raises 404 if missing
@@ -339,6 +354,7 @@ async def generate_unit(
             resource_id=unit_id,
             prompt=assemble_shots_text(unit.get("shots") or []),
             script_file=script_file,
+            extra_payload=compact_generation_payload((req or GenerateUnitRequest()).model_dump()),
         )
     except TaskSpecValidationError as exc:
         raise HTTPException(status_code=400, detail=_t(exc.code, **exc.params)) from exc

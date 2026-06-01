@@ -9,7 +9,7 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ from lib.storyboard_sequence import (
     resolve_previous_storyboard_path,
 )
 from server.auth import CurrentUser
+from server.services.generation_route_resolver import compact_generation_payload
 from server.services.generation_tasks import (
     _collect_reference_images,
     _normalize_storyboard_prompt,
@@ -191,25 +192,89 @@ def _external_video_text(prompt_text: str, references: list[dict[str, Any]]) -> 
 class GenerateStoryboardRequest(BaseModel):
     prompt: str | dict
     script_file: str
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    image_provider_t2i: str | None = None
+    image_provider_i2i: str | None = None
+    image_provider: str | None = None
+    image_model: str | None = None
 
 
 class GenerateVideoRequest(BaseModel):
     prompt: str | dict
     script_file: str
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    video_backend: str | None = None
+    video_provider: str | None = None
+    video_model: str | None = None
     duration_seconds: int | None = None  # 改为 None，由服务层解析
+    generate_audio: bool | None = None
+    service_tier: str | None = None
     seed: int | None = None
 
 
 class GenerateCharacterRequest(BaseModel):
     prompt: str
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    image_provider_t2i: str | None = None
+    image_provider_i2i: str | None = None
+    image_provider: str | None = None
+    image_model: str | None = None
 
 
 class GenerateSceneRequest(BaseModel):
     prompt: str
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    image_provider_t2i: str | None = None
+    image_provider_i2i: str | None = None
+    image_provider: str | None = None
+    image_model: str | None = None
 
 
 class GeneratePropRequest(BaseModel):
     prompt: str
+    quality: Literal["draft", "final", "custom"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    image_provider_t2i: str | None = None
+    image_provider_i2i: str | None = None
+    image_provider: str | None = None
+    image_model: str | None = None
+
+
+_IMAGE_GENERATION_FIELDS = (
+    "quality",
+    "resolution",
+    "source_version",
+    "image_provider_t2i",
+    "image_provider_i2i",
+    "image_provider",
+    "image_model",
+)
+
+_VIDEO_GENERATION_FIELDS = (
+    "quality",
+    "resolution",
+    "source_version",
+    "video_backend",
+    "video_provider",
+    "video_model",
+    "duration_seconds",
+    "generate_audio",
+    "service_tier",
+    "seed",
+)
+
+
+def _request_generation_payload(req: BaseModel, fields: tuple[str, ...]) -> dict[str, Any]:
+    return compact_generation_payload({field: getattr(req, field, None) for field in fields})
 
 
 # ==================== 外部生成辅助 ====================
@@ -367,6 +432,7 @@ async def generate_storyboard(
                 resource_id=segment_id,
                 prompt=req.prompt,
                 script_file=req.script_file,
+                extra_payload=_request_generation_payload(req, _IMAGE_GENERATION_FIELDS),
             )
         except TaskSpecValidationError as e:
             raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
@@ -460,7 +526,7 @@ async def generate_video(
                 resource_id=segment_id,
                 prompt=req.prompt,
                 script_file=req.script_file,
-                extra_payload={"duration_seconds": req.duration_seconds, "seed": req.seed},
+                extra_payload=_request_generation_payload(req, _VIDEO_GENERATION_FIELDS),
             )
         except TaskSpecValidationError as e:
             raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
@@ -510,6 +576,7 @@ async def _enqueue_asset_generation(
     project_name: str,
     resource_name: str,
     prompt: str,
+    extra_payload: dict[str, Any] | None = None,
     user_id: str,
     _t: Translator,
 ) -> dict:
@@ -530,6 +597,7 @@ async def _enqueue_asset_generation(
             media_type="image",
             resource_id=resource_name,
             prompt=prompt,
+            extra_payload=extra_payload,
         )
     except TaskSpecValidationError as e:
         raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
@@ -567,6 +635,7 @@ async def generate_character(
             project_name=project_name,
             resource_name=char_name,
             prompt=req.prompt,
+            extra_payload=_request_generation_payload(req, _IMAGE_GENERATION_FIELDS),
             user_id=_user.id,
             _t=_t,
         )
@@ -594,6 +663,7 @@ async def generate_scene(
             project_name=project_name,
             resource_name=scene_name,
             prompt=req.prompt,
+            extra_payload=_request_generation_payload(req, _IMAGE_GENERATION_FIELDS),
             user_id=_user.id,
             _t=_t,
         )
@@ -621,6 +691,7 @@ async def generate_prop(
             project_name=project_name,
             resource_name=prop_name,
             prompt=req.prompt,
+            extra_payload=_request_generation_payload(req, _IMAGE_GENERATION_FIELDS),
             user_id=_user.id,
             _t=_t,
         )

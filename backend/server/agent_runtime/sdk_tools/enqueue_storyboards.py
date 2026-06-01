@@ -22,6 +22,11 @@ from lib.storyboard_sequence import (
     get_storyboard_items,
 )
 from server.agent_runtime.sdk_tools._context import ToolContext, tool_error, validate_script_filename
+from server.agent_runtime.sdk_tools._generation_quality import (
+    QUALITY_SCHEMA,
+    normalize_quality,
+    route_summary,
+)
 
 
 class _FailureRecorder:
@@ -98,6 +103,7 @@ def _build_specs(
     style_description: str,
     id_field: str,
     script_filename: str,
+    quality: str = "draft",
 ) -> list[TaskSpec]:
     specs: list[TaskSpec] = []
     for plan in plans:
@@ -110,6 +116,7 @@ def _build_specs(
                 resource_id=plan.resource_id,
                 prompt=prompt,
                 script_file=script_filename,
+                extra_payload={"quality": quality},
                 dependency_resource_id=plan.dependency_resource_id,
                 dependency_group=plan.dependency_group,
                 dependency_index=plan.dependency_index,
@@ -135,6 +142,10 @@ def generate_storyboards_tool(ctx: ToolContext):
                     "items": {"type": "string"},
                     "description": "片段或场景 ID 列表；不传则扫描所有缺分镜图的项",
                 },
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 draft（分镜草稿）",
+                },
             },
             "required": ["script"],
         },
@@ -143,6 +154,7 @@ def generate_storyboards_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             segment_ids = args.get("segment_ids")
+            quality = normalize_quality(args, "draft")
 
             script = ctx.pm.load_script(ctx.project_name, script_filename)
             project_dir = ctx.project_path
@@ -188,6 +200,7 @@ def generate_storyboards_tool(ctx: ToolContext):
                 style_description,
                 id_field,
                 script_filename,
+                quality,
             )
 
             recorder = _FailureRecorder(project_dir / "storyboards")
@@ -210,7 +223,7 @@ def generate_storyboards_tool(ctx: ToolContext):
                     continue
                 result = br.result or {}
                 rel = result.get("file_path") or f"storyboards/scene_{plan.resource_id}.png"
-                details.append(f"  ✓ {plan.resource_id} → {rel}")
+                details.append(f"  ✓ {plan.resource_id} → {rel}{route_summary(result)}")
             for f in failures:
                 details.append(f"  ✗ {f.resource_id}: {f.error}")
 

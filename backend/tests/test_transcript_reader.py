@@ -12,7 +12,7 @@ class TestTranscriptReader:
         project_root.mkdir()
 
         # Create mock SDK transcript location
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 
@@ -88,7 +88,7 @@ class TestTranscriptReader:
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 
@@ -175,7 +175,7 @@ class TestTranscriptReader:
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 
@@ -236,7 +236,7 @@ class TestTranscriptReader:
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 
@@ -342,7 +342,7 @@ class TestTranscriptReader:
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 
@@ -411,7 +411,7 @@ class TestTranscriptReader:
         project_root.mkdir()
 
         # Create mock SDK transcript
-        encoded_path = str(project_root).replace("/", "-")
+        encoded_path = TranscriptReader._encode_project_path(project_root)
         claude_dir = tmp_path / ".claude" / "projects" / encoded_path
         claude_dir.mkdir(parents=True)
 

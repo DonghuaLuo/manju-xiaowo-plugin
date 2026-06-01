@@ -217,6 +217,34 @@ def test_generate_unit_enqueues_task(client: TestClient, monkeypatch: pytest.Mon
     # 经统一守卫点构造：shots[*].text 拼接出的 prompt 随 payload 入队（见 ADR-0001）。
     # parse_prompt 已剥离 `Shot N (Xs):` header，存盘的 shot text 仅余正文。
     assert enqueued[0]["payload"]["prompt"] == "@张三 推门"
+    assert "quality" not in enqueued[0]["payload"]
+
+
+def test_generate_unit_passes_generation_options(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    uid = _seed_unit(client)
+
+    enqueued: list[dict] = []
+
+    class _FakeQueue:
+        async def enqueue_task(self, **kwargs):
+            enqueued.append(kwargs)
+            return {"task_id": "task-xyz", "deduped": False}
+
+    from server.routers import reference_videos as router_mod
+
+    monkeypatch.setattr(router_mod, "get_generation_queue", lambda: _FakeQueue())
+
+    resp = client.post(
+        f"/api/v1/projects/demo/reference-videos/episodes/1/units/{uid}/generate",
+        json={"quality": "final", "resolution": "1080p", "duration_seconds": 8, "generate_audio": True},
+    )
+
+    assert resp.status_code == 202, resp.text
+    payload = enqueued[0]["payload"]
+    assert payload["quality"] == "final"
+    assert payload["resolution"] == "1080p"
+    assert payload["duration_seconds"] == 8
+    assert payload["generate_audio"] is True
 
 
 def test_generate_unit_rejects_blank_prompt(client: TestClient, tmp_path: Path):

@@ -41,6 +41,8 @@ import type {
   ReferenceVideoUnit,
   ReferenceResource,
   TransitionType,
+  GenerationProfiles,
+  GenerationQuality,
 } from "@/types";
 import type { GenerationMode } from "@/utils/generation-mode";
 import type { StyleCategory } from "@/data/style-templates";
@@ -104,6 +106,26 @@ export interface VersionInfo {
   file_url?: string;
   prompt?: string;
   restored_from?: number;
+  generation_quality?: GenerationQuality | null;
+  generation_profile_key?: string | null;
+  generation_route?: {
+    task_kind?: string;
+    media_type?: string;
+    provider?: string;
+    model?: string;
+    resolution?: string;
+    duration_seconds?: number;
+    generate_audio?: boolean;
+    service_tier?: string;
+    seed?: number;
+    supported_resolutions?: string[];
+    supported_durations?: number[];
+    duration_resolution_constraints?: Record<string, number[]>;
+    warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+  };
+  generation_route_warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+  source_storyboard_generation_quality?: string;
+  source_version?: number | string | null;
 }
 
 export type VersionResourceType = "storyboards" | "videos" | "characters" | "scenes" | "props";
@@ -241,6 +263,23 @@ export interface CreateProjectPayload {
   text_backend_overview?: string | null;
   text_backend_style?: string | null;
   model_settings?: Record<string, { resolution?: string | null }>;
+  generation_profiles?: GenerationProfiles;
+}
+
+export interface GenerationRequestOptions {
+  quality?: GenerationQuality;
+  resolution?: string | null;
+  source_version?: number | null;
+  duration_seconds?: number | null;
+  generate_audio?: boolean | null;
+  service_tier?: string | null;
+  seed?: number | null;
+}
+
+function compactGenerationOptions(options: GenerationRequestOptions = {}): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined && value !== null),
+  );
 }
 
 export interface StyleTemplateInfo {
@@ -869,7 +908,16 @@ class API {
     model: string;
     supported_durations: number[];
     max_duration: number;
-    max_reference_images: number;
+    max_reference_images: number | null;
+    resolutions?: string[];
+    duration_resolution_constraints?: Record<string, number[]>;
+    capabilities?: string[];
+    supports_generate_audio?: boolean;
+    supports_seed?: boolean;
+    supports_service_tier?: boolean;
+    service_tiers?: string[];
+    endpoint?: string | null;
+    endpoint_family?: string | null;
     source: "registry" | "custom";
     default_duration?: number | null;
     content_mode?: string | null;
@@ -1024,7 +1072,7 @@ class API {
         auto_fixed: normalizeDiagnosticsBucket(payload?.diagnostics?.auto_fixed),
         warnings: normalizeDiagnosticsBucket(payload?.diagnostics?.warnings),
       },
-    } as ImportArchiveResponse;
+    };
   }
 
   // ==================== 角色管理 ====================
@@ -1493,13 +1541,14 @@ class API {
     projectName: string,
     segmentId: string,
     prompt: string | Record<string, unknown>,
-    scriptFile: string
+    scriptFile: string,
+    options: GenerationRequestOptions = {},
   ): Promise<{ success: boolean; task_id: string; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/storyboard/${encodeURIComponent(segmentId)}`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt, script_file: scriptFile }),
+        body: JSON.stringify({ prompt, script_file: scriptFile, ...compactGenerationOptions(options) }),
       }
     );
   }
@@ -1517,7 +1566,8 @@ class API {
     segmentId: string,
     prompt: string | Record<string, unknown>,
     scriptFile: string,
-    durationSeconds: number = 4
+    durationSeconds?: number | null,
+    options: GenerationRequestOptions = {},
   ): Promise<{ success: boolean; task_id: string; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/video/${encodeURIComponent(segmentId)}`,
@@ -1526,7 +1576,10 @@ class API {
         body: JSON.stringify({
           prompt,
           script_file: scriptFile,
-          duration_seconds: durationSeconds,
+          ...compactGenerationOptions({
+            ...options,
+            duration_seconds: durationSeconds ?? options.duration_seconds,
+          }),
         }),
       }
     );
@@ -1541,7 +1594,8 @@ class API {
   static async generateCharacter(
     projectName: string,
     charName: string,
-    prompt: string
+    prompt: string,
+    options: GenerationRequestOptions = {},
   ): Promise<{
     success: boolean;
     task_id: string;
@@ -1551,7 +1605,7 @@ class API {
       `/projects/${encodeURIComponent(projectName)}/generate/character/${encodeURIComponent(charName)}`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
       }
     );
   }
@@ -1565,7 +1619,8 @@ class API {
   static async generateProjectScene(
     projectName: string,
     sceneName: string,
-    prompt: string
+    prompt: string,
+    options: GenerationRequestOptions = {},
   ): Promise<{
     success: boolean;
     task_id: string;
@@ -1575,7 +1630,7 @@ class API {
       `/projects/${encodeURIComponent(projectName)}/generate/scene/${encodeURIComponent(sceneName)}`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
       }
     );
   }
@@ -1589,7 +1644,8 @@ class API {
   static async generateProjectProp(
     projectName: string,
     propName: string,
-    prompt: string
+    prompt: string,
+    options: GenerationRequestOptions = {},
   ): Promise<{
     success: boolean;
     task_id: string;
@@ -1599,7 +1655,7 @@ class API {
       `/projects/${encodeURIComponent(projectName)}/generate/prop/${encodeURIComponent(propName)}`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
       }
     );
   }
@@ -2362,7 +2418,10 @@ class API {
   ): Promise<{ success: boolean; grid_ids: string[]; task_ids: string[]; message: string }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/generate/grid/${episode}`,
-      { method: "POST", body: JSON.stringify({ script_file: scriptFile, scene_ids: sceneIds }) }
+      {
+        method: "POST",
+        body: JSON.stringify({ script_file: scriptFile, scene_ids: sceneIds, quality: "final" }),
+      }
     );
   }
 
@@ -2589,10 +2648,11 @@ class API {
     projectName: string,
     episode: number,
     unitId: string,
+    options: GenerationRequestOptions = {},
   ): Promise<{ task_id: string; deduped: boolean }> {
     return this.request(
       `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}/generate`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(compactGenerationOptions(options)) },
     );
   }
 }

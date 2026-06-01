@@ -652,6 +652,7 @@ async def test_execute_reference_video_task_payload_too_large_retries(tmp_path: 
     call_count = {"n": 0}
 
     async def _fake_generate_video_async(**kwargs):
+        call_count.setdefault("calls", []).append(kwargs)
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RequestPayloadTooLargeError()
@@ -685,7 +686,99 @@ async def test_execute_reference_video_task_payload_too_large_retries(tmp_path: 
         user_id="u1",
     )
     assert call_count["n"] == 2
+    first_call, second_call = call_count["calls"]
+    assert first_call["reference_images"][0].name == "张三.png"
+    assert first_call["reference_images"][1].name == "酒馆.png"
+    assert "provider_input_max_long_edge" not in first_call
+    assert second_call["reference_images"][0].name == "张三.png"
+    assert second_call["provider_input_max_long_edge"] == 1024
+    assert second_call["provider_input_jpeg_quality"] == 70
     assert result["resource_id"] == "E1U1"
+
+
+@pytest.mark.asyncio
+async def test_reference_video_final_metadata_uses_actual_unit_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proj_dir = _write_project(tmp_path)
+    project_path = proj_dir / "project.json"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    from server.services.generation_route_resolver import default_generation_profiles
+
+    project["generation_profiles"] = default_generation_profiles()
+    project["default_duration"] = 6
+    project_path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+    script_path = proj_dir / "scripts" / "episode_1.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    script["video_units"][0]["shots"] = [{"duration": 8, "text": "Shot 1 (8s): @张三 推门"}]
+    script["video_units"][0]["duration_seconds"] = 8
+    script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
+
+    from server.services import reference_video_tasks as rvt
+
+    fake_pm = MagicMock()
+    fake_pm.load_project.side_effect = lambda *_a: json.loads(project_path.read_text(encoding="utf-8"))
+    fake_pm.get_project_path.return_value = proj_dir
+    fake_pm.load_script.side_effect = lambda *_a: json.loads(script_path.read_text(encoding="utf-8"))
+    monkeypatch.setattr(rvt, "get_project_manager", lambda: fake_pm)
+
+    captured: dict = {}
+
+    async def _fake_generate_video_async(**kwargs):
+        captured.update(kwargs)
+        out = proj_dir / "reference_videos" / "E1U1.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x00")
+        return out, 1, None, None
+
+    fake_generator = MagicMock()
+    fake_generator.generate_video_async = AsyncMock(side_effect=_fake_generate_video_async)
+    fake_generator.versions.get_versions.return_value = {"versions": [{"created_at": "2026-04-17T10:00:00"}]}
+    fake_video_backend = MagicMock()
+    fake_video_backend.name = "gemini"
+    fake_video_backend.model = "veo-3.1-lite-generate-preview"
+    fake_generator._video_backend = fake_video_backend
+
+    async def _fake_get_media_generator(*_a, **_kw):
+        return fake_generator
+
+    monkeypatch.setattr(rvt, "get_media_generator", _fake_get_media_generator)
+
+    async def _fake_extract(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(rvt, "extract_video_thumbnail", _fake_extract)
+
+    from lib.config.resolver import ConfigResolver, ProviderModel
+
+    async def _fake_resolve_video_backend(self, project, payload):
+        return ProviderModel("gemini-aistudio", "veo-3.1-lite-generate-preview")
+
+    async def _fake_caps_for_model(self, provider_id, model_id, project):
+        return {
+            "provider_id": provider_id,
+            "model": model_id,
+            "supported_durations": [4, 6, 8],
+            "max_duration": 8,
+            "max_reference_images": 3,
+            "duration_resolution_constraints": {},
+        }
+
+    monkeypatch.setattr(ConfigResolver, "resolve_video_backend", _fake_resolve_video_backend)
+    monkeypatch.setattr(ConfigResolver, "video_capabilities_for_model", _fake_caps_for_model)
+
+    result = await rvt.execute_reference_video_task(
+        "demo",
+        "E1U1",
+        {"script_file": "scripts/episode_1.json", "quality": "final"},
+        user_id="u1",
+    )
+
+    assert captured["duration_seconds"] == 8
+    assert result["generation_route"]["duration_seconds"] == 8
+    assert result["generation_route"]["supported_durations"] == [4, 6, 8]
 
 
 @pytest.mark.asyncio
@@ -800,7 +893,8 @@ async def test_execute_reference_video_task_prompt_matches_clipped_refs(
 
     script_path = proj_dir / "scripts" / "episode_1.json"
     script = json.loads(script_path.read_text(encoding="utf-8"))
-    script["video_units"][0]["shots"] = [{"duration": 3, "text": "Shot 1 (3s): @张三 在 @酒馆 拿起 @瓶子"}]
+    script["video_units"][0]["shots"] = [{"duration": 4, "text": "Shot 1 (4s): @张三 在 @酒馆 拿起 @瓶子"}]
+    script["video_units"][0]["duration_seconds"] = 4
     script["video_units"][0]["references"] = [
         {"type": "character", "name": "张三"},
         {"type": "scene", "name": "酒馆"},
@@ -896,15 +990,18 @@ async def test_gemini_model_settings_read_via_composite_key(
     project["video_backend"] = "gemini-aistudio/veo-3.1-generate-preview"
     project["model_settings"] = {"gemini-aistudio/veo-3.1-generate-preview": {"resolution": "720p"}}
     project_path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+    script_path = proj_dir / "scripts" / "episode_1.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    script["video_units"][0]["shots"] = [{"duration": 4, "text": "Shot 1 (4s): @张三 推门"}]
+    script["video_units"][0]["duration_seconds"] = 4
+    script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
 
     from server.services import reference_video_tasks as rvt
 
     fake_pm = MagicMock()
     fake_pm.load_project.return_value = json.loads(project_path.read_text(encoding="utf-8"))
     fake_pm.get_project_path.return_value = proj_dir
-    fake_pm.load_script.side_effect = lambda *_a: json.loads(
-        (proj_dir / "scripts" / "episode_1.json").read_text(encoding="utf-8")
-    )
+    fake_pm.load_script.side_effect = lambda *_a: json.loads(script_path.read_text(encoding="utf-8"))
     monkeypatch.setattr(rvt, "get_project_manager", lambda: fake_pm)
 
     captured: dict = {}

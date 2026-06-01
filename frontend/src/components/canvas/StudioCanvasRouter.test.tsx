@@ -292,6 +292,7 @@ describe("StudioCanvasRouter", () => {
         "demo",
         "Hero",
         "hero description",
+        { quality: "final" },
       );
       expect(useAppStore.getState().toast?.text).toContain("生成任务已提交");
       expect(useAppStore.getState().toast?.tone).toBe("success");
@@ -329,7 +330,12 @@ describe("StudioCanvasRouter", () => {
 
     fireEvent.click(screen.getByText("generate-scene"));
     await waitFor(() => {
-      expect(API.generateProjectScene).toHaveBeenCalledWith("demo", "Temple", "ancient temple");
+      expect(API.generateProjectScene).toHaveBeenCalledWith(
+        "demo",
+        "Temple",
+        "ancient temple",
+        { quality: "final" },
+      );
       expect(useAppStore.getState().toast?.text).toContain("提交失败");
     });
   });
@@ -361,7 +367,12 @@ describe("StudioCanvasRouter", () => {
 
     fireEvent.click(screen.getByText("generate-prop"));
     await waitFor(() => {
-      expect(API.generateProjectProp).toHaveBeenCalledWith("demo", "Sword", "rusty sword");
+      expect(API.generateProjectProp).toHaveBeenCalledWith(
+        "demo",
+        "Sword",
+        "rusty sword",
+        { quality: "final" },
+      );
       expect(useAppStore.getState().toast?.text).toContain("提交失败");
     });
   });
@@ -398,6 +409,7 @@ describe("StudioCanvasRouter", () => {
         "SEG-1",
         "image prompt",
         "episode_1.json",
+        { quality: "draft" },
       );
       expect(useAppStore.getState().toast?.text).toContain("生成分镜失败");
     });
@@ -410,8 +422,45 @@ describe("StudioCanvasRouter", () => {
         "video prompt",
         "episode_1.json",
         4,
+        { quality: "draft" },
       );
       expect(useAppStore.getState().toast?.text).toContain("生成视频失败");
+    });
+  });
+
+  it("does not send a fixed fallback duration when segment duration is missing", async () => {
+    const script = makeScript();
+    if ("segments" in script) {
+      delete (script.segments[0] as Partial<(typeof script.segments)[number]>).duration_seconds;
+    }
+    useProjectsStore.setState({
+      currentProjectName: "demo",
+      currentProjectData: makeProjectData(),
+      currentScripts: { "episode_1.json": script },
+    });
+
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: makeProjectData(),
+      scripts: { "episode_1.json": script },
+    });
+    vi.spyOn(API, "generateVideo").mockResolvedValue({
+      success: true,
+      task_id: "video-task",
+      message: "已提交",
+    });
+
+    renderAt("/episodes/1");
+
+    fireEvent.click(screen.getByText("generate-video"));
+    await waitFor(() => {
+      expect(API.generateVideo).toHaveBeenCalledWith(
+        "demo",
+        "SEG-1",
+        "video prompt",
+        "episode_1.json",
+        undefined,
+        { quality: "draft" },
+      );
     });
   });
 
@@ -432,7 +481,12 @@ describe("StudioCanvasRouter", () => {
 
     fireEvent.click(screen.getByText("generate-character"));
     await waitFor(() => {
-      expect(API.generateCharacter).toHaveBeenCalledWith("demo", "Hero", "hero description");
+      expect(API.generateCharacter).toHaveBeenCalledWith(
+        "demo",
+        "Hero",
+        "hero description",
+        { quality: "final" },
+      );
       expect(useAppStore.getState().toast?.text).toContain("提交失败");
       expect(useAppStore.getState().toast?.tone).toBe("error");
     });

@@ -595,7 +595,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "grok-imagine-video": ModelInfo(
                 display_name="Grok Imagine Video",
                 media_type="video",
-                capabilities=["text_to_video", "image_to_video", "generate_audio"],
+                capabilities=["text_to_video", "image_to_video"],
                 default=True,
                 supported_durations=list(range(1, 16)),
                 resolutions=["480p", "720p"],

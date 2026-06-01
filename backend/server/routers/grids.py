@@ -61,6 +61,7 @@ def _build_grid_task_payload(
         "cols": cols,
         "grid_aspect_ratio": grid_aspect_ratio,
         "video_aspect_ratio": video_aspect_ratio,
+        "quality": "final",
     }
 
 

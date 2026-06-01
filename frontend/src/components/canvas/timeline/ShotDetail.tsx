@@ -18,6 +18,7 @@ import type {
   ImagePrompt,
   VideoPrompt,
   Dialogue,
+  GenerationQuality,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
 import { ImagePromptEditor } from "./ImagePromptEditor";
@@ -62,8 +63,8 @@ interface ShotDetailProps {
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => void | Promise<void>;
-  onGenerateStoryboard?: (segmentId: string) => void;
-  onGenerateVideo?: (segmentId: string) => void;
+  onGenerateStoryboard?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
   generatingStoryboard?: boolean;
@@ -780,7 +781,7 @@ export function ShotDetail({
         hideGenerateButton={isGridMode}
         generating={generatingStoryboard}
         estimatedCost={sbEstimate ?? undefined}
-        onGenerate={() => onGenerateStoryboard?.(segmentId)}
+        onGenerate={(quality) => onGenerateStoryboard?.(segmentId, quality)}
         onRestore={onRestoreStoryboard}
         onUploaded={onRestoreStoryboard}
         generateDisabled={dirty || saving}
@@ -799,7 +800,7 @@ export function ShotDetail({
         generateDisabled={!hasStoryboard || dirty || saving}
         generateDisabledHint={dirty ? dirtyHint : undefined}
         estimatedCost={vidEstimate ?? undefined}
-        onGenerate={() => onGenerateVideo?.(segmentId)}
+        onGenerate={(quality) => onGenerateVideo?.(segmentId, quality)}
         onRestore={onRestoreVideo}
         onUploaded={onRestoreVideo}
         uploadDisabled={dirty || saving}

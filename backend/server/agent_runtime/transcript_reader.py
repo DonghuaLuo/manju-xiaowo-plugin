@@ -45,6 +45,11 @@ class TranscriptReader:
             return self.project_root / "projects" / project_name
         return self.project_root
 
+    @staticmethod
+    def _encode_project_path(project_root: Path) -> str:
+        """Encode a project root path the same way Claude SDK stores transcripts."""
+        return str(project_root).replace("\\", "-").replace("/", "-").replace(":", "-").replace(".", "-")
+
     def _get_sdk_transcript_path(
         self,
         sdk_session_id: str,
@@ -54,7 +59,7 @@ class TranscriptReader:
         session_project_root = self._resolve_project_root(project_name)
         if not session_project_root:
             return None
-        encoded_path = str(session_project_root).replace("/", "-").replace(".", "-")
+        encoded_path = self._encode_project_path(session_project_root)
         project_dir = self._claude_projects_dir / encoded_path
         transcript_path = project_dir / f"{sdk_session_id}.jsonl"
         return transcript_path if transcript_path.exists() else None

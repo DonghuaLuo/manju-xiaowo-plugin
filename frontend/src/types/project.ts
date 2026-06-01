@@ -102,6 +102,33 @@ export interface ModelSettingEntry {
   resolution?: string | null;
 }
 
+export type GenerationQuality = "draft" | "final" | "custom";
+
+export interface ImageGenerationProfile {
+  image_provider_t2i?: string | null;
+  image_provider_i2i?: string | null;
+  resolution?: string | null;
+}
+
+export interface VideoGenerationProfile {
+  video_backend?: string | null;
+  resolution?: string | null;
+  duration_seconds?: number | null;
+  generate_audio?: boolean | null;
+  service_tier?: string | null;
+}
+
+export interface GenerationProfiles {
+  asset?: ImageGenerationProfile;
+  storyboard_draft?: ImageGenerationProfile;
+  storyboard_final?: ImageGenerationProfile;
+  grid?: ImageGenerationProfile;
+  video_draft?: VideoGenerationProfile;
+  video_final?: VideoGenerationProfile;
+  reference_video_draft?: VideoGenerationProfile;
+  reference_video_final?: VideoGenerationProfile;
+}
+
 export interface ProjectData {
   title: string;
   content_mode: "narration" | "drama";
@@ -132,6 +159,7 @@ export interface ProjectData {
   text_backend_overview?: string | null;
   text_backend_style?: string | null;
   model_settings?: Record<string, ModelSettingEntry>;
+  generation_profiles?: GenerationProfiles;
   /** Legacy field: keyed by model_id only (before composite key refactor). Read-only at UI layer. */
   video_model_settings?: Record<string, { resolution?: string | null }>;
   metadata?: {

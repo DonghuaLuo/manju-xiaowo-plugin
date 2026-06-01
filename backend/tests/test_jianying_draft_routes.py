@@ -32,7 +32,8 @@ def _setup_project(pm: ProjectManager):
                 "episodes": [{"episode": 1, "title": "第一集", "script_file": "scripts/episode_1.json"}],
             },
             ensure_ascii=False,
-        )
+        ),
+        encoding="utf-8",
     )
 
     (scripts_dir / "episode_1.json").write_text(
@@ -49,7 +50,8 @@ def _setup_project(pm: ProjectManager):
                 ],
             },
             ensure_ascii=False,
-        )
+        ),
+        encoding="utf-8",
     )
 
 
@@ -121,7 +123,8 @@ class TestJianyingDraftExport:
                     "episodes": [{"episode": 1, "title": "E1", "script_file": "scripts/episode_1.json"}],
                 },
                 ensure_ascii=False,
-            )
+            ),
+            encoding="utf-8",
         )
         scripts_dir = project_dir / "scripts"
         scripts_dir.mkdir()
@@ -139,7 +142,8 @@ class TestJianyingDraftExport:
                     ],
                 },
                 ensure_ascii=False,
-            )
+            ),
+            encoding="utf-8",
         )
 
         client = _client(monkeypatch, pm)

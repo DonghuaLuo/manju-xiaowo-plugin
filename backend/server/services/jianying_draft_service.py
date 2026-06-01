@@ -81,18 +81,62 @@ class JianyingDraftService:
             if not abs_path.exists():
                 continue
 
-            clips.append(
-                {
-                    "id": item.get(id_field, ""),
-                    "duration_seconds": item.get("duration_seconds", 8),
-                    "video_clip": video_clip,
-                    "abs_path": abs_path,
-                    "novel_text": item.get("novel_text", ""),
-                    "transition_to_next": item.get("transition_to_next", "cut"),
-                }
-            )
+            item_id = item.get(id_field, "")
+            version_metadata = self._get_current_version_metadata(project_dir, "videos", str(item_id))
+            clip = {
+                "id": item_id,
+                "duration_seconds": item.get("duration_seconds", 8),
+                "video_clip": video_clip,
+                "abs_path": abs_path,
+                "novel_text": item.get("novel_text", ""),
+                "transition_to_next": item.get("transition_to_next", "cut"),
+            }
+            if version_metadata:
+                clip["version_metadata"] = version_metadata
+                generation_quality = version_metadata.get("generation_quality")
+                if generation_quality:
+                    clip["generation_quality"] = generation_quality
+            clips.append(clip)
 
         return clips
+
+    @staticmethod
+    def _get_current_version_metadata(project_dir: Path, resource_type: str, resource_id: str) -> dict[str, Any]:
+        versions_path = project_dir / "versions" / "versions.json"
+        if not versions_path.is_file():
+            return {}
+        try:
+            payload = json.loads(versions_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("读取版本元数据失败，跳过最终化检查: %s", versions_path, exc_info=True)
+            return {}
+
+        resource_info = payload.get(resource_type, {}).get(resource_id)
+        if not isinstance(resource_info, dict):
+            return {}
+        versions = resource_info.get("versions")
+        if not isinstance(versions, list):
+            return {}
+
+        current_version = resource_info.get("current_version")
+        for item in versions:
+            if isinstance(item, dict) and item.get("version") == current_version:
+                return item
+        for item in reversed(versions):
+            if isinstance(item, dict):
+                return item
+        return {}
+
+    @staticmethod
+    def _assert_no_draft_video_clips(clips: list[dict[str, Any]], episode: int) -> None:
+        draft_ids = [str(clip.get("id") or "") for clip in clips if clip.get("generation_quality") == "draft"]
+        draft_ids = [item_id for item_id in draft_ids if item_id]
+        if not draft_ids:
+            return
+        shown = "、".join(draft_ids[:12])
+        if len(draft_ids) > 12:
+            shown = f"{shown} 等 {len(draft_ids)} 个"
+        raise ValueError(f"第 {episode} 集包含草稿视频片段：{shown}。请先生成最终版视频后再导出剪映草稿。")
 
     def _resolve_canvas_size(self, project: dict, first_video_path: Path | None = None) -> tuple[int, int]:
         """根据项目 aspect_ratio 确定画布尺寸，缺失时从首个视频自动检测"""
@@ -272,6 +316,7 @@ class JianyingDraftService:
         clips = self._collect_video_clips(script_data, project_dir)
         if not clips:
             raise ValueError(f"第 {episode} 集没有已完成的视频片段，请先生成视频")
+        self._assert_no_draft_video_clips(clips, episode)
 
         # 3. 画布尺寸（项目未设 aspect_ratio 时从首个视频自动检测）
         width, height = self._resolve_canvas_size(project, clips[0]["abs_path"])

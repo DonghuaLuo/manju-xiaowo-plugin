@@ -44,6 +44,14 @@ from lib.storyboard_sequence import (
 )
 from lib.thumbnail import extract_video_thumbnail
 from lib.video_backends.base import VideoCapabilityError
+from server.services.generation_route_resolver import (
+    GenerationRoute,
+    coerce_video_duration_for_options,
+    coerce_video_resolution_for_options,
+    duration_options_for_resolution,
+    resolve_generation_route,
+    should_resolve_generation_route,
+)
 from server.services.resolution_resolver import resolve_resolution
 
 pm = ProjectManager(app_data_dir())
@@ -92,6 +100,35 @@ async def _resolve_effective_image_backend(
     resolver = ConfigResolver(async_session_factory)
     capability = "i2i" if needs_i2i else "t2i"
     return await resolver.resolve_image_backend(project, payload, capability=capability)
+
+
+async def _maybe_resolve_generation_route(
+    *,
+    project_name: str,
+    project: dict,
+    payload: dict[str, Any],
+    task_kind: str,
+    needs_i2i: bool = False,
+) -> GenerationRoute | None:
+    """Resolve new draft/final route only when the project/request opts in."""
+
+    if not should_resolve_generation_route(project, payload):
+        return None
+
+    from lib.config.resolver import ConfigResolver
+    from lib.db import async_session_factory
+
+    resolver = ConfigResolver(async_session_factory)
+    capability = "i2i" if needs_i2i else "t2i"
+    return await resolve_generation_route(
+        project=project,
+        payload=payload,
+        task_kind=task_kind,
+        quality=payload.get("quality"),
+        capability=capability,
+        resolver=resolver,
+        project_name=project_name,
+    )
 
 
 async def _create_custom_backend(provider_name: str, model_id: str | None, media_type: str):
@@ -443,6 +480,10 @@ def _normalize_video_prompt(
         "ambiance_audio": str(prompt.get("ambiance_audio", "") or ""),
         "dialogue": normalized_dialogue,
     }
+    for key in ("subject_motion", "emotion", "environment_motion", "avoid"):
+        value = str(prompt.get(key, "") or "").strip()
+        if value:
+            normalized_prompt[key] = value
     speaker_profiles = build_speaker_profiles(
         project,
         target_item,
@@ -631,6 +672,29 @@ def assert_duration_supported(duration: int | float | str, supported_durations: 
             duration=seconds,
             supported=", ".join(str(d) for d in supported_durations),
         )
+
+
+def _current_version_info(versions: Any, resource_type: str, resource_id: str) -> dict[str, Any] | None:
+    try:
+        info = versions.get_versions(resource_type, resource_id)
+    except Exception:
+        logger.debug("读取 %s/%s 当前版本失败", resource_type, resource_id, exc_info=True)
+        return None
+    current = info.get("current_version")
+    for item in info.get("versions") or []:
+        if item.get("version") == current or item.get("is_current"):
+            return item
+    return None
+
+
+def _storyboard_source_quality(versions: Any, resource_id: str, assets: dict[str, Any] | None) -> str:
+    if isinstance(assets, dict) and assets.get("grid_id"):
+        return "grid"
+    current = _current_version_info(versions, "storyboards", resource_id)
+    if not current:
+        return "unknown"
+    quality = current.get("generation_quality")
+    return str(quality) if quality in {"draft", "final", "custom"} else "unknown"
 
 
 def _collect_sheet_paths(
@@ -898,17 +962,30 @@ async def execute_storyboard_task(
 
     project, project_path, prompt_text, reference_images = await asyncio.to_thread(_prepare)
     _needs_i2i = bool(reference_images)
+    route = await _maybe_resolve_generation_route(
+        project_name=project_name,
+        project=project,
+        payload=payload,
+        task_kind="storyboard",
+        needs_i2i=_needs_i2i,
+    )
+    effective_payload = route.effective_payload if route else payload
 
     generator = await get_media_generator(
         project_name,
-        payload=payload,
+        payload=effective_payload,
         user_id=user_id,
         needs_i2i=_needs_i2i,
     )
     aspect_ratio = get_aspect_ratio(project, "storyboards")
 
-    resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=_needs_i2i)
-    image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+    if route is not None:
+        image_size = route.resolution
+        version_metadata = dict(route.metadata)
+    else:
+        resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=_needs_i2i)
+        image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+        version_metadata = {}
 
     _, version = await generator.generate_image_async(
         prompt=prompt_text,
@@ -917,6 +994,7 @@ async def execute_storyboard_task(
         reference_images=reference_images,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
+        **version_metadata,
     )
 
     def _finalize():
@@ -937,6 +1015,7 @@ async def execute_storyboard_task(
         "created_at": created_at,
         "resource_type": "storyboards",
         "resource_id": resource_id,
+        **version_metadata,
     }
 
 
@@ -967,7 +1046,14 @@ async def execute_video_task(
         return _project, _project_path, _item, _char_field
 
     project, project_path, item, char_field = await asyncio.to_thread(_load)
-    generator = await get_media_generator(project_name, payload=payload, user_id=user_id)
+    route = await _maybe_resolve_generation_route(
+        project_name=project_name,
+        project=project,
+        payload=payload,
+        task_kind="video",
+    )
+    effective_payload = route.effective_payload if route else payload
+    generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id)
 
     # 优先读取 generated_assets.storyboard_image，回退默认路径。
     # 旧宫格项目 storyboard_image 指向 scene_{id}_first.png，仍可正常解析。
@@ -979,6 +1065,9 @@ async def execute_video_task(
         storyboard_file = project_path / "storyboards" / f"scene_{resource_id}.png"
     if not storyboard_file.exists():
         raise ValueError(f"storyboard not found: {storyboard_file.name}")
+    source_storyboard_quality = _storyboard_source_quality(generator.versions, resource_id, assets)
+    if route is not None and route.quality == "final" and source_storyboard_quality == "draft":
+        raise ValueError("请先生成最终版分镜，再生成最终版视频；当前首帧仍是草稿分镜。")
 
     prompt_policy = await _video_prompt_policy_from_generator(generator, project_name)
     prompt_text = _normalize_video_prompt(
@@ -989,51 +1078,86 @@ async def execute_video_task(
         policy=prompt_policy,
     )
     aspect_ratio = get_aspect_ratio(project, "videos")
-    seed = payload.get("seed")
-    service_tier = payload.get("video_provider_settings", {}).get("service_tier", "default")
+    seed = route.seed if route else payload.get("seed")
+    service_tier = route.service_tier if route else payload.get("video_provider_settings", {}).get("service_tier", "default")
 
-    # 解析 provider / model（薄投影），供 duration fallback 和分辨率查找共用。
-    # 与执行层 backend 构造同走 resolve_video_backend，确保限流/分辨率与实际调用对齐。
-    from lib.config.resolver import ConfigResolver
-    from lib.db import async_session_factory
+    if route is not None:
+        registry_provider_id = route.provider_id
+        model_name = route.model_id or None
+        supported_durations = route.supported_durations
+        resolution = route.resolution
+        duration_seconds = route.duration_seconds
+        version_metadata = dict(route.metadata)
+        if route.generate_audio is not None:
+            version_metadata["generate_audio"] = route.generate_audio
+    else:
+        # 解析 provider / model（薄投影），供 duration fallback 和分辨率查找共用。
+        # 与执行层 backend 构造同走 resolve_video_backend，确保限流/分辨率与实际调用对齐。
+        from lib.config.resolver import ConfigResolver
+        from lib.db import async_session_factory
 
-    _resolver = ConfigResolver(async_session_factory)
-    try:
-        resolved_video = await _resolver.resolve_video_backend(project, payload)
-        registry_provider_id = resolved_video.provider_id
-        model_name = resolved_video.model_id or None
-    except Exception:
-        registry_provider_id, model_name = "gemini-aistudio", "veo-3.1-lite-generate-preview"
+        _resolver = ConfigResolver(async_session_factory)
+        try:
+            resolved_video = await _resolver.resolve_video_backend(project, payload)
+            registry_provider_id = resolved_video.provider_id
+            model_name = resolved_video.model_id or None
+        except Exception:
+            registry_provider_id, model_name = "gemini-aistudio", "veo-3.1-lite-generate-preview"
 
-    # supported_durations 按上面已解析出的 provider/model 取（而非按 project 二次解析），
-    # 确保 duration 守卫所依据的能力与实际要调用的 model 一致——历史任务 payload 携带
-    # provider 覆盖时，二者不一致会用「项目默认 model 的能力」误判「payload 解析出的 model」。
-    # caps 失败不得丢弃已解析出的 provider/model，否则 resolve_resolution 与默认 duration
-    # 会错配。能力不可解析时留空，守卫遇空列表放行（不更坏，见 ADR-0002）。
-    supported_durations: list[int] = []
-    try:
-        caps = await _resolver.video_capabilities_for_model(registry_provider_id, model_name or "", project)
-        supported_durations = [int(d) for d in caps.get("supported_durations") or []]
-    except Exception:
-        supported_durations = []
+        # supported_durations 按上面已解析出的 provider/model 取（而非按 project 二次解析），
+        # 确保 duration 守卫所依据的能力与实际要调用的 model 一致——历史任务 payload 携带
+        # provider 覆盖时，二者不一致会用「项目默认 model 的能力」误判「payload 解析出的 model」。
+        # caps 失败不得丢弃已解析出的 provider/model，否则 resolve_resolution 与默认 duration
+        # 会错配。能力不可解析时留空，守卫遇空列表放行（不更坏，见 ADR-0002）。
+        supported_resolutions: list[str] = []
+        supported_durations: list[int] = []
+        duration_resolution_constraints: dict[str, list[int]] = {}
+        try:
+            caps = await _resolver.video_capabilities_for_model(registry_provider_id, model_name or "", project)
+            supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
+            supported_durations = [int(d) for d in caps.get("supported_durations") or []]
+            duration_resolution_constraints = {
+                str(key): [int(item) for item in value or []]
+                for key, value in (caps.get("duration_resolution_constraints") or {}).items()
+            }
+        except Exception:
+            supported_resolutions = []
+            supported_durations = []
+            duration_resolution_constraints = {}
 
-    resolution = await resolve_resolution(
-        project,
-        registry_provider_id,
-        model_name or "",
-    )
-
-    # duration 解析收口于执行层：payload > project.default_duration > caps 默认。
-    # 用 ``is not None`` 而非 ``or`` 取 payload 值，避免显式 falsy 值被当作未设置。
-    duration_seconds = payload.get("duration_seconds")
-    if duration_seconds is None:
-        duration_seconds = project.get("default_duration")
-    if not duration_seconds:
-        duration_seconds = (
-            supported_durations[0]
-            if supported_durations
-            else _get_model_default_duration(registry_provider_id, model_name)
+        resolution = await resolve_resolution(
+            project,
+            registry_provider_id,
+            model_name or "",
         )
+        legacy_route_warnings: list[dict[str, Any]] = []
+        resolution, resolution_warning = coerce_video_resolution_for_options(resolution, supported_resolutions)
+        if resolution_warning:
+            legacy_route_warnings.append(resolution_warning)
+        supported_durations = duration_options_for_resolution(
+            supported_durations,
+            duration_resolution_constraints,
+            resolution,
+        )
+
+        # duration 解析收口于执行层：payload > project.default_duration > caps 默认。
+        # 用 ``is not None`` 而非 ``or`` 取 payload 值，避免显式 falsy 值被当作未设置。
+        duration_seconds = payload.get("duration_seconds")
+        if duration_seconds is None:
+            duration_seconds = project.get("default_duration")
+        if not duration_seconds:
+            duration_seconds = (
+                supported_durations[0]
+                if supported_durations
+                else _get_model_default_duration(registry_provider_id, model_name)
+            )
+        duration_seconds, duration_warning = coerce_video_duration_for_options(duration_seconds, supported_durations)
+        if duration_warning:
+            legacy_route_warnings.append(duration_warning)
+        version_metadata = {}
+        if legacy_route_warnings:
+            version_metadata["generation_route_warnings"] = legacy_route_warnings
+    version_metadata["source_storyboard_generation_quality"] = source_storyboard_quality
     # 能力守卫：provider 解析之后的唯一权威家（见 ADR-0001）。安全解析交给守卫，
     # 此处不预先 int() 截断，避免把非整数秒静默修正成「碰巧合法」的值。
     assert_duration_supported(duration_seconds, supported_durations)
@@ -1052,6 +1176,7 @@ async def execute_video_task(
         task_id=task_id,
         seed=seed,
         service_tier=service_tier,
+        **version_metadata,
     )
 
     return await _finalize_video_task(
@@ -1062,6 +1187,7 @@ async def execute_video_task(
         version=version,
         video_uri=video_uri,
         generator=generator,
+        version_metadata=version_metadata,
     )
 
 
@@ -1074,6 +1200,7 @@ async def _finalize_video_task(
     version: int,
     video_uri: str | None,
     generator: Any,
+    version_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Normal + resume 共用的 finalize 逻辑：写 scene asset + 抽缩略图 + 返回 result dict。"""
 
@@ -1121,6 +1248,7 @@ async def _finalize_video_task(
         "resource_type": "videos",
         "resource_id": resource_id,
         "video_uri": video_uri,
+        **version_metadata,
     }
 
 
@@ -1155,12 +1283,25 @@ async def execute_character_task(
 
     project, full_prompt, reference_images = await asyncio.to_thread(_prepare_char)
     _needs_i2i = bool(reference_images)
+    route = await _maybe_resolve_generation_route(
+        project_name=project_name,
+        project=project,
+        payload=payload,
+        task_kind="character",
+        needs_i2i=_needs_i2i,
+    )
+    effective_payload = route.effective_payload if route else payload
 
-    generator = await get_media_generator(project_name, payload=payload, user_id=user_id, needs_i2i=_needs_i2i)
+    generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id, needs_i2i=_needs_i2i)
     aspect_ratio = get_aspect_ratio(project, "characters")
 
-    resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=_needs_i2i)
-    image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+    if route is not None:
+        image_size = route.resolution
+        version_metadata = dict(route.metadata)
+    else:
+        resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=_needs_i2i)
+        image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+        version_metadata = {}
 
     _, version = await generator.generate_image_async(
         prompt=full_prompt,
@@ -1169,6 +1310,7 @@ async def execute_character_task(
         reference_images=reference_images,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
+        **version_metadata,
     )
 
     sheet_path = f"characters/{resource_id}.png"
@@ -1188,6 +1330,7 @@ async def execute_character_task(
         "created_at": created_at,
         "resource_type": "characters",
         "resource_id": resource_id,
+        **version_metadata,
     }
 
 
@@ -1226,12 +1369,25 @@ async def execute_design_task(
         return project, full_prompt
 
     project, full_prompt = await asyncio.to_thread(_prepare)
+    route = await _maybe_resolve_generation_route(
+        project_name=project_name,
+        project=project,
+        payload=payload,
+        task_kind=kind,
+        needs_i2i=False,
+    )
+    effective_payload = route.effective_payload if route else payload
 
-    generator = await get_media_generator(project_name, payload=payload, user_id=user_id, needs_i2i=False)
+    generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id, needs_i2i=False)
     aspect_ratio = get_aspect_ratio(project, bucket_key)
 
-    resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=False)
-    image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+    if route is not None:
+        image_size = route.resolution
+        version_metadata = dict(route.metadata)
+    else:
+        resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=False)
+        image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
+        version_metadata = {}
 
     _, version = await generator.generate_image_async(
         prompt=full_prompt,
@@ -1239,6 +1395,7 @@ async def execute_design_task(
         resource_id=resource_id,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
+        **version_metadata,
     )
 
     sheet_path = f"{bucket_key}/{resource_id}.png"
@@ -1255,6 +1412,7 @@ async def execute_design_task(
         "created_at": created_at,
         "resource_type": bucket_key,
         "resource_id": resource_id,
+        **version_metadata,
     }
 
 
@@ -1416,24 +1574,36 @@ async def execute_grid_task(
             raise ValueError("prompt is required for grid task")
 
         _needs_i2i = bool(reference_images)
+        project = await asyncio.to_thread(get_project_manager().load_project, project_name)
+        aspect_ratio = payload.get("grid_aspect_ratio") or get_aspect_ratio(project, "storyboards")
+        route = await _maybe_resolve_generation_route(
+            project_name=project_name,
+            project=project,
+            payload=payload,
+            task_kind="grid",
+            needs_i2i=_needs_i2i,
+        )
+        effective_payload = route.effective_payload if route else payload
         generator = await get_media_generator(
             project_name,
-            payload=payload,
+            payload=effective_payload,
             user_id=user_id,
             needs_i2i=_needs_i2i,
         )
 
-        project = await asyncio.to_thread(get_project_manager().load_project, project_name)
-        aspect_ratio = payload.get("grid_aspect_ratio") or get_aspect_ratio(project, "storyboards")
-
-        resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=_needs_i2i)
+        resolved_image = await _resolve_effective_image_backend(project, effective_payload, needs_i2i=_needs_i2i)
         # 回填 grid metadata：route 层创建/重建时无法预知 needs_i2i，由此处补齐
         grid.provider = resolved_image.provider_id
         grid.model = resolved_image.model_id
         grid_manager.save(grid)
-        image_size = (
-            await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id) or "2K"
-        )  # 宫格图保底高分辨率
+        if route is not None:
+            image_size = route.resolution or "2K"
+            version_metadata = dict(route.metadata)
+        else:
+            image_size = (
+                await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id) or "2K"
+            )  # 宫格图保底高分辨率
+            version_metadata = {}
 
         image_path, version = await generator.generate_image_async(
             prompt=prompt_text,
@@ -1442,6 +1612,7 @@ async def execute_grid_task(
             reference_images=reference_images,
             aspect_ratio=aspect_ratio,
             image_size=image_size,
+            **version_metadata,
         )
 
         # e) Set grid_image_path, status to splitting
@@ -1535,6 +1706,7 @@ async def execute_grid_task(
         "created_at": created_at,
         "resource_type": "grids",
         "resource_id": resource_id,
+        **version_metadata,
     }
 
 

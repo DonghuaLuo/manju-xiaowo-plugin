@@ -103,6 +103,7 @@ class CreateProjectRequest(BaseModel):
     text_backend_overview: str | None = None
     text_backend_style: str | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
+    generation_profiles: dict[str, dict[str, Any | None]] | None = None
 
 
 class EpisodePatch(BaseModel):
@@ -141,6 +142,7 @@ class UpdateProjectRequest(BaseModel):
     clear_style_image: bool | None = None
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
+    generation_profiles: dict[str, dict[str, Any | None]] | None = None
 
 
 def _validate_episode_target_units(value: int | None) -> int | None:
@@ -540,6 +542,8 @@ async def create_project(
             }
             if req.model_settings is not None:
                 extras["model_settings"] = req.model_settings
+            if req.generation_profiles is not None:
+                extras["generation_profiles"] = req.generation_profiles
             if req.source_language is not None:
                 extras["source_language"] = req.source_language
             if episode_target_units is not None:
@@ -762,6 +766,12 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                         project.pop("model_settings", None)
                     else:
                         project["model_settings"] = req.model_settings
+
+                if "generation_profiles" in req.model_fields_set:
+                    if req.generation_profiles is None:
+                        project.pop("generation_profiles", None)
+                    else:
+                        project["generation_profiles"] = req.generation_profiles
 
                 if "episodes" in req.model_fields_set and req.episodes is not None:
                     # 合并 episodes：保留现有 episode 的完整数据，仅更新请求中显式提供的字段。

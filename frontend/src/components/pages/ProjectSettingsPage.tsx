@@ -10,7 +10,13 @@ import { getProviderModels, getCustomProviderModels } from "@/utils/provider-mod
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
-import type { CustomProviderInfo, ProviderInfo } from "@/types";
+import type {
+  CustomProviderInfo,
+  GenerationProfiles,
+  ImageGenerationProfile,
+  ProviderInfo,
+  VideoGenerationProfile,
+} from "@/types";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS, radioCardClass } from "@/components/ui/darkroom-tokens";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -18,6 +24,13 @@ import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { normalizeMode, type GenerationMode } from "@/utils/generation-mode";
 import { getProjectDisplayName } from "@/utils/project-display";
 import type { UploadFileInput } from "@/utils/desktop-file";
+import {
+  IMAGE_PROFILE_RESOLUTIONS,
+  VIDEO_PROFILE_RESOLUTIONS,
+  createDefaultGenerationProfiles,
+  generationProfilesSignature,
+  normalizeGenerationProfiles,
+} from "@/utils/generation-profiles";
 
 function deriveStyleValue(
   project: Record<string, unknown>,
@@ -68,9 +81,13 @@ function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
 }
 
 type SourceLanguage = "zh" | "en" | "vi";
+type ImageProfileKey = "asset" | "storyboard_draft" | "storyboard_final" | "grid";
+type VideoProfileKey = "video_draft" | "video_final" | "reference_video_draft" | "reference_video_final";
 
 const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
+const PROFILE_INPUT_CLS =
+  "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
 
 function normalizeSourceLanguage(value: unknown): SourceLanguage {
   return value === "en" || value === "vi" ? value : "zh";
@@ -170,6 +187,9 @@ export function ProjectSettingsPage() {
   const [videoResolution, setVideoResolution] = useState<string | null>(null);
   const [imageResolution, setImageResolution] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<Record<string, { resolution: string | null }>>({});
+  const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(
+    () => createDefaultGenerationProfiles(),
+  );
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [projectTitle, setProjectTitle] = useState<string>("");
@@ -191,6 +211,7 @@ export function ProjectSettingsPage() {
     sourceLanguage: "zh",
     videoResolution: null as string | null,
     imageResolution: null as string | null,
+    generationProfiles: generationProfilesSignature(),
   });
   // 风格区独立保存，但"未保存就离开"也需被 isDirty 拦截。
   const initialStyleRef = useRef<StylePickerValue | null>(null);
@@ -288,6 +309,14 @@ export function ProjectSettingsPage() {
       setVideoResolution(vRes);
       setImageResolution(iRes);
       setModelSettings(ms);
+      const normalizedProfiles = normalizeGenerationProfiles(
+        project.generation_profiles as GenerationProfiles | undefined,
+        createDefaultGenerationProfiles({
+          imageResolution: iRes,
+          videoResolution: vRes,
+        }),
+      );
+      setGenerationProfiles(normalizedProfiles);
 
       const derivedStyle = deriveStyleValue(project, projectName, templates, templatePrompts);
       setStyleValue(derivedStyle);
@@ -298,6 +327,7 @@ export function ProjectSettingsPage() {
         aspectRatio: ar, generationMode: gm, defaultDuration: dd,
         episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
         videoResolution: vRes, imageResolution: iRes,
+        generationProfiles: generationProfilesSignature(normalizedProfiles),
       };
     }));
 
@@ -337,6 +367,13 @@ export function ProjectSettingsPage() {
     && (initialStyleRef.current.templateId !== null
       || initialStyleRef.current.uploadedPreview !== null
       || !!initialStyleRef.current.stylePrompt.trim());
+  const normalizedGenerationProfiles = normalizeGenerationProfiles(
+    generationProfiles,
+    createDefaultGenerationProfiles({
+      imageResolution,
+      videoResolution,
+    }),
+  );
 
   const isDirty =
     videoBackend !== initialRef.current.videoBackend ||
@@ -353,10 +390,43 @@ export function ProjectSettingsPage() {
     sourceLanguage !== initialRef.current.sourceLanguage ||
     videoResolution !== initialRef.current.videoResolution ||
     imageResolution !== initialRef.current.imageResolution ||
+    generationProfilesSignature(normalizedGenerationProfiles) !== initialRef.current.generationProfiles ||
     styleIsDirty;
   /* eslint-enable react-hooks/refs */
 
   useWarnUnsaved(isDirty);
+
+  const updateImageProfile = (
+    key: ImageProfileKey,
+    patch: Partial<ImageGenerationProfile>,
+  ) => {
+    setGenerationProfiles((prev) => {
+      const base = normalizeGenerationProfiles(prev, normalizedGenerationProfiles);
+      return {
+        ...base,
+        [key]: {
+          ...base[key],
+          ...patch,
+        },
+      };
+    });
+  };
+
+  const updateVideoProfile = (
+    key: VideoProfileKey,
+    patch: Partial<VideoGenerationProfile>,
+  ) => {
+    setGenerationProfiles((prev) => {
+      const base = normalizeGenerationProfiles(prev, normalizedGenerationProfiles);
+      return {
+        ...base,
+        [key]: {
+          ...base[key],
+          ...patch,
+        },
+      };
+    });
+  };
 
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
 
@@ -366,14 +436,14 @@ export function ProjectSettingsPage() {
       return;
     }
     navigate(path);
-  }, [isDirty, navigate]);
+  }, [isDirty, navigate, setPendingNavigation]);
 
   const confirmDiscardAndNavigate = useCallback(() => {
     if (!pendingNavigation) return;
     const target = pendingNavigation;
     setPendingNavigation(null);
     navigate(target);
-  }, [pendingNavigation, navigate]);
+  }, [pendingNavigation, navigate, setPendingNavigation]);
 
   // Cross-tab switch from custom → template may leave {mode:"template", templateId:null}
   // while an uploaded preview still lingers — no user-chosen card. Block save so
@@ -534,6 +604,13 @@ export function ProjectSettingsPage() {
       }
 
       const normalizedEpisodeTargetUnits = normalizeEpisodeTargetUnits(episodeTargetUnits);
+      const savedGenerationProfiles = normalizeGenerationProfiles(
+        generationProfiles,
+        createDefaultGenerationProfiles({
+          imageResolution,
+          videoResolution,
+        }),
+      );
 
       await API.updateProject(projectName, {
         video_backend: videoBackend || null,
@@ -549,16 +626,19 @@ export function ProjectSettingsPage() {
         episode_target_units: normalizedEpisodeTargetUnits,
         source_language: sourceLanguage,
         model_settings: newModelSettings,
+        generation_profiles: savedGenerationProfiles,
       });
       const savedEpisodeTargetUnits = String(normalizedEpisodeTargetUnits);
       setEpisodeTargetUnits(savedEpisodeTargetUnits);
       setModelSettings(newModelSettings);
+      setGenerationProfiles(savedGenerationProfiles);
       initialRef.current = {
         videoBackend, imageBackendT2I, imageBackendI2I, audioOverride,
         textScript, textOverview, textStyle,
         aspectRatio, generationMode, defaultDuration,
         episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
         videoResolution, imageResolution,
+        generationProfiles: generationProfilesSignature(savedGenerationProfiles),
       };
       useAppStore.getState().pushToast(t("saved"), "success");
     } catch (e: unknown) {
@@ -566,7 +646,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
 
   return (
     <div
@@ -746,6 +826,111 @@ export function ProjectSettingsPage() {
                     textStyle: globalDefaults.textStyle ?? "",
                   }}
                 />
+              </SectionCard>
+
+              <SectionCard
+                kicker="Quality Strategy"
+                title={t("generation_profiles_section_title")}
+                description={t("generation_profiles_section_desc")}
+              >
+                <div className="space-y-4">
+                  {([
+                    ["asset", t("generation_profile_asset")],
+                    ["storyboard_draft", t("generation_profile_storyboard_draft")],
+                    ["storyboard_final", t("generation_profile_storyboard_final")],
+                    ["grid", t("generation_profile_grid")],
+                  ] as const).map(([key, label]) => (
+                    <div
+                      key={key}
+                      className="grid items-center gap-3 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3 sm:grid-cols-[minmax(0,1fr)_180px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold text-text">{label}</div>
+                      </div>
+                      <label className="block">
+                        <span className="mb-1.5 block text-[11px] text-text-3">
+                          {t("resolution_label")}
+                        </span>
+                        <select
+                          value={normalizedGenerationProfiles[key]?.resolution ?? ""}
+                          onChange={(event) =>
+                            updateImageProfile(key, { resolution: event.currentTarget.value || null })
+                          }
+                          className={PROFILE_INPUT_CLS}
+                        >
+                          {IMAGE_PROFILE_RESOLUTIONS.map((resolution) => (
+                            <option key={resolution} value={resolution}>
+                              {resolution}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ))}
+
+                  {([
+                    ["video_draft", t("generation_profile_video_draft")],
+                    ["video_final", t("generation_profile_video_final")],
+                    ["reference_video_draft", t("generation_profile_reference_video_draft")],
+                    ["reference_video_final", t("generation_profile_reference_video_final")],
+                  ] as const).map(([key, label]) => {
+                    const profile = normalizedGenerationProfiles[key];
+                    const audioValue =
+                      profile?.generate_audio == null
+                        ? "project"
+                        : profile.generate_audio
+                          ? "true"
+                          : "false";
+                    return (
+                      <div
+                        key={key}
+                        className="grid gap-3 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3 sm:grid-cols-[minmax(0,1fr)_repeat(2,130px)]"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold text-text">{label}</div>
+                        </div>
+                        <label className="block">
+                          <span className="mb-1.5 block text-[11px] text-text-3">
+                            {t("resolution_label")}
+                          </span>
+                          <select
+                            value={profile?.resolution ?? ""}
+                            onChange={(event) =>
+                              updateVideoProfile(key, { resolution: event.currentTarget.value || null })
+                            }
+                            className={PROFILE_INPUT_CLS}
+                          >
+                            {VIDEO_PROFILE_RESOLUTIONS.map((resolution) => (
+                              <option key={resolution} value={resolution}>
+                                {resolution}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1.5 block text-[11px] text-text-3">
+                            {t("generate_audio_label")}
+                          </span>
+                          <select
+                            value={audioValue}
+                            onChange={(event) => {
+                              const value = event.currentTarget.value;
+                              updateVideoProfile(key, {
+                                generate_audio:
+                                  value === "project" ? null : value === "true",
+                              });
+                            }}
+                            className={PROFILE_INPUT_CLS}
+                          >
+                            <option value="project">{t("follow_global_default")}</option>
+                            <option value="true">{t("enabled_label")}</option>
+                            <option value="false">{t("disabled_label")}</option>
+                          </select>
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
               </SectionCard>
 
               {/* Episode planning */}

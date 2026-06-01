@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { NarrationSegment, DramaScene } from "@/types";
+import type { NarrationSegment, DramaScene, GenerationQuality } from "@/types";
 import { useAppStore } from "@/stores/app-store";
 import { ShotList } from "./ShotList";
 import { ShotDetail } from "./ShotDetail";
@@ -18,8 +18,8 @@ interface ShotSplitViewProps {
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => void | Promise<void>;
-  onGenerateStoryboard?: (segmentId: string) => void;
-  onGenerateVideo?: (segmentId: string) => void;
+  onGenerateStoryboard?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
   generatingStoryboard?: (segmentId: string) => boolean;

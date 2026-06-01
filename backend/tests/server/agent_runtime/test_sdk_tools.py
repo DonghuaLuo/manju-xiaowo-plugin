@@ -16,6 +16,7 @@ import pytest
 
 from server.agent_runtime.sdk_tools import build_arcreel_mcp_server
 from server.agent_runtime.sdk_tools._context import ToolContext
+from server.agent_runtime.sdk_tools._generation_quality import route_summary
 from server.agent_runtime.sdk_tools.enqueue_assets import (
     generate_assets_tool,
     list_pending_assets_tool,
@@ -186,9 +187,12 @@ async def test_list_pending_assets_error(fake_ctx: ToolContext, monkeypatch) -> 
 async def test_generate_assets_happy(fake_ctx: ToolContext, monkeypatch) -> None:
     from server.agent_runtime.sdk_tools import enqueue_assets as mod
 
+    captured_quality: list[str] = []
+
     async def fake_batch(*, project_name, specs, on_success=None, on_failure=None):
         from lib.generation_queue_client import BatchTaskResult
 
+        captured_quality.extend(s.payload["quality"] for s in specs)
         succ = [
             BatchTaskResult(
                 resource_id=s.resource_id,
@@ -207,6 +211,7 @@ async def test_generate_assets_happy(fake_ctx: ToolContext, monkeypatch) -> None
     text = out["content"][0]["text"]
     assert "1 succeeded" in text
     assert "张三" in text
+    assert captured_quality == ["final"]
 
 
 async def test_generate_assets_names_without_type(fake_ctx: ToolContext) -> None:
@@ -223,9 +228,12 @@ async def test_generate_assets_names_without_type(fake_ctx: ToolContext) -> None
 async def test_generate_storyboards_happy(fake_ctx: ToolContext, monkeypatch) -> None:
     from server.agent_runtime.sdk_tools import enqueue_storyboards as mod
 
+    captured_quality: list[str] = []
+
     async def fake_batch(*, project_name, specs, on_success=None, on_failure=None):
         from lib.generation_queue_client import BatchTaskResult
 
+        captured_quality.extend(s.payload["quality"] for s in specs)
         succ = [
             BatchTaskResult(
                 resource_id=s.resource_id,
@@ -241,8 +249,9 @@ async def test_generate_storyboards_happy(fake_ctx: ToolContext, monkeypatch) ->
     # Strip storyboard_image to force selection
     fake_ctx.pm.script_payload["segments"][0]["generated_assets"] = {}  # type: ignore[attr-defined]
     tool_obj = generate_storyboards_tool(fake_ctx)
-    out = await _call(tool_obj, {"script": "episode_1.json"})
+    out = await _call(tool_obj, {"script": "episode_1.json", "quality": "final"})
     assert out.get("is_error") is not True
+    assert captured_quality == ["final"]
 
 
 async def test_generate_storyboards_error(fake_ctx: ToolContext, monkeypatch) -> None:
@@ -287,10 +296,13 @@ async def test_generate_grid_wrong_mode(fake_ctx: ToolContext) -> None:
 async def test_generate_video_episode_happy(fake_ctx: ToolContext, monkeypatch) -> None:
     from server.agent_runtime.sdk_tools import enqueue_videos as mod
 
+    captured_quality: list[str] = []
+
     async def fake_batch(*, project_name, specs, on_success=None, on_failure=None):
         from lib.generation_queue_client import BatchTaskResult
 
         for spec in specs:
+            captured_quality.append(spec.payload["quality"])
             br = BatchTaskResult(
                 resource_id=spec.resource_id,
                 task_id="t1",
@@ -303,8 +315,9 @@ async def test_generate_video_episode_happy(fake_ctx: ToolContext, monkeypatch) 
 
     monkeypatch.setattr(mod, "batch_enqueue_and_wait", fake_batch)
     tool_obj = generate_video_episode_tool(fake_ctx)
-    out = await _call(tool_obj, {"script": "episode_1.json"})
+    out = await _call(tool_obj, {"script": "episode_1.json", "quality": "final"})
     assert out.get("is_error") is not True
+    assert captured_quality == ["final"]
 
 
 async def test_generate_video_episode_error(fake_ctx: ToolContext) -> None:
@@ -441,6 +454,7 @@ def test_build_video_specs_does_not_validate_duration_at_enqueue(tmp_path) -> No
         log=log,
     )
     assert len(specs) == 1
+    assert specs[0].payload["quality"] == "draft"
     assert specs[0].payload["duration_seconds"] == 7
 
     # 未显式指定 duration 时不携带该键，留给执行层按 caps 收口默认。
@@ -454,7 +468,22 @@ def test_build_video_specs_does_not_validate_duration_at_enqueue(tmp_path) -> No
         skip_ids=None,
         log=[],
     )
+    assert specs2[0].payload["quality"] == "draft"
     assert "duration_seconds" not in specs2[0].payload
+
+
+def test_route_summary_formats_actual_generation_route() -> None:
+    result = {
+        "generation_quality": "final",
+        "generation_route": {
+            "resolution": "1080p",
+            "duration_seconds": 6,
+            "provider": "doubao",
+            "model": "seedance",
+        },
+    }
+
+    assert route_summary(result) == " [final · 1080p · 6s · doubao/seedance]"
 
 
 def test_build_reference_specs_routes_through_guard(tmp_path) -> None:
@@ -478,6 +507,16 @@ def test_build_reference_specs_routes_through_guard(tmp_path) -> None:
     # 拼接出的 prompt 经守卫点校验后落入 payload。
     assert specs[0].payload["prompt"] == "@张三 推门"
     assert specs[0].payload["script_file"] == "episode_1.json"
+    assert specs[0].payload["quality"] == "draft"
+
+    specs_final, _ = _build_reference_specs(
+        units=units,
+        script_filename="episode_1.json",
+        skip_ids=None,
+        log=[],
+        quality="final",
+    )
+    assert specs_final[0].payload["quality"] == "final"
 
 
 def test_build_reference_specs_skips_blank_prompt(tmp_path) -> None:

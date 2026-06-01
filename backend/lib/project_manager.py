@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import unicodedata
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -40,6 +41,20 @@ from lib.script_editor import ScriptEditError, resolve_items
 from lib.style_templates import LEGACY_STYLE_MAP, resolve_template_prompt
 
 logger = logging.getLogger(__name__)
+
+_IN_PROCESS_FILE_LOCKS: dict[str, threading.RLock] = {}
+_IN_PROCESS_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _in_process_file_lock(path: Path) -> threading.RLock:
+    """Return a process-local lock for a lock file path."""
+    key = os.path.normcase(os.path.abspath(str(path)))
+    with _IN_PROCESS_FILE_LOCKS_GUARD:
+        lock = _IN_PROCESS_FILE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _IN_PROCESS_FILE_LOCKS[key] = lock
+        return lock
 
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 PROJECT_SLUG_SANITIZER = re.compile(r"[^a-zA-Z0-9]+")
@@ -583,7 +598,7 @@ class ProjectManager:
         # 同步到 project.json，保证 script 写入与元数据同步是单一事务
         # （sync 走的是 `_project_lock`，与外层 `_script_lock` 不同锁，不会冲突）。
         if sync_project and self.project_exists(project_name) and isinstance(script.get("episode"), int):
-            self.sync_episode_from_script(project_name, filename)
+            self.update_project(project_name, lambda project: self._apply_episode_sync(project, script, filename))
 
         emit_project_change_hint(
             project_name,
@@ -605,7 +620,7 @@ class ProjectManager:
         """
         norm = script_filename[len("scripts/") :] if script_filename.startswith("scripts/") else script_filename
         with self._script_lock(project_name, norm):
-            script = self.load_script(project_name, norm)
+            script = self._load_script_unlocked(project_name, norm)
             before = copy.deepcopy(script) if validate else None
             yield script
             self._write_script_unlocked(project_name, script, norm, validate=validate, before=before)
@@ -644,7 +659,7 @@ class ProjectManager:
                 cur_norm = current[len("scripts/") :] if current.startswith("scripts/") else current
                 if cur_norm != norm:
                     raise EpisodeScriptReboundError(f"episode script binding changed: {norm} -> {cur_norm}")
-                script = self.load_script(project_name, norm)
+                script = self._load_script_unlocked(project_name, norm)
                 before = copy.deepcopy(script) if validate else None
                 yield script
                 self._write_script_unlocked(
@@ -788,6 +803,12 @@ class ProjectManager:
         Returns:
             剧本字典
         """
+        norm = filename[len("scripts/") :] if filename.startswith("scripts/") else filename
+        with self._script_lock(project_name, norm):
+            return self._load_script_unlocked(project_name, norm)
+
+    def _load_script_unlocked(self, project_name: str, filename: str) -> dict:
+        """读取剧本文件；调用方负责按需持有 `_script_lock`。"""
         project_dir = self.get_project_path(project_name)
         if filename.startswith("scripts/"):
             filename = filename[len("scripts/") :]
@@ -1309,8 +1330,9 @@ class ProjectManager:
         project_file = self._get_project_file_path(project_name)
         lock_path = project_file.parent / f".{project_file.name}.lock"
         lock_path.touch(exist_ok=True)
-        with portalocker.Lock(lock_path, flags=portalocker.LOCK_EX):
-            yield
+        with _in_process_file_lock(lock_path):
+            with portalocker.Lock(lock_path, flags=portalocker.LOCK_EX):
+                yield
 
     @contextmanager
     def _script_lock(self, project_name: str, script_filename: str):
@@ -1332,8 +1354,9 @@ class ProjectManager:
         lock_path = real.parent / f".{real.name}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_path.touch(exist_ok=True)
-        with portalocker.Lock(lock_path, flags=portalocker.LOCK_EX):
-            yield
+        with _in_process_file_lock(lock_path):
+            with portalocker.Lock(lock_path, flags=portalocker.LOCK_EX):
+                yield
 
     def save_project(self, project_name: str, project: dict) -> Path:
         """

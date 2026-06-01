@@ -157,6 +157,7 @@ def generate_grid_tool(ctx: ToolContext):
                             "cols": layout.cols,
                             "grid_aspect_ratio": layout.grid_aspect_ratio,
                             "video_aspect_ratio": aspect_ratio,
+                            "quality": "final",
                         },
                         script_file=script_filename,
                         source="skill",

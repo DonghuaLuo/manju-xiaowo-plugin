@@ -8,7 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from lib.image_utils import compress_image_bytes
+from lib.image_utils import compress_image_bytes, detect_image_mime, estimate_base64_size, prepare_provider_image_input
 
 
 class TestCompressImageBytes:
@@ -83,3 +83,42 @@ class TestCompressImageBytes:
         raw = self._make_png(3000, 2000)
         result = compress_image_bytes(raw)
         assert len(result) < len(raw)
+
+    def test_detect_image_mime_uses_real_content(self, tmp_path):
+        """真实 MIME 不依赖后缀，避免供应商 data URI 写错类型。"""
+        img = Image.new("RGB", (320, 240), color="blue")
+        source = tmp_path / "misnamed.png"
+        img.save(source, format="JPEG")
+
+        assert detect_image_mime(source) == "image/jpeg"
+
+    def test_prepare_provider_image_input_keeps_source_and_records_metadata(self, tmp_path):
+        img = Image.new("RGB", (3200, 1800), color="green")
+        source = tmp_path / "master.png"
+        img.save(source, format="PNG")
+        source_bytes = source.read_bytes()
+
+        prepared = prepare_provider_image_input(
+            source,
+            temp_dir=tmp_path / "provider-input",
+            purpose="video-start",
+            max_long_edge=1024,
+        )
+
+        assert source.read_bytes() == source_bytes
+        assert prepared.path != source
+        assert prepared.path.exists()
+        assert prepared.prepared_mime == "image/jpeg"
+        assert prepared.resized is True
+        assert max(prepared.prepared_width, prepared.prepared_height) == 1024
+        assert prepared.to_metadata()["estimated_base64_bytes"] == estimate_base64_size(prepared.prepared_bytes)
+
+    def test_prepare_provider_image_input_preserves_alpha_as_png(self, tmp_path):
+        img = Image.new("RGBA", (200, 200), color=(255, 0, 0, 128))
+        source = tmp_path / "alpha.png"
+        img.save(source, format="PNG")
+
+        prepared = prepare_provider_image_input(source, temp_dir=tmp_path / "provider-input")
+
+        assert prepared.prepared_mime == "image/png"
+        assert prepared.path.suffix == ".png"

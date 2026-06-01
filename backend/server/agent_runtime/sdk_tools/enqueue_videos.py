@@ -27,6 +27,11 @@ from server.agent_runtime.sdk_tools._context import (
     tool_result_text,
     validate_script_filename,
 )
+from server.agent_runtime.sdk_tools._generation_quality import (
+    QUALITY_SCHEMA,
+    normalize_quality,
+    route_summary,
+)
 
 
 def _get_video_prompt(item: dict[str, Any]) -> str | dict[str, Any]:
@@ -94,6 +99,7 @@ def _build_video_specs(
     project_dir: Path,
     skip_ids: list[str] | None,
     log: list[str],
+    quality: str = "draft",
 ) -> tuple[list[TaskSpec], dict[str, int]]:
     item_type = "片段" if content_mode == "narration" else "场景"
     skip_set = set(skip_ids or [])
@@ -123,7 +129,7 @@ def _build_video_specs(
         # duration 是能力维度，留待执行层在 provider 解析后校验（见 ADR-0001）；
         # 原样透传调用方显式指定的值，不在入队侧做 int() 截断式归一化（否则会把
         # 本应被执行层拒绝的非法值静默修正）。缺省由执行层按 caps 收口默认。
-        extra_payload: dict[str, Any] = {}
+        extra_payload: dict[str, Any] = {"quality": quality}
         duration = item.get("duration_seconds")
         if duration is not None:
             extra_payload["duration_seconds"] = duration
@@ -135,7 +141,7 @@ def _build_video_specs(
                 resource_id=item_id,
                 prompt=prompt,
                 script_file=script_filename,
-                extra_payload=extra_payload or None,
+                extra_payload=extra_payload,
             )
         )
         order_map[item_id] = idx
@@ -148,6 +154,7 @@ def _build_reference_specs(
     script_filename: str,
     skip_ids: list[str] | None,
     log: list[str],
+    quality: str = "draft",
 ) -> tuple[list[TaskSpec], dict[str, int]]:
     skip_set = set(skip_ids or [])
     specs: list[TaskSpec] = []
@@ -172,6 +179,7 @@ def _build_reference_specs(
                 resource_id=unit_id,
                 prompt=assemble_shots_text(unit["shots"]),
                 script_file=script_filename,
+                extra_payload={"quality": quality},
             )
         except ValueError as exc:
             log.append(f"⚠️  {unit_id} 入队校验未通过，跳过：{exc}")
@@ -248,7 +256,7 @@ async def _submit_with_checkpoint(
         ordered_paths[order_map[br.resource_id]] = output_path
         completed.append(br.resource_id)
         save_fn()
-        log.append(f"    ✓ {output_path.name}")
+        log.append(f"    ✓ {output_path.name}{route_summary(result)}")
 
     def on_failure(br: BatchTaskResult) -> None:
         log.append(f"    ✗ {br.resource_id}: {br.error}")
@@ -270,6 +278,7 @@ async def _generate_reference_episode(
     episode: int,
     resume: bool,
     log: list[str],
+    quality: str = "draft",
 ) -> list[Path]:
     project_dir = ctx.project_path
     units = script.get("video_units") or []
@@ -306,6 +315,7 @@ async def _generate_reference_episode(
         script_filename=script_filename,
         skip_ids=already_done,
         log=log,
+        quality=quality,
     )
     if specs:
         failures = await _submit_with_checkpoint(
@@ -336,6 +346,7 @@ async def _run_reference_episode(
     script_filename: str,
     resume: bool,
     log: list[str],
+    quality: str = "draft",
 ) -> dict[str, Any]:
     """Run reference_video-mode generation and format the tool response.
 
@@ -351,6 +362,7 @@ async def _run_reference_episode(
         episode=episode,
         resume=resume,
         log=log,
+        quality=quality,
     )
     header = f"第 {episode} 集参考视频生成完成，共 {len(paths)} 个 unit"
     return tool_result_text("\n".join([header, *log]), label="视频生成日志")
@@ -369,6 +381,10 @@ def generate_video_episode_tool(ctx: ToolContext):
                     "description": "剧本文件名（如 episode_1.json），必须是纯文件名，禁止任何路径分隔符",
                 },
                 "resume": {"type": "boolean", "description": "是否从上次中断处继续"},
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 draft（视频草稿）",
+                },
             },
             "required": ["script"],
         },
@@ -378,13 +394,19 @@ def generate_video_episode_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             resume = bool(args.get("resume"))
+            quality = normalize_quality(args, "draft")
 
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
 
             if _is_reference_script(script):
                 return await _run_reference_episode(
-                    ctx=ctx, script=script, script_filename=script_filename, resume=resume, log=log
+                    ctx=ctx,
+                    script=script,
+                    script_filename=script_filename,
+                    resume=resume,
+                    log=log,
+                    quality=quality,
                 )
 
             episode = ProjectManager.resolve_episode_from_script(script, script_filename)
@@ -413,6 +435,7 @@ def generate_video_episode_tool(ctx: ToolContext):
                 project_dir=project_dir,
                 skip_ids=already_done,
                 log=log,
+                quality=quality,
             )
 
             if not specs and not any(ordered_paths):
@@ -455,6 +478,10 @@ def generate_video_scene_tool(ctx: ToolContext):
                     "description": "剧本文件名（如 episode_1.json），必须是纯文件名，禁止任何路径分隔符",
                 },
                 "scene_id": {"type": "string", "description": "场景或片段 ID"},
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 draft（视频草稿）",
+                },
             },
             "required": ["script", "scene_id"],
         },
@@ -463,6 +490,7 @@ def generate_video_scene_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             scene_id = args["scene_id"]
+            quality = normalize_quality(args, "draft")
 
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
@@ -472,7 +500,12 @@ def generate_video_scene_tool(ctx: ToolContext):
                     f"⚠️  reference_video 模式暂不支持单 unit 精确选择；scene_id={scene_id} 被忽略，转整集生成。"
                 ]
                 return await _run_reference_episode(
-                    ctx=ctx, script=script, script_filename=script_filename, resume=False, log=log
+                    ctx=ctx,
+                    script=script,
+                    script_filename=script_filename,
+                    resume=False,
+                    log=log,
+                    quality=quality,
                 )
 
             items, id_field, _char_field, _scenes, _props = get_storyboard_items(script)
@@ -494,7 +527,7 @@ def generate_video_scene_tool(ctx: ToolContext):
             # duration 是能力维度，留待执行层在 provider 解析后校验（见 ADR-0001）；
             # 原样透传调用方显式指定的值，不在入队侧做 int() 截断式归一化（否则会把
             # 本应被执行层拒绝的非法值静默修正）。缺省由执行层按 caps 收口默认。
-            extra_payload: dict[str, Any] = {}
+            extra_payload: dict[str, Any] = {"quality": quality}
             duration = item.get("duration_seconds")
             if duration is not None:
                 extra_payload["duration_seconds"] = duration
@@ -504,7 +537,7 @@ def generate_video_scene_tool(ctx: ToolContext):
                 resource_id=item_id,
                 prompt=prompt,
                 script_file=script_filename,
-                extra_payload=extra_payload or None,
+                extra_payload=extra_payload,
             )
 
             queued = await enqueue_and_wait(
@@ -519,7 +552,7 @@ def generate_video_scene_tool(ctx: ToolContext):
             result = queued.get("result") or {}
             rel = result.get("file_path") or f"videos/scene_{item_id}.mp4"
             output_path = project_dir / rel
-            return {"content": [{"type": "text", "text": f"✅ 视频已保存: {output_path}"}]}
+            return {"content": [{"type": "text", "text": f"✅ 视频已保存: {output_path}{route_summary(result)}"}]}
         except Exception as exc:  # noqa: BLE001
             return tool_error("generate_video_scene", exc)
 
@@ -536,7 +569,11 @@ def generate_video_all_tool(ctx: ToolContext):
                 "script": {
                     "type": "string",
                     "description": "剧本文件名（如 episode_1.json），必须是纯文件名，禁止任何路径分隔符",
-                }
+                },
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 draft（视频草稿）",
+                },
             },
             "required": ["script"],
         },
@@ -545,12 +582,18 @@ def generate_video_all_tool(ctx: ToolContext):
         log: list[str] = []
         try:
             script_filename = validate_script_filename(args["script"])
+            quality = normalize_quality(args, "draft")
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
 
             if _is_reference_script(script):
                 return await _run_reference_episode(
-                    ctx=ctx, script=script, script_filename=script_filename, resume=False, log=log
+                    ctx=ctx,
+                    script=script,
+                    script_filename=script_filename,
+                    resume=False,
+                    log=log,
+                    quality=quality,
                 )
 
             items, id_field, _chars, _scenes, _props = get_storyboard_items(script)
@@ -567,6 +610,7 @@ def generate_video_all_tool(ctx: ToolContext):
                 project_dir=project_dir,
                 skip_ids=None,
                 log=log,
+                quality=quality,
             )
             if not specs:
                 return tool_result_text("\n".join([*log, "⚠️  没有任何可生成的视频任务"]), label="视频生成日志")
@@ -575,7 +619,7 @@ def generate_video_all_tool(ctx: ToolContext):
             details: list[str] = []
             for br in successes:
                 rel = (br.result or {}).get("file_path") or f"videos/scene_{br.resource_id}.mp4"
-                details.append(f"  ✓ {br.resource_id} → {rel}")
+                details.append(f"  ✓ {br.resource_id} → {rel}{route_summary(br.result)}")
             for br in failures:
                 details.append(f"  ✗ {br.resource_id}: {br.error}")
             header = f"generate_video_all summary: {len(successes)} succeeded, {len(failures)} failed"
@@ -605,6 +649,10 @@ def generate_video_selected_tool(ctx: ToolContext):
                     "description": "场景或片段 ID 列表",
                 },
                 "resume": {"type": "boolean", "description": "是否从上次中断处继续"},
+                "quality": {
+                    **QUALITY_SCHEMA,
+                    "description": "生成质量档位；默认 draft（视频草稿）",
+                },
             },
             "required": ["script", "scene_ids"],
         },
@@ -617,6 +665,7 @@ def generate_video_selected_tool(ctx: ToolContext):
             # checkpoint hash 再单独排序（见下方 ``canonical_scene_ids``）。
             scene_ids: list[str] = list(dict.fromkeys(args["scene_ids"]))
             resume = bool(args.get("resume"))
+            quality = normalize_quality(args, "draft")
 
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
@@ -626,7 +675,12 @@ def generate_video_selected_tool(ctx: ToolContext):
                     f"⚠️  reference_video 模式暂不支持多 unit 精确选择；scene_ids={','.join(scene_ids)} 被忽略，转整集生成。"
                 )
                 return await _run_reference_episode(
-                    ctx=ctx, script=script, script_filename=script_filename, resume=resume, log=log
+                    ctx=ctx,
+                    script=script,
+                    script_filename=script_filename,
+                    resume=resume,
+                    log=log,
+                    quality=quality,
                 )
 
             items, id_field, _chars, _scenes, _props = get_storyboard_items(script)
@@ -682,6 +736,7 @@ def generate_video_selected_tool(ctx: ToolContext):
                 project_dir=project_dir,
                 skip_ids=already_done,
                 log=log,
+                quality=quality,
             )
 
             # ``_build_video_specs`` 可能把所有 selected 都过滤掉（缺分镜图 /

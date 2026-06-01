@@ -19,7 +19,7 @@ import { buildEntityRevisionKey } from "@/utils/project-changes";
 import { getProviderModels, getCustomProviderModels, lookupSupportedDurations } from "@/utils/provider-models";
 import { effectiveMode } from "@/utils/generation-mode";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { Scene, Prop, CustomProviderInfo, ProviderInfo } from "@/types";
+import type { Scene, Prop, CustomProviderInfo, ProviderInfo, GenerationQuality } from "@/types";
 import type { EpisodeScript } from "@/types/script";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ function resolveSegmentPrompt(
   segmentId: string,
   field: PromptField,
   scriptFile?: string,
-): { resolvedFile: string; prompt: unknown; duration: number } | null {
+): { resolvedFile: string; prompt: unknown; duration?: number } | null {
   const resolvedFile = scriptFile ?? Object.keys(scripts)[0];
   if (!resolvedFile) return null;
   const script = scripts[resolvedFile];
@@ -45,7 +45,7 @@ function resolveSegmentPrompt(
   return {
     resolvedFile,
     prompt: seg?.[field] ?? "",
-    duration: seg?.duration_seconds ?? 4,
+    duration: seg?.duration_seconds,
   };
 }
 
@@ -208,7 +208,11 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentProjectData, refreshProject]);
 
-  const handleGenerateStoryboard = useCallback(async (segmentId: string, scriptFile?: string) => {
+  const handleGenerateStoryboard = useCallback(async (
+    segmentId: string,
+    scriptFile?: string,
+    quality: GenerationQuality = "draft",
+  ) => {
     if (!currentProjectName || !currentScripts) return;
     const resolved = resolveSegmentPrompt(currentScripts, segmentId, "image_prompt", scriptFile);
     if (!resolved) return;
@@ -218,6 +222,7 @@ export function StudioCanvasRouter() {
         segmentId,
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
+        { quality },
       );
       useAppStore.getState().pushToast(tRef.current("storyboard_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {
@@ -225,7 +230,11 @@ export function StudioCanvasRouter() {
     }
   }, [currentProjectName, currentScripts]);
 
-  const handleGenerateVideo = useCallback(async (segmentId: string, scriptFile?: string) => {
+  const handleGenerateVideo = useCallback(async (
+    segmentId: string,
+    scriptFile?: string,
+    quality: GenerationQuality = "draft",
+  ) => {
     if (!currentProjectName || !currentScripts) return;
     const resolved = resolveSegmentPrompt(currentScripts, segmentId, "video_prompt", scriptFile);
     if (!resolved) return;
@@ -236,6 +245,7 @@ export function StudioCanvasRouter() {
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
         resolved.duration,
+        { quality },
       );
       useAppStore.getState().pushToast(tRef.current("video_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {
@@ -286,6 +296,7 @@ export function StudioCanvasRouter() {
         currentProjectName,
         name,
         currentProjectData?.characters?.[name]?.description ?? "",
+        { quality: "final" },
       );
       useAppStore
         .getState()
@@ -335,7 +346,12 @@ export function StudioCanvasRouter() {
   const handleGenerateScene = useCallback(async (name: string) => {
     if (!currentProjectName) return;
     try {
-      await API.generateProjectScene(currentProjectName, name, currentProjectData?.scenes?.[name]?.description ?? "");
+      await API.generateProjectScene(
+        currentProjectName,
+        name,
+        currentProjectData?.scenes?.[name]?.description ?? "",
+        { quality: "final" },
+      );
       useAppStore.getState().pushToast(tRef.current("scene_task_submitted_toast", { name }), "success");
     } catch (err) {
       useAppStore.getState().pushToast(tRef.current("submit_failed", { message: errMsg(err) }), "error");
@@ -368,7 +384,12 @@ export function StudioCanvasRouter() {
   const handleGenerateProp = useCallback(async (name: string) => {
     if (!currentProjectName) return;
     try {
-      await API.generateProjectProp(currentProjectName, name, currentProjectData?.props?.[name]?.description ?? "");
+      await API.generateProjectProp(
+        currentProjectName,
+        name,
+        currentProjectData?.props?.[name]?.description ?? "",
+        { quality: "final" },
+      );
       useAppStore.getState().pushToast(tRef.current("prop_task_submitted_toast", { name }), "success");
     } catch (err) {
       useAppStore.getState().pushToast(tRef.current("submit_failed", { message: errMsg(err) }), "error");

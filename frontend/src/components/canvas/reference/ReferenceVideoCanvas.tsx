@@ -28,6 +28,7 @@ import { useCostStore } from "@/stores/cost-store";
 import { errMsg } from "@/utils/async";
 import { mergeReferences } from "@/utils/reference-mentions";
 import type {
+  GenerationQuality,
   ReferenceResource,
   ReferenceVideoUnit,
   UnitStatus,
@@ -160,7 +161,7 @@ export function ReferenceVideoCanvas({
   const [stackTab, setStackTab] = useState<"editor" | "preview">("editor");
 
   const handleGenerate = useCallback(
-    async (unitId: string) => {
+    async (unitId: string, quality: GenerationQuality = "draft") => {
       setOptimisticUnitIds((s) => {
         if (s.has(unitId)) return s;
         const next = new Set(s);
@@ -169,7 +170,7 @@ export function ReferenceVideoCanvas({
       });
       setStackTab("preview");
       try {
-        const { deduped } = await generate(projectName, episode, unitId);
+        const { deduped } = await generate(projectName, episode, unitId, quality);
         useAppStore
           .getState()
           .pushToast(
@@ -202,7 +203,10 @@ export function ReferenceVideoCanvas({
   }, [units, statusMap, handleGenerate, t]);
 
   const onAdd = useCallback(() => void handleAdd(), [handleAdd]);
-  const onGenerateVoid = useCallback((id: string) => void handleGenerate(id), [handleGenerate]);
+  const onGenerateVoid = useCallback(
+    (id: string, quality?: GenerationQuality) => void handleGenerate(id, quality),
+    [handleGenerate],
+  );
 
   const handlePromptChange = useCallback(
     (next: string) => {

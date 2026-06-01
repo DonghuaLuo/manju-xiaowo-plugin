@@ -13,7 +13,7 @@ import { formatCost } from "@/utils/cost-format";
 import { errMsg } from "@/utils/async";
 import { pickDesktopFile } from "@/utils/desktop-file";
 import { downloadProjectVideoWithDialog } from "@/utils/video-export";
-import type { CostBreakdown } from "@/types";
+import type { CostBreakdown, GenerationQuality } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
 
 type MediaKind = "storyboard" | "video";
@@ -43,7 +43,7 @@ interface MediaCardProps {
   /** 估算费用（按币种 breakdown，例如 {USD: 0.12} 或 {CNY: 5.25}） */
   estimatedCost?: CostBreakdown;
   /** 触发生成 */
-  onGenerate?: () => void;
+  onGenerate?: (quality: GenerationQuality) => void;
   /** 版本恢复回调 */
   onRestore?: () => Promise<void> | void;
   /** 外部上传成新版本后的回调 */
@@ -87,14 +87,26 @@ export function MediaCard({
   const Icon = kind === "storyboard" ? ImageIcon : Film;
   const title =
     kind === "storyboard" ? t("media_storyboard_title") : t("media_video_title");
-  const generateLabel =
+  const draftGenerateLabel =
     kind === "storyboard"
       ? assetPath
-        ? t("media_regenerate_storyboard")
-        : t("media_generate_storyboard")
+        ? t("media_regenerate_storyboard_draft", {
+            defaultValue: t("media_regenerate_storyboard"),
+          })
+        : t("media_generate_storyboard_draft", {
+            defaultValue: t("media_generate_storyboard"),
+          })
       : assetPath
-        ? t("media_regenerate_video")
-        : t("media_generate_video");
+        ? t("media_regenerate_video_draft", {
+            defaultValue: t("media_regenerate_video"),
+          })
+        : t("media_generate_video_draft", {
+            defaultValue: t("media_generate_video"),
+          });
+  const finalGenerateLabel =
+    kind === "storyboard"
+      ? t("media_generate_storyboard_final", { defaultValue: "最终版" })
+      : t("media_generate_video_final", { defaultValue: "最终版" });
   const resourceType: "storyboards" | "videos" =
     kind === "storyboard" ? "storyboards" : "videos";
   const previewTitle = `${segmentId} ${title}`;
@@ -289,31 +301,51 @@ export function MediaCard({
 
       {/* Generate CTA */}
       {!hideGenerateButton && onGenerate && (
-        <button
-          type="button"
-          onClick={onGenerate}
-          disabled={generateDisabled || generating}
-          title={
-            generateDisabled
-              ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-              : undefined
-          }
-          className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-          style={{
-            color: "oklch(0.14 0 0)",
-            background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
-            boxShadow:
-              "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
-          }}
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>{generateLabel}</span>
-          {estimatedCost && Object.values(estimatedCost).some((v) => v > 0) && (
-            <span className="num ml-1 text-[11px] opacity-70">
-              ~{formatCost(estimatedCost)}
-            </span>
-          )}
-        </button>
+        <div className="mt-2.5 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <button
+            type="button"
+            onClick={() => onGenerate("draft")}
+            disabled={generateDisabled || generating}
+            title={
+              generateDisabled
+                ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                : undefined
+            }
+            className="focus-ring inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              color: "oklch(0.14 0 0)",
+              background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
+              boxShadow:
+                "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
+            }}
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{draftGenerateLabel}</span>
+            {estimatedCost && Object.values(estimatedCost).some((v) => v > 0) && (
+              <span className="num ml-1 shrink-0 text-[11px] opacity-70">
+                ~{formatCost(estimatedCost)}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => onGenerate("final")}
+            disabled={generateDisabled || generating}
+            title={
+              generateDisabled
+                ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                : finalGenerateLabel
+            }
+            className="focus-ring inline-flex h-full items-center justify-center rounded-[10px] border px-3 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              borderColor: "var(--color-hairline)",
+              color: "var(--color-text-2)",
+              background: "oklch(1 0 0 / 0.045)",
+            }}
+          >
+            {finalGenerateLabel}
+          </button>
+        </div>
       )}
       {videoLightboxOpen && assetUrl && kind === "video" && (
         <VideoLightbox

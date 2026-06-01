@@ -136,6 +136,7 @@ async def execute_resume_video_task(task: dict[str, Any], *, job_id: str) -> dic
                 resource_id=resource_id,
                 version=version,
                 video_uri=video_uri,
+                version_metadata={},
                 generator=generator,
             )
 

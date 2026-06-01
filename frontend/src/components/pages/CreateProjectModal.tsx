@@ -12,6 +12,7 @@ import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates"
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
+import { createDefaultGenerationProfiles } from "@/utils/generation-profiles";
 import { WizardStep1Basics, type WizardStep1Value } from "./create-project/WizardStep1Basics";
 import { WizardStep2Models, type WizardStep2Data } from "./create-project/WizardStep2Models";
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
@@ -318,6 +319,10 @@ export function CreateProjectModal() {
         text_backend_script: models.textBackendScript || null,
         text_backend_overview: models.textBackendOverview || null,
         text_backend_style: models.textBackendStyle || null,
+        generation_profiles: createDefaultGenerationProfiles({
+          imageResolution: models.imageResolution,
+          videoResolution: models.videoResolution,
+        }),
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
       });
 

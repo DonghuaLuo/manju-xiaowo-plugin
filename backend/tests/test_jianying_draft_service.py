@@ -102,6 +102,48 @@ class TestCollectVideoClips:
 
         assert len(clips) == 0
 
+    def test_collects_current_video_generation_quality(self, tmp_path):
+        """收集视频片段时带上当前版本的质量档位，用于导出前检查。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        project_dir = tmp_path / "projects" / "demo"
+        videos_dir = project_dir / "videos"
+        versions_dir = project_dir / "versions"
+        videos_dir.mkdir(parents=True)
+        versions_dir.mkdir()
+        (videos_dir / "scene_E1S01.mp4").write_bytes(b"fake")
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "videos": {
+                        "E1S01": {
+                            "current_version": 2,
+                            "versions": [
+                                {"version": 1, "generation_quality": "draft"},
+                                {"version": 2, "generation_quality": "final"},
+                            ],
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        script = {
+            "content_mode": "drama",
+            "scenes": [
+                {
+                    "scene_id": "E1S01",
+                    "duration_seconds": 6,
+                    "generated_assets": {"video_clip": "videos/scene_E1S01.mp4", "status": "completed"},
+                },
+            ],
+        }
+        svc = JianyingDraftService.__new__(JianyingDraftService)
+        clips = svc._collect_video_clips(script, project_dir)
+        assert clips[0]["generation_quality"] == "final"
+
 
 class TestResolveCanvasSize:
     """测试画布尺寸解析"""
@@ -464,7 +506,8 @@ class TestExportEpisodeDraft:
                     "episodes": [{"episode": 1, "title": "第一集", "script_file": "scripts/episode_1.json"}],
                 },
                 ensure_ascii=False,
-            )
+            ),
+            encoding="utf-8",
         )
 
         scripts_dir = project_dir / "scripts"
@@ -483,9 +526,44 @@ class TestExportEpisodeDraft:
                     ],
                 },
                 ensure_ascii=False,
-            )
+            ),
+            encoding="utf-8",
         )
 
         svc = JianyingDraftService(pm)
         with pytest.raises(ValueError, match="请先生成视频"):
             svc.export_episode_draft(project_name="empty", episode=1, draft_path="/tmp")
+
+    def test_draft_video_quality_blocks_jianying_export(self, tmp_path):
+        """剪映导出是成片路线，明确标记为 draft 的当前视频不能混入。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, project_dir = self._setup_project(tmp_path)
+        versions_dir = project_dir / "versions"
+        versions_dir.mkdir()
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "videos": {
+                        "S1": {
+                            "current_version": 1,
+                            "versions": [
+                                {"version": 1, "generation_quality": "draft", "generation_route": {"resolution": "720p"}}
+                            ],
+                        },
+                        "S2": {
+                            "current_version": 1,
+                            "versions": [
+                                {"version": 1, "generation_quality": "final", "generation_route": {"resolution": "1080p"}}
+                            ],
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        svc = JianyingDraftService(pm)
+        with pytest.raises(ValueError, match="包含草稿视频片段：S1"):
+            svc.export_episode_draft(project_name="demo", episode=1, draft_path="/tmp")

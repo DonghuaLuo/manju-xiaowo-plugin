@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useId,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -1929,8 +1930,13 @@ function AssetExportDialog({
         </div>
 
         <div className="rounded-xl border border-hairline-soft bg-bg/35 p-3.5">
-          <label className="flex cursor-pointer items-start gap-3">
+          <label
+            htmlFor="asset-export-global-config"
+            aria-label={t("dashboard:asset_export_global_config")}
+            className="flex cursor-pointer items-start gap-3"
+          >
             <input
+              id="asset-export-global-config"
               type="checkbox"
               checked={options.includeGlobalConfig}
               onChange={(event) =>
@@ -2023,9 +2029,16 @@ function AssetExportCheckbox({
   description: string;
   onChange: (checked: boolean) => void;
 }) {
+  const inputId = useId();
+
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-hairline-soft bg-bg/35 p-3 transition-colors hover:border-accent/45">
+    <label
+      htmlFor={inputId}
+      aria-label={label}
+      className="flex cursor-pointer items-start gap-3 rounded-xl border border-hairline-soft bg-bg/35 p-3 transition-colors hover:border-accent/45"
+    >
       <input
+        id={inputId}
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}

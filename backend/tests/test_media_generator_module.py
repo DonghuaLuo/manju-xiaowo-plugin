@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from lib.image_backends.base import ImageCapability, ImageGenerationResult
 from lib.media_generator import MediaGenerator
@@ -208,3 +209,29 @@ class TestMediaGenerator:
             resource_id="E1S05",
         )
         assert gen.usage_tracker.started[-1]["generate_audio"] is True
+
+    @pytest.mark.asyncio
+    async def test_video_start_image_is_prepared_for_provider_without_mutating_source(self, tmp_path):
+        gen = _build_generator(tmp_path)
+        source = tmp_path / "storyboard.png"
+        Image.new("RGB", (3200, 1800), color="purple").save(source, format="PNG")
+        source_bytes = source.read_bytes()
+
+        await gen.generate_video_async(
+            prompt="p",
+            resource_type="videos",
+            resource_id="E1S06",
+            start_image=source,
+        )
+
+        request = gen._video_backend.calls[-1]
+        assert request.start_image is not None
+        assert request.start_image != source
+        assert not request.start_image.exists()
+        assert request.start_image.suffix == ".jpg"
+        assert source.read_bytes() == source_bytes
+        metadata = gen.versions.add_calls[-1]["provider_input_images"]["start_image"]
+        assert metadata["source_mime"] == "image/png"
+        assert metadata["input_mime"] == "image/jpeg"
+        assert metadata["resized"] is True
+        assert gen.versions.add_calls[-1]["provider_input_payload"]["cleaned_up"] == 1

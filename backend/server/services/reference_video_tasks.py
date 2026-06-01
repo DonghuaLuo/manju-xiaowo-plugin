@@ -21,7 +21,17 @@ from lib.reference_video import assemble_shots_text, render_prompt_for_backend
 from lib.reference_video.errors import MissingReferenceError, RequestPayloadTooLargeError
 from lib.script_models import ReferenceResource
 from lib.thumbnail import extract_video_thumbnail
-from server.services.generation_tasks import get_media_generator, get_project_manager
+from server.services.generation_tasks import (
+    _maybe_resolve_generation_route,
+    assert_duration_supported,
+    get_media_generator,
+    get_project_manager,
+)
+from server.services.generation_route_resolver import (
+    coerce_video_duration_for_options,
+    coerce_video_resolution_for_options,
+    duration_options_for_resolution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +174,27 @@ def _apply_provider_constraints(
     return new_refs, new_duration, warnings
 
 
+def _sync_generation_route_duration_metadata(
+    version_metadata: dict[str, Any],
+    *,
+    duration_seconds: int,
+    supported_durations: list[int],
+    duration_resolution_constraints: dict[str, list[int]],
+) -> None:
+    """让版本中的 generation_route 记录实际提交给视频供应商的时长。"""
+
+    route_meta = version_metadata.get("generation_route")
+    if not isinstance(route_meta, dict):
+        return
+    route_copy = dict(route_meta)
+    route_copy["duration_seconds"] = duration_seconds
+    if supported_durations:
+        route_copy["supported_durations"] = supported_durations
+    if duration_resolution_constraints:
+        route_copy["duration_resolution_constraints"] = duration_resolution_constraints
+    version_metadata["generation_route"] = route_copy
+
+
 async def execute_reference_video_task(
     project_name: str,
     resource_id: str,
@@ -197,8 +228,16 @@ async def execute_reference_video_task(
     # 2. 解析 references（缺图直接失败）
     source_refs = _resolve_unit_references(project, project_path, unit.get("references") or [])
 
+    route = await _maybe_resolve_generation_route(
+        project_name=project_name,
+        project=project,
+        payload=payload,
+        task_kind="reference_video",
+    )
+    effective_payload = route.effective_payload if route else payload
+
     # 3. 构造 generator（拿到 video_backend 名字后才能做 provider 特判）
-    generator = await get_media_generator(project_name, payload=payload, user_id=user_id)
+    generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id)
     backend = getattr(generator, "_video_backend", None)
     provider_name = getattr(backend, "name", "") if backend else ""
     model_name = getattr(backend, "model", "") if backend else ""
@@ -215,44 +254,120 @@ async def execute_reference_video_task(
     #    本 PR 范围内先缓解。
     max_refs: int | None = None
     max_duration: int | None = None
+    supported_resolutions: list[str] = []
+    supported_durations: list[int] = []
+    duration_resolution_constraints: dict[str, list[int]] = {}
+    resolver = ConfigResolver(async_session_factory)
     try:
-        resolver = ConfigResolver(async_session_factory)
-        caps = await resolver.video_capabilities_for_project(project)
-        caps_model = caps.get("model")
-        if model_name and caps_model and caps_model != model_name:
-            logger.warning(
-                "project.json video_backend model (%s) 与实际 backend model (%s) 不一致，"
-                "跳过 executor clamp 以避免按错误模型裁剪（常见于自定义模型禁用回退）。",
-                caps_model,
-                model_name,
-            )
-        else:
+        if route is not None:
+            caps = await resolver.video_capabilities_for_model(route.provider_id, route.model_id, project)
             max_refs = caps.get("max_reference_images")
             max_duration = caps.get("max_duration")
+            supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
+            supported_durations = [int(item) for item in caps.get("supported_durations") or []]
+            duration_resolution_constraints = {
+                str(key): [int(item) for item in value or []]
+                for key, value in (caps.get("duration_resolution_constraints") or {}).items()
+            }
+        else:
+            caps = await resolver.video_capabilities_for_project(project)
+            caps_model = caps.get("model")
+            if model_name and caps_model and caps_model != model_name:
+                logger.warning(
+                    "project.json video_backend model (%s) 与实际 backend model (%s) 不一致，"
+                    "跳过 executor clamp 以避免按错误模型裁剪（常见于自定义模型禁用回退）。",
+                    caps_model,
+                    model_name,
+                )
+            else:
+                max_refs = caps.get("max_reference_images")
+                max_duration = caps.get("max_duration")
+                supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
+                supported_durations = [int(item) for item in caps.get("supported_durations") or []]
+                duration_resolution_constraints = {
+                    str(key): [int(item) for item in value or []]
+                    for key, value in (caps.get("duration_resolution_constraints") or {}).items()
+                }
     except (ValueError, SQLAlchemyError) as exc:
         logger.info("无法解析 video_capabilities，跳过 executor clamp：%s", exc)
-
-    # 5. Provider 特判：裁 refs + duration
-    base_duration = int(unit.get("duration_seconds") or 8)
-    constrained_refs, effective_duration, warnings = _apply_provider_constraints(
-        provider=provider_name,
-        model=model_name,
-        max_refs=max_refs,
-        max_duration=max_duration,
-        references=source_refs,
-        duration_seconds=base_duration,
-    )
 
     # resolver key 必须是 registry provider_id（project.video_backend 的 "/" 前半段），
     # 而非 backend.name（如 "gemini"）——与 generation_tasks.execute_video_task 保持一致。
     from server.services.resolution_resolver import get_provider_fallback, resolve_resolution
 
-    video_backend_raw = project.get("video_backend") or ""
-    registry_provider_id = video_backend_raw.split("/", 1)[0] if "/" in video_backend_raw else provider_name
-
-    resolution = await resolve_resolution(project, registry_provider_id or provider_name, model_name or "")
+    if route is not None:
+        registry_provider_id = route.provider_id
+        model_name = route.model_id or model_name
+        resolution = route.resolution
+        version_metadata = dict(route.metadata)
+        if isinstance(version_metadata.get("generation_route"), dict):
+            version_metadata["generation_route"] = dict(version_metadata["generation_route"])
+        if route.generate_audio is not None:
+            version_metadata["generate_audio"] = route.generate_audio
+        version_metadata["service_tier"] = route.service_tier
+        if route.seed is not None:
+            version_metadata["seed"] = route.seed
+    else:
+        video_backend_raw = project.get("video_backend") or ""
+        registry_provider_id = video_backend_raw.split("/", 1)[0] if "/" in video_backend_raw else provider_name
+        resolution = await resolve_resolution(project, registry_provider_id or provider_name, model_name or "")
+        version_metadata = {}
     if resolution is None:
         resolution = get_provider_fallback(provider_name)
+    route_warnings: list[dict[str, Any]] = []
+    if isinstance(version_metadata.get("generation_route_warnings"), list):
+        route_warnings.extend(version_metadata["generation_route_warnings"])
+    resolution, resolution_warning = coerce_video_resolution_for_options(resolution, supported_resolutions)
+    if resolution_warning:
+        route_warnings.append(resolution_warning)
+
+    effective_supported_durations = duration_options_for_resolution(
+        supported_durations,
+        duration_resolution_constraints,
+        resolution,
+    )
+
+    # 5. Provider 特判：裁 refs + duration
+    route_has_explicit_duration = (
+        route is not None
+        and isinstance(route.effective_payload, dict)
+        and route.effective_payload.get("duration_seconds") is not None
+    )
+    if route is not None and route_has_explicit_duration and route.duration_seconds is not None:
+        base_duration = int(route.duration_seconds)
+    else:
+        base_duration = int(unit.get("duration_seconds") or 8)
+    effective_max_duration = max(effective_supported_durations) if effective_supported_durations else max_duration
+    constrained_refs, effective_duration, warnings = _apply_provider_constraints(
+        provider=provider_name,
+        model=model_name,
+        max_refs=max_refs,
+        max_duration=effective_max_duration,
+        references=source_refs,
+        duration_seconds=base_duration,
+    )
+    coerced_duration, duration_warning = coerce_video_duration_for_options(
+        effective_duration,
+        effective_supported_durations,
+    )
+    if coerced_duration is not None:
+        effective_duration = coerced_duration
+    if duration_warning:
+        route_warnings.append(duration_warning)
+    if route_warnings:
+        warnings = [*route_warnings, *warnings]
+        version_metadata["generation_route_warnings"] = route_warnings
+        route_meta = version_metadata.get("generation_route")
+        if isinstance(route_meta, dict):
+            route_meta["warnings"] = route_warnings
+            route_meta["supported_resolutions"] = supported_resolutions
+    assert_duration_supported(effective_duration, effective_supported_durations)
+    _sync_generation_route_duration_metadata(
+        version_metadata,
+        duration_seconds=effective_duration,
+        supported_durations=effective_supported_durations,
+        duration_resolution_constraints=duration_resolution_constraints,
+    )
 
     # 6. 渲染 prompt（@→[图N]）。必须按 `constrained_refs` 的长度裁 `unit.references`
     #    再渲染，保证 [图N] 的 1-based 索引与 backend 实际收到的 reference_images
@@ -266,8 +381,9 @@ async def execute_reference_video_task(
         unit_for_prompt = {**unit, "references": unit_refs[: len(constrained_refs)]}
     rendered_prompt = _render_unit_prompt(unit_for_prompt)
 
-    # 7. 压缩到临时文件（2048px/q=85）→ 首次调用
-    tmp_refs: list[Path] = await asyncio.to_thread(_compress_references_to_tempfiles, constrained_refs)
+    # 7. 首次调用直接传源资产图，让统一输入图准备层记录真实源路径/MIME。
+    #    请求体过大时仍从源图重试，只调整准备层参数，避免临时 JPEG 被二次压缩。
+    tmp_refs: list[Path] = []
     output_path: Path | None = None
     version = 0
     video_uri: str | None = None
@@ -277,32 +393,28 @@ async def execute_reference_video_task(
                 prompt=rendered_prompt,
                 resource_type="reference_videos",
                 resource_id=resource_id,
-                reference_images=tmp_refs,
+                reference_images=constrained_refs,
                 aspect_ratio=project.get("aspect_ratio", "9:16"),
                 duration_seconds=effective_duration,
                 resolution=resolution,
                 task_id=task_id,
+                **version_metadata,
             )
         except RequestPayloadTooLargeError:
             # 二次压缩重试（1024px/q=70）
-            for p in tmp_refs:
-                p.unlink(missing_ok=True)
-            tmp_refs = await asyncio.to_thread(
-                _compress_references_to_tempfiles,
-                constrained_refs,
-                long_edge=1024,
-                quality=70,
-            )
             warnings.append({"key": "ref_payload_too_large", "params": {}})
             output_path, version, _, video_uri = await generator.generate_video_async(
                 prompt=rendered_prompt,
                 resource_type="reference_videos",
                 resource_id=resource_id,
-                reference_images=tmp_refs,
+                reference_images=constrained_refs,
                 aspect_ratio=project.get("aspect_ratio", "9:16"),
                 duration_seconds=effective_duration,
                 resolution=resolution,
                 task_id=task_id,
+                provider_input_max_long_edge=1024,
+                provider_input_jpeg_quality=70,
+                **version_metadata,
             )
     finally:
         for p in tmp_refs:
@@ -322,6 +434,7 @@ async def execute_reference_video_task(
         video_uri=video_uri,
         generator=generator,
         warnings=warnings,
+        version_metadata=version_metadata,
     )
 
 
@@ -336,9 +449,11 @@ async def _finalize_reference_video_unit(
     video_uri: str | None,
     generator: Any,
     warnings: list[dict[str, Any]] | None = None,
+    version_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normal + resume 共用：抽缩略图、写 unit.generated_assets、返回 result dict。"""
     warnings = warnings if warnings is not None else []
+    version_metadata = version_metadata or {}
 
     thumb_dir = project_path / "reference_videos" / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -388,4 +503,5 @@ async def _finalize_reference_video_unit(
         "resource_id": resource_id,
         "video_uri": video_uri,
         "warnings": warnings,
+        **version_metadata,
     }

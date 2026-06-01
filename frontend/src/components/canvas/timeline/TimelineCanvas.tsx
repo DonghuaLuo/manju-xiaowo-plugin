@@ -13,6 +13,7 @@ import type {
   NarrationSegment,
   DramaScene,
   ProjectData,
+  GenerationQuality,
 } from "@/types";
 
 type Segment = NarrationSegment | DramaScene;
@@ -31,8 +32,16 @@ interface TimelineCanvasProps {
     value?: unknown,
     scriptFile?: string,
   ) => void | Promise<void>;
-  onGenerateStoryboard?: (segmentId: string, scriptFile?: string) => void;
-  onGenerateVideo?: (segmentId: string, scriptFile?: string) => void;
+  onGenerateStoryboard?: (
+    segmentId: string,
+    scriptFile?: string,
+    quality?: GenerationQuality,
+  ) => void;
+  onGenerateVideo?: (
+    segmentId: string,
+    scriptFile?: string,
+    quality?: GenerationQuality,
+  ) => void;
   durationOptions?: number[];
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
@@ -150,8 +159,10 @@ export function TimelineCanvas({
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => onUpdatePrompt?.(segId, fieldOrPatch, value, scriptFile);
-  const handleGenSb = (segId: string) => onGenerateStoryboard?.(segId, scriptFile);
-  const handleGenVid = (segId: string) => onGenerateVideo?.(segId, scriptFile);
+  const handleGenSb = (segId: string, quality?: GenerationQuality) =>
+    onGenerateStoryboard?.(segId, scriptFile, quality);
+  const handleGenVid = (segId: string, quality?: GenerationQuality) =>
+    onGenerateVideo?.(segId, scriptFile, quality);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">

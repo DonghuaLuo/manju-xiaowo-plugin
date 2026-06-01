@@ -278,8 +278,18 @@ def video_prompt_to_yaml(
     ordered = {
         "Action": video_prompt["action"],
         "Camera_Motion": video_prompt["camera_motion"],
-        "Ambiance_Audio": video_prompt.get("ambiance_audio", ""),
     }
+    optional_motion_fields = (
+        ("subject_motion", "Subject_Motion"),
+        ("emotion", "Emotion"),
+        ("environment_motion", "Environment_Motion"),
+        ("ambiance_audio", "Ambiance_Audio"),
+        ("avoid", "Avoid"),
+    )
+    for source_key, yaml_key in optional_motion_fields:
+        value = _clean_text(video_prompt.get(source_key))
+        if value:
+            ordered[yaml_key] = value
 
     if profiles and dialogue:
         ordered["Visible_Characters"] = [_speaker_profile_to_yaml(p, prompt_policy) for p in profiles if p.get("name")]

@@ -72,6 +72,26 @@ class TestPromptUtils:
         assert parsed["Visible_Characters"][1]["Name"] == "阿城"
         assert "阿城保持闭嘴不说话" in parsed["Dialogue"][0]["Mouth_Cue"]
 
+    def test_video_prompt_to_yaml_keeps_only_motion_relevant_optional_fields(self):
+        prompt = {
+            "action": "主角向前一步",
+            "camera_motion": "Zoom In",
+            "subject_motion": "手指轻微颤抖",
+            "emotion": "压抑愤怒",
+            "environment_motion": "窗帘被风吹动",
+            "avoid": "不要改变角色服装",
+            "ambiance_audio": "",
+            "dialogue": [],
+        }
+
+        parsed = yaml.safe_load(video_prompt_to_yaml(prompt))
+
+        assert parsed["Subject_Motion"] == "手指轻微颤抖"
+        assert parsed["Emotion"] == "压抑愤怒"
+        assert parsed["Environment_Motion"] == "窗帘被风吹动"
+        assert parsed["Avoid"] == "不要改变角色服装"
+        assert "Ambiance_Audio" not in parsed
+
     def test_video_prompt_policy_omits_audio_hints_when_model_has_no_audio(self):
         prompt = {
             "action": "小月抬头说话",

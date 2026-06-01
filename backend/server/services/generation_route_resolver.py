@@ -1,0 +1,708 @@
+"""Resolve draft/final generation routes without breaking legacy settings."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from lib.config.registry import PROVIDER_REGISTRY
+from lib.config.resolver import ConfigResolver, ProviderModel
+from server.services.resolution_resolver import resolve_resolution
+
+GenerationQuality = Literal["draft", "final", "custom"]
+ImageCapability = Literal["t2i", "i2i"]
+MediaType = Literal["image", "video"]
+
+
+PROFILED_TASK_KINDS = frozenset({"character", "scene", "prop", "storyboard", "grid", "video", "reference_video"})
+ROUTE_TRIGGER_KEYS = frozenset(
+    {
+        "quality",
+        "generation_quality",
+        "generation_profile",
+        "resolution",
+        "source_version",
+        "generate_audio",
+        "service_tier",
+        "video_backend",
+    }
+)
+
+
+@dataclass(frozen=True)
+class GenerationRoute:
+    """Resolved generation route passed to task execution."""
+
+    task_kind: str
+    media_type: MediaType
+    quality: GenerationQuality | None
+    profile_key: str | None
+    provider_id: str
+    model_id: str
+    resolution: str | None = None
+    duration_seconds: int | None = None
+    generate_audio: bool | None = None
+    service_tier: str = "default"
+    seed: int | None = None
+    supported_resolutions: list[str] = field(default_factory=list)
+    supported_durations: list[int] = field(default_factory=list)
+    duration_resolution_constraints: dict[str, list[int]] = field(default_factory=dict)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+    effective_payload: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def default_generation_profiles() -> dict[str, dict[str, Any]]:
+    """Return the built-in profile schema used by newly migrated projects."""
+
+    return {
+        "asset": {
+            "image_provider_t2i": None,
+            "image_provider_i2i": None,
+            "resolution": "2K",
+        },
+        "storyboard_draft": {
+            "image_provider_t2i": None,
+            "image_provider_i2i": None,
+            "resolution": "1K",
+        },
+        "storyboard_final": {
+            "image_provider_t2i": None,
+            "image_provider_i2i": None,
+            "resolution": "2K",
+        },
+        "grid": {
+            "image_provider_t2i": None,
+            "image_provider_i2i": None,
+            "resolution": "2K",
+        },
+        "video_draft": {
+            "video_backend": None,
+            "resolution": "720p",
+            "duration_seconds": None,
+            "generate_audio": False,
+            "service_tier": "default",
+        },
+        "video_final": {
+            "video_backend": None,
+            "resolution": "1080p",
+            "duration_seconds": None,
+            "generate_audio": True,
+            "service_tier": "default",
+        },
+        "reference_video_draft": {
+            "video_backend": None,
+            "resolution": "720p",
+            "duration_seconds": None,
+            "generate_audio": False,
+            "service_tier": "default",
+        },
+        "reference_video_final": {
+            "video_backend": None,
+            "resolution": "1080p",
+            "duration_seconds": None,
+            "generate_audio": True,
+            "service_tier": "default",
+        },
+    }
+
+
+def compact_generation_payload(values: dict[str, Any]) -> dict[str, Any]:
+    """Drop unset generation override fields before enqueuing."""
+
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def split_backend_pair(raw: object) -> tuple[str, str] | None:
+    """Parse ``provider/model`` style backend values."""
+
+    if not isinstance(raw, str) or "/" not in raw:
+        return None
+    provider, model = raw.split("/", 1)
+    provider = provider.strip()
+    model = model.strip()
+    if not provider or not model:
+        return None
+    return provider, model
+
+
+def normalize_generation_quality(raw: object) -> GenerationQuality | None:
+    """Normalize request quality values to the small stable enum."""
+
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    if value in {"draft", "final", "custom"}:
+        return value  # type: ignore[return-value]
+    return None
+
+
+def default_quality_for_task(task_kind: str) -> GenerationQuality:
+    """Default profile quality once a project opts into generation_profiles."""
+
+    if task_kind in {"storyboard", "video", "reference_video"}:
+        return "draft"
+    return "final"
+
+
+def profile_key_for(task_kind: str, quality: GenerationQuality | None) -> str | None:
+    """Map task + quality to a generation profile key."""
+
+    if quality == "custom":
+        return None
+    if task_kind in {"character", "scene", "prop"}:
+        return "asset"
+    if task_kind == "storyboard" and quality in {"draft", "final"}:
+        return f"storyboard_{quality}"
+    if task_kind == "grid" and quality in {"draft", "final"}:
+        return "grid"
+    if task_kind == "video" and quality in {"draft", "final"}:
+        return f"video_{quality}"
+    if task_kind == "reference_video" and quality in {"draft", "final"}:
+        return f"reference_video_{quality}"
+    return None
+
+
+def normalize_task_quality(task_kind: str, quality: GenerationQuality | None) -> GenerationQuality | None:
+    """Apply task-specific quality semantics."""
+
+    if task_kind == "grid" and quality in {"draft", "final"}:
+        return "final"
+    return quality
+
+
+def should_resolve_generation_route(project: dict | None, payload: dict | None) -> bool:
+    """Return True only when new routing inputs are present."""
+
+    if project and isinstance(project.get("generation_profiles"), dict):
+        return True
+    if not payload:
+        return False
+    return any(key in payload for key in ROUTE_TRIGGER_KEYS)
+
+
+def merged_generation_profiles(project: dict | None) -> dict[str, dict[str, Any]]:
+    """Merge project profiles over the built-in schema."""
+
+    profiles = {key: dict(value) for key, value in default_generation_profiles().items()}
+    raw_profiles = project.get("generation_profiles") if isinstance(project, dict) else None
+    if isinstance(raw_profiles, dict):
+        for key, value in raw_profiles.items():
+            if isinstance(value, dict):
+                profiles[key] = {**profiles.get(key, {}), **value}
+    for key in _VIDEO_PROFILE_KEYS:
+        if key in profiles:
+            profiles[key] = _drop_quality_duration(key, profiles[key])
+    return profiles
+
+
+def _profile_for(
+    project: dict | None,
+    task_kind: str,
+    quality: GenerationQuality | None,
+) -> tuple[str | None, dict[str, Any]]:
+    if quality is None and project and isinstance(project.get("generation_profiles"), dict):
+        quality = default_quality_for_task(task_kind)
+    profile_key = profile_key_for(task_kind, quality)
+    if profile_key is None:
+        return None, {}
+    return profile_key, dict(merged_generation_profiles(project).get(profile_key) or {})
+
+
+def _without_none(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+_VIDEO_PROFILE_KEYS = frozenset({"video_draft", "video_final", "reference_video_draft", "reference_video_final"})
+_VIDEO_RESOLUTION_RANKS = {
+    "360p": 360,
+    "480p": 480,
+    "540p": 540,
+    "720p": 720,
+    "1024p": 1024,
+    "1080p": 1080,
+    "2k": 2000,
+    "4k": 4000,
+}
+
+
+def _drop_quality_duration(profile_key: str, profile: dict[str, Any]) -> dict[str, Any]:
+    """Draft/final profiles must not override the actual scene/unit duration."""
+
+    normalized = dict(profile)
+    if profile_key in _VIDEO_PROFILE_KEYS:
+        normalized.pop("duration_seconds", None)
+    return normalized
+
+
+def _merge_payload(profile: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any]:
+    merged = _without_none(profile)
+    if payload:
+        merged.update(payload)
+    return merged
+
+
+def _resolution_rank(value: str) -> int | None:
+    normalized = value.strip().lower()
+    if normalized in _VIDEO_RESOLUTION_RANKS:
+        return _VIDEO_RESOLUTION_RANKS[normalized]
+    if normalized.endswith("p"):
+        try:
+            return int(normalized[:-1])
+        except ValueError:
+            return None
+    if normalized.endswith("k"):
+        try:
+            return int(float(normalized[:-1]) * 1000)
+        except ValueError:
+            return None
+    return None
+
+
+def coerce_video_resolution_for_options(
+    resolution: str | None,
+    supported_resolutions: list[str] | tuple[str, ...] | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Return a provider-supported resolution, preferring the closest non-higher option."""
+
+    supported = [str(item).strip() for item in supported_resolutions or [] if str(item).strip()]
+    if not resolution or not supported or resolution in supported:
+        return resolution, None
+
+    requested_rank = _resolution_rank(resolution)
+    ranked = [(item, _resolution_rank(item)) for item in supported]
+    if requested_rank is None:
+        resolved = supported[-1]
+    else:
+        lower_or_equal = [item for item, rank in ranked if rank is not None and rank <= requested_rank]
+        if lower_or_equal:
+            resolved = max(lower_or_equal, key=lambda item: _resolution_rank(item) or -1)
+        else:
+            resolved = min(ranked, key=lambda item: item[1] if item[1] is not None else 10**9)[0]
+
+    return resolved, {
+        "key": "video_resolution_adjusted",
+        "params": {
+            "requested": resolution,
+            "resolved": resolved,
+            "supported": ", ".join(supported),
+        },
+    }
+
+
+def coerce_video_duration_for_options(
+    duration_seconds: int | None,
+    supported_durations: list[int] | tuple[int, ...] | None,
+) -> tuple[int | None, dict[str, Any] | None]:
+    """Return a provider-supported duration, choosing the nearest non-shorter value when possible."""
+
+    supported = sorted({int(item) for item in supported_durations or []})
+    if duration_seconds is None or not supported or duration_seconds in supported:
+        return duration_seconds, None
+
+    higher_or_equal = [item for item in supported if item >= duration_seconds]
+    resolved = higher_or_equal[0] if higher_or_equal else supported[-1]
+    return resolved, {
+        "key": "video_duration_adjusted",
+        "params": {
+            "requested": duration_seconds,
+            "resolved": resolved,
+            "supported": ", ".join(str(item) for item in supported),
+        },
+    }
+
+
+def _payload_resolution(payload: dict[str, Any] | None, profile: dict[str, Any]) -> str | None:
+    value = payload.get("resolution") if payload else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    profile_value = profile.get("resolution")
+    if isinstance(profile_value, str) and profile_value.strip():
+        return profile_value.strip()
+    return None
+
+
+def _to_int_or_none(raw: object) -> int | None:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer():
+        return None
+    return int(value)
+
+
+def _bool_or_none(raw: object) -> bool | None:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in {"true", "1", "yes", "on"}:
+            return True
+        if value in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _service_tier(payload: dict[str, Any] | None, profile: dict[str, Any]) -> str:
+    raw = payload.get("service_tier") if payload else None
+    if raw is None and payload:
+        settings = payload.get("video_provider_settings")
+        raw = settings.get("service_tier") if isinstance(settings, dict) else None
+    if raw is None:
+        raw = profile.get("service_tier")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return "default"
+
+
+def _model_default_duration(provider_id: str | None, model_id: str | None) -> int | None:
+    if not provider_id or not model_id:
+        return None
+    meta = PROVIDER_REGISTRY.get(provider_id)
+    model_info = meta.models.get(model_id) if meta else None
+    if not model_info or not model_info.supported_durations:
+        return None
+    return int(model_info.supported_durations[0])
+
+
+def duration_options_for_resolution(
+    supported_durations: list[int] | tuple[int, ...] | None,
+    duration_resolution_constraints: dict[str, list[int]] | None,
+    resolution: str | None,
+) -> list[int]:
+    """Return durations legal for the selected resolution.
+
+    ``supported_durations`` remains the broad model capability. Some providers
+    further restrict a resolution, e.g. Veo 1080p can be limited to 8s. When a
+    resolution-specific constraint exists it becomes the effective execution
+    guard; otherwise the broad list is kept.
+    """
+
+    base = [int(item) for item in supported_durations or []]
+    if not resolution or not duration_resolution_constraints:
+        return base
+
+    wanted = resolution.strip().lower()
+    constrained: list[int] | None = None
+    for key, values in duration_resolution_constraints.items():
+        if str(key).strip().lower() == wanted:
+            constrained = [int(item) for item in values or []]
+            break
+    if constrained is None:
+        return base
+    if not base:
+        return constrained
+    intersection = [item for item in base if item in constrained]
+    return intersection or constrained
+
+
+def _apply_video_backend_override(effective_payload: dict[str, Any], profile: dict[str, Any]) -> None:
+    """Translate video_backend into ConfigResolver's payload keys."""
+
+    payload_pair = split_backend_pair(effective_payload.get("video_backend"))
+    profile_pair = split_backend_pair(profile.get("video_backend"))
+    pair = payload_pair or profile_pair
+    if pair is None:
+        return
+    provider_id, model_id = pair
+    if not effective_payload.get("video_provider"):
+        effective_payload["video_provider"] = provider_id
+    if not effective_payload.get("video_model"):
+        effective_payload["video_model"] = model_id
+
+
+async def resolve_generation_route(
+    *,
+    project: dict | None,
+    payload: dict[str, Any] | None,
+    task_kind: str,
+    quality: object = None,
+    capability: ImageCapability | None = None,
+    resolver: ConfigResolver,
+    project_name: str | None = None,
+) -> GenerationRoute:
+    """Resolve provider/model and quality settings for a generation task."""
+
+    normalized_quality = normalize_generation_quality(quality)
+    if normalized_quality is None and isinstance(payload, dict):
+        normalized_quality = normalize_generation_quality(payload.get("generation_quality"))
+        if normalized_quality is None:
+            normalized_quality = normalize_generation_quality(payload.get("quality"))
+    if normalized_quality is None and project and isinstance(project.get("generation_profiles"), dict):
+        normalized_quality = default_quality_for_task(task_kind)
+    normalized_quality = normalize_task_quality(task_kind, normalized_quality)
+    profile_key, profile = _profile_for(project, task_kind, normalized_quality)
+    effective_payload = _merge_payload(profile, payload)
+
+    if task_kind in {"video", "reference_video"}:
+        return await _resolve_video_route(
+            project=project,
+            payload=payload,
+            task_kind=task_kind,
+            quality=normalized_quality,
+            profile_key=profile_key,
+            profile=profile,
+            effective_payload=effective_payload,
+            resolver=resolver,
+            project_name=project_name,
+        )
+
+    return await _resolve_image_route(
+        project=project,
+        payload=payload,
+        task_kind=task_kind,
+        quality=normalized_quality,
+        profile_key=profile_key,
+        profile=profile,
+        effective_payload=effective_payload,
+        resolver=resolver,
+        capability=capability or "t2i",
+    )
+
+
+async def _resolve_image_route(
+    *,
+    project: dict | None,
+    payload: dict[str, Any] | None,
+    task_kind: str,
+    quality: GenerationQuality | None,
+    profile_key: str | None,
+    profile: dict[str, Any],
+    effective_payload: dict[str, Any],
+    resolver: ConfigResolver,
+    capability: ImageCapability,
+) -> GenerationRoute:
+    resolved = await resolver.resolve_image_backend(project, effective_payload, capability=capability)
+    resolution = _payload_resolution(payload, profile)
+    if resolution is None:
+        resolution = await resolve_resolution(project or {}, resolved.provider_id, resolved.model_id)
+    metadata = _build_metadata(
+        task_kind=task_kind,
+        media_type="image",
+        quality=quality,
+        profile_key=profile_key,
+        resolved=resolved,
+        resolution=resolution,
+        source_version=payload.get("source_version") if payload else None,
+    )
+    return GenerationRoute(
+        task_kind=task_kind,
+        media_type="image",
+        quality=quality,
+        profile_key=profile_key,
+        provider_id=resolved.provider_id,
+        model_id=resolved.model_id,
+        resolution=resolution,
+        effective_payload=effective_payload,
+        metadata=metadata,
+    )
+
+
+async def _resolve_video_route(
+    *,
+    project: dict | None,
+    payload: dict[str, Any] | None,
+    task_kind: str,
+    quality: GenerationQuality | None,
+    profile_key: str | None,
+    profile: dict[str, Any],
+    effective_payload: dict[str, Any],
+    resolver: ConfigResolver,
+    project_name: str | None,
+) -> GenerationRoute:
+    _apply_video_backend_override(effective_payload, profile)
+    resolved = await resolver.resolve_video_backend(project, effective_payload)
+
+    warnings: list[dict[str, Any]] = []
+    supported_resolutions: list[str] = []
+    supported_durations: list[int] = []
+    duration_resolution_constraints: dict[str, list[int]] = {}
+    supports_generate_audio: bool | None = None
+    supports_seed: bool | None = None
+    service_tiers: list[str] = []
+    try:
+        caps = await resolver.video_capabilities_for_model(resolved.provider_id, resolved.model_id, project)
+        supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
+        supported_durations = [int(item) for item in caps.get("supported_durations") or []]
+        duration_resolution_constraints = {
+            str(key): [int(item) for item in value or []]
+            for key, value in (caps.get("duration_resolution_constraints") or {}).items()
+        }
+        supports_generate_audio = bool(caps["supports_generate_audio"]) if "supports_generate_audio" in caps else None
+        supports_seed = bool(caps["supports_seed"]) if "supports_seed" in caps else None
+        service_tiers = [str(item) for item in caps.get("service_tiers") or [] if str(item)]
+    except Exception:
+        supported_resolutions = []
+        supported_durations = []
+        duration_resolution_constraints = {}
+        supports_generate_audio = None
+        supports_seed = None
+        service_tiers = []
+
+    resolution = _payload_resolution(payload, profile)
+    if resolution is None:
+        resolution = await resolve_resolution(project or {}, resolved.provider_id, resolved.model_id)
+    resolution, resolution_warning = coerce_video_resolution_for_options(resolution, supported_resolutions)
+    if resolution_warning:
+        warnings.append(resolution_warning)
+    effective_supported_durations = duration_options_for_resolution(
+        supported_durations,
+        duration_resolution_constraints,
+        resolution,
+    )
+
+    duration_seconds = _to_int_or_none(payload.get("duration_seconds") if payload else None)
+    if duration_seconds is None:
+        duration_seconds = _to_int_or_none(profile.get("duration_seconds"))
+    if duration_seconds is None and task_kind != "reference_video" and project:
+        duration_seconds = _to_int_or_none(project.get("default_duration"))
+    if duration_seconds is None and task_kind != "reference_video":
+        duration_seconds = (
+            effective_supported_durations[0]
+            if effective_supported_durations
+            else _model_default_duration(
+                resolved.provider_id,
+                resolved.model_id,
+            )
+        )
+    if duration_seconds is not None:
+        duration_seconds, duration_warning = coerce_video_duration_for_options(
+            duration_seconds,
+            effective_supported_durations,
+        )
+        if duration_warning:
+            warnings.append(duration_warning)
+
+    generate_audio = _bool_or_none(payload.get("generate_audio") if payload else None)
+    if generate_audio is None:
+        generate_audio = _bool_or_none(profile.get("generate_audio"))
+    if generate_audio is None and project_name:
+        generate_audio = await resolver.video_generate_audio(project_name)
+    if generate_audio and supports_generate_audio is False:
+        warnings.append(
+            {
+                "key": "video_generate_audio_disabled",
+                "params": {
+                    "provider": resolved.provider_id,
+                    "model": resolved.model_id,
+                },
+            }
+        )
+        generate_audio = False
+
+    service_tier = _service_tier(payload, profile)
+    if service_tiers and service_tier not in service_tiers:
+        resolved_tier = service_tiers[0]
+        warnings.append(
+            {
+                "key": "video_service_tier_adjusted",
+                "params": {
+                    "requested": service_tier,
+                    "resolved": resolved_tier,
+                    "supported": ", ".join(service_tiers),
+                },
+            }
+        )
+        service_tier = resolved_tier
+    seed = _to_int_or_none(payload.get("seed") if payload else None)
+    if seed is None:
+        seed = _to_int_or_none(profile.get("seed"))
+    if seed is not None and supports_seed is False:
+        warnings.append(
+            {
+                "key": "video_seed_ignored",
+                "params": {
+                    "provider": resolved.provider_id,
+                    "model": resolved.model_id,
+                },
+            }
+        )
+        seed = None
+
+    metadata = _build_metadata(
+        task_kind=task_kind,
+        media_type="video",
+        quality=quality,
+        profile_key=profile_key,
+        resolved=resolved,
+        resolution=resolution,
+        duration_seconds=duration_seconds,
+        generate_audio=generate_audio,
+        service_tier=service_tier,
+        seed=seed,
+        supported_resolutions=supported_resolutions,
+        supported_durations=effective_supported_durations,
+        duration_resolution_constraints=duration_resolution_constraints,
+        warnings=warnings,
+        source_version=payload.get("source_version") if payload else None,
+    )
+    return GenerationRoute(
+        task_kind=task_kind,
+        media_type="video",
+        quality=quality,
+        profile_key=profile_key,
+        provider_id=resolved.provider_id,
+        model_id=resolved.model_id,
+        resolution=resolution,
+        duration_seconds=duration_seconds,
+        generate_audio=generate_audio,
+        service_tier=service_tier,
+        seed=seed,
+        supported_resolutions=supported_resolutions,
+        supported_durations=effective_supported_durations,
+        duration_resolution_constraints=duration_resolution_constraints,
+        warnings=warnings,
+        effective_payload=effective_payload,
+        metadata=metadata,
+    )
+
+
+def _build_metadata(
+    *,
+    task_kind: str,
+    media_type: MediaType,
+    quality: GenerationQuality | None,
+    profile_key: str | None,
+    resolved: ProviderModel,
+    resolution: str | None,
+    duration_seconds: int | None = None,
+    generate_audio: bool | None = None,
+    service_tier: str | None = None,
+    seed: int | None = None,
+    supported_resolutions: list[str] | None = None,
+    supported_durations: list[int] | None = None,
+    duration_resolution_constraints: dict[str, list[int]] | None = None,
+    warnings: list[dict[str, Any]] | None = None,
+    source_version: object = None,
+) -> dict[str, Any]:
+    route = compact_generation_payload(
+        {
+            "task_kind": task_kind,
+            "media_type": media_type,
+            "provider": resolved.provider_id,
+            "model": resolved.model_id,
+            "resolution": resolution,
+            "duration_seconds": duration_seconds,
+            "generate_audio": generate_audio,
+            "service_tier": service_tier,
+            "seed": seed,
+            "supported_resolutions": supported_resolutions,
+            "supported_durations": supported_durations,
+            "duration_resolution_constraints": duration_resolution_constraints,
+            "warnings": warnings or None,
+        }
+    )
+    return compact_generation_payload(
+        {
+            "generation_quality": quality,
+            "generation_profile_key": profile_key,
+            "generation_route": route,
+            "generation_route_warnings": warnings or None,
+            "source_version": source_version,
+        }
+    )

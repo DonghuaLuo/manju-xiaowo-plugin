@@ -476,6 +476,10 @@ class TestVideoCapabilities:
         assert caps["supported_durations"] == list(range(1, 16))
         assert caps["max_duration"] == 15
         assert caps["max_reference_images"] == 7
+        assert caps["resolutions"] == ["480p", "720p"]
+        assert caps["supports_generate_audio"] is False
+        assert caps["supports_seed"] is False
+        assert caps["service_tiers"] == ["default"]
 
     async def test_registry_veo(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -497,6 +501,9 @@ class TestVideoCapabilities:
         assert caps["max_duration"] == 8
         # 来自 registry ModelInfo.max_reference_images，而不是 provider 粒度兜底。
         assert caps["max_reference_images"] == 3
+        assert caps["resolutions"] == ["720p", "1080p"]
+        assert caps["duration_resolution_constraints"] == {"1080p": [8]}
+        assert caps["supports_generate_audio"] is False
 
     async def test_registry_model_level_zero_reference_images_is_preserved(self):
         resolver = ConfigResolver.__new__(ConfigResolver)
@@ -604,7 +611,7 @@ class TestVideoCapabilities:
 
     async def test_registry_unknown_reference_image_limit_preserves_none(self, monkeypatch):
         """registry 未声明参考图上限时返回 None；不再按 provider/default 粗粒度兜底。"""
-        from lib.config.registry import ModelInfo, ProviderMeta, PROVIDER_REGISTRY
+        from lib.config.registry import PROVIDER_REGISTRY, ModelInfo, ProviderMeta
 
         monkeypatch.setitem(
             PROVIDER_REGISTRY,
@@ -670,6 +677,10 @@ class TestVideoCapabilities:
         assert caps["supported_durations"] == [5, 10]
         assert caps["max_duration"] == 10
         assert caps["max_reference_images"] == 0
+        assert caps["endpoint"] == "newapi-video"
+        assert caps["endpoint_family"] == "newapi"
+        assert caps["supports_seed"] is True
+        assert caps["supports_generate_audio"] is False
 
 
 class TestResolveImageBackend:

@@ -27,6 +27,24 @@ function getImagePreviewHeightClass(
   return "h-64";
 }
 
+function qualityLabel(t: (key: string) => string, quality?: VersionInfo["generation_quality"]): string | null {
+  if (quality === "draft") return t("episode_status_label_draft");
+  if (quality === "final") return t("media_generate_video_final");
+  if (quality === "custom") return "Custom";
+  return null;
+}
+
+function versionMetaBadges(t: (key: string) => string, info: VersionInfo): string[] {
+  const route = info.generation_route;
+  return [
+    qualityLabel(t, info.generation_quality),
+    route?.resolution,
+    route?.duration_seconds != null ? `${route.duration_seconds}s` : null,
+    route?.provider && route.model ? `${route.provider}/${route.model}` : null,
+    route?.generate_audio === true ? t("generate_audio_label") : null,
+  ].filter((item): item is string => Boolean(item));
+}
+
 /** Find all scrollable ancestor elements. */
 function getScrollParents(el: HTMLElement): HTMLElement[] {
   const parents: HTMLElement[] = [];
@@ -272,6 +290,7 @@ export function VersionTimeMachine({
     selectedVersion != null
       ? versions.find((v) => v.version === selectedVersion) ?? null
       : null;
+  const selectedMetaBadges = selectedInfo ? versionMetaBadges(t, selectedInfo) : [];
 
   return (
     <div>
@@ -378,6 +397,19 @@ export function VersionTimeMachine({
                 {/* Preview area */}
                 {selectedInfo && (
                   <div className="rounded-xl border border-gray-700 bg-gray-950/80 p-2.5">
+                    {selectedMetaBadges.length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {selectedMetaBadges.map((badge) => (
+                          <span
+                            key={badge}
+                            className="max-w-full truncate rounded-full border border-gray-700 bg-gray-800/75 px-2 py-0.5 text-[10px] font-medium text-gray-300"
+                            title={badge}
+                          >
+                            {badge}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="text-[11px] font-medium text-gray-200">
                         v{selectedInfo.version}

@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { API } from "@/api";
 import { errMsg } from "@/utils/async";
-import type { ReferenceResource, ReferenceVideoUnit, TransitionType } from "@/types";
+import type { GenerationQuality, ReferenceResource, ReferenceVideoUnit, TransitionType } from "@/types";
 
 interface AddUnitPayload {
   prompt: string;
@@ -38,7 +38,12 @@ interface ReferenceVideoStore {
   patchUnit: (projectName: string, episode: number, unitId: string, patch: PatchUnitPayload) => Promise<ReferenceVideoUnit>;
   deleteUnit: (projectName: string, episode: number, unitId: string) => Promise<void>;
   reorderUnits: (projectName: string, episode: number, unitIds: string[]) => Promise<void>;
-  generate: (projectName: string, episode: number, unitId: string) => Promise<{ task_id: string; deduped: boolean }>;
+  generate: (
+    projectName: string,
+    episode: number,
+    unitId: string,
+    quality?: GenerationQuality,
+  ) => Promise<{ task_id: string; deduped: boolean }>;
   select: (unitId: string | null) => void;
 }
 
@@ -108,8 +113,8 @@ export const useReferenceVideoStore = create<ReferenceVideoStore>((set) => ({
     }));
   },
 
-  generate: async (projectName, episode, unitId) => {
-    return API.generateReferenceVideoUnit(projectName, episode, unitId);
+  generate: async (projectName, episode, unitId, quality = "draft") => {
+    return API.generateReferenceVideoUnit(projectName, episode, unitId, { quality });
   },
 
   select: (unitId) => set({ selectedUnitId: unitId }),

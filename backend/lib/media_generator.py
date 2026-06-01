@@ -15,6 +15,7 @@ MediaGenerator 中间层
 
 import asyncio
 import logging
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -31,6 +32,10 @@ from lib.usage_tracker import UsageTracker
 from lib.version_manager import VersionManager
 
 logger = logging.getLogger(__name__)
+
+_BASE64_INPUT_WARN_BYTES = 8 * 1024 * 1024
+_BASE64_INPUT_LIMIT_BYTES = 16 * 1024 * 1024
+_BASE64_SENSITIVE_VIDEO_PROVIDERS = frozenset({"vidu", "newapi", "v2-video-generations"})
 
 
 class MediaGenerator:
@@ -372,6 +377,15 @@ class MediaGenerator:
             duration_int = int(float(duration_seconds)) if duration_seconds else 8
         except (ValueError, TypeError):
             duration_int = 8
+        version_metadata.setdefault("video_motion_prompt_chars", len(prompt or ""))
+        try:
+            provider_input_max_long_edge = int(version_metadata.pop("provider_input_max_long_edge", 2048))
+        except (TypeError, ValueError):
+            provider_input_max_long_edge = 2048
+        try:
+            provider_input_jpeg_quality = int(version_metadata.pop("provider_input_jpeg_quality", 90))
+        except (TypeError, ValueError):
+            provider_input_jpeg_quality = 90
 
         # 1. 若已存在，确保旧文件被记录
         if output_path.exists():
@@ -445,15 +459,98 @@ class MediaGenerator:
                         self._video_backend.name,
                     )
 
+            from lib.image_utils import PreparedProviderImage, prepare_provider_image_input
+
+            prepared_inputs: dict[str, Any] = {}
+            prepared_images: list[PreparedProviderImage] = []
+            provider_temp_dir = Path(tempfile.gettempdir()) / "manju-provider-inputs" / self.project_name
+
+            def _prepare_image_path(value: str | Path | None, purpose: str) -> Path | None:
+                if value is None:
+                    return None
+                path = Path(value)
+                if not path.exists():
+                    return path
+                prepared = prepare_provider_image_input(
+                    path,
+                    purpose=purpose,
+                    temp_dir=provider_temp_dir,
+                    max_long_edge=provider_input_max_long_edge,
+                    jpeg_quality=provider_input_jpeg_quality,
+                )
+                prepared_images.append(prepared)
+                return prepared.path
+
+            prepared_start_image = (
+                _prepare_image_path(start_image, "video-start") if isinstance(start_image, (str, Path)) else None
+            )
+            prepared_end_image = _prepare_image_path(actual_end_image, "video-end")
+            prepared_reference_images: list[Path] | None = None
+            if actual_reference_images:
+                prepared_reference_images = [
+                    _prepare_image_path(ref, f"video-reference-{idx + 1}") or Path(ref)
+                    for idx, ref in enumerate(actual_reference_images)
+                ]
+
+            if prepared_images:
+                metadata_by_purpose: dict[str, Any] = {}
+                reference_metadata: list[dict[str, Any]] = []
+                for prepared in prepared_images:
+                    item = prepared.to_metadata()
+                    if prepared.purpose.startswith("video-reference-"):
+                        reference_metadata.append(item)
+                    else:
+                        metadata_by_purpose[prepared.purpose] = item
+                if "video-start" in metadata_by_purpose:
+                    prepared_inputs["start_image"] = metadata_by_purpose["video-start"]
+                if "video-end" in metadata_by_purpose:
+                    prepared_inputs["end_image"] = metadata_by_purpose["video-end"]
+                if reference_metadata:
+                    prepared_inputs["reference_images"] = reference_metadata
+
+                total_base64_bytes = sum(item.estimated_base64_bytes for item in prepared_images)
+                input_payload = {
+                    "total_images": len(prepared_images),
+                    "estimated_base64_bytes": total_base64_bytes,
+                    "warn_threshold_bytes": _BASE64_INPUT_WARN_BYTES,
+                    "limit_threshold_bytes": _BASE64_INPUT_LIMIT_BYTES,
+                    "cleanup_policy": "delete_on_success_keep_on_failure",
+                    "provider": provider_name,
+                    "model": model_name,
+                    "max_long_edge": provider_input_max_long_edge,
+                    "jpeg_quality": provider_input_jpeg_quality,
+                }
+                version_metadata.setdefault("provider_input_images", prepared_inputs)
+                version_metadata.setdefault("provider_input_payload", input_payload)
+                logger.info(
+                    "视频供应商输入图已准备 provider=%s model=%s images=%d estimated_base64=%.1fMB",
+                    provider_name,
+                    model_name,
+                    len(prepared_images),
+                    total_base64_bytes / 1024 / 1024,
+                )
+                if provider_name in _BASE64_SENSITIVE_VIDEO_PROVIDERS and total_base64_bytes > _BASE64_INPUT_WARN_BYTES:
+                    logger.warning(
+                        "视频供应商 %s 的图片输入预估 base64 大小 %.1fMB，可能触发请求体限制",
+                        provider_name,
+                        total_base64_bytes / 1024 / 1024,
+                    )
+                if provider_name in _BASE64_SENSITIVE_VIDEO_PROVIDERS and total_base64_bytes > _BASE64_INPUT_LIMIT_BYTES:
+                    raise ValueError(
+                        f"{provider_name} 视频输入图预估 base64 大小 "
+                        f"{total_base64_bytes / 1024 / 1024:.1f}MB，超过预检上限 "
+                        f"{_BASE64_INPUT_LIMIT_BYTES / 1024 / 1024:.0f}MB；请减少参考图或降低输入图尺寸后重试。"
+                    )
+
             request = VideoGenerationRequest(
                 prompt=prompt,
                 output_path=output_path,
                 aspect_ratio=aspect_ratio,
                 duration_seconds=duration_int,
                 resolution=resolution,
-                start_image=Path(start_image) if isinstance(start_image, (str, Path)) else None,
-                end_image=actual_end_image,
-                reference_images=actual_reference_images,
+                start_image=prepared_start_image,
+                end_image=prepared_end_image,
+                reference_images=prepared_reference_images,
                 generate_audio=effective_generate_audio,
                 project_name=self.project_name,
                 task_id=task_id,
@@ -464,6 +561,19 @@ class MediaGenerator:
             result = await self._video_backend.generate(request)
             video_ref = None
             video_uri = result.video_uri
+
+            if prepared_images:
+                cleaned = 0
+                for item in prepared_images:
+                    try:
+                        item.path.unlink(missing_ok=True)
+                        cleaned += 1
+                    except OSError:
+                        logger.warning("清理视频供应商临时输入图失败: %s", item.path, exc_info=True)
+                payload_meta = version_metadata.get("provider_input_payload")
+                if isinstance(payload_meta, dict):
+                    payload_meta["cleaned_up"] = cleaned
+                    payload_meta["retained_on_failure"] = False
 
             # Track usage with provider info
             await self.usage_tracker.finish_call(

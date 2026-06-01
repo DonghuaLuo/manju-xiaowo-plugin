@@ -3,7 +3,7 @@ import { Film, Loader2, Sparkles, RotateCcw, AlertTriangle } from "lucide-react"
 import { API } from "@/api";
 import { formatCost } from "@/utils/cost-format";
 import { StatusBadge, deriveUnitStatus } from "./unit-status";
-import type { CostBreakdown, ReferenceVideoUnit, UnitStatus } from "@/types";
+import type { CostBreakdown, GenerationQuality, ReferenceVideoUnit, UnitStatus } from "@/types";
 
 export interface UnitPreviewPanelProps {
   unit: ReferenceVideoUnit | null;
@@ -17,7 +17,7 @@ export interface UnitPreviewPanelProps {
   estimatedCost?: CostBreakdown;
   /** Actual already-spent cost; rendered in the metadata block. */
   actualCost?: CostBreakdown;
-  onGenerate?: (unitId: string) => void;
+  onGenerate?: (unitId: string, quality: GenerationQuality) => void;
 }
 
 function hasCost(b: CostBreakdown | undefined): boolean {
@@ -56,11 +56,14 @@ export function UnitPreviewPanel({
   const inFlight =
     effectiveStatus === "running" || (effectiveStatus === "ready" && !videoUrl);
 
-  const ctaLabel = ready
-    ? t("reference_preview_regenerate")
+  const draftCtaLabel = ready
+    ? t("reference_preview_regenerate_draft")
     : failed
       ? t("reference_preview_retry")
-      : t("reference_preview_generate");
+      : t("reference_preview_generate_draft");
+  const finalCtaLabel = ready
+    ? t("reference_preview_regenerate_final")
+    : t("reference_preview_generate_final");
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto px-3.5 py-3.5">
@@ -148,38 +151,45 @@ export function UnitPreviewPanel({
         )}
       </div>
 
-      {onGenerate && (
+      {onGenerate && inFlight && (
         <button
           type="button"
-          onClick={() => onGenerate(unit.unit_id)}
-          disabled={inFlight}
-          className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-semibold transition-colors ${
-            inFlight
-              ? "cursor-not-allowed border border-[var(--color-hairline)] bg-[oklch(0.22_0.011_265_/_0.6)] text-[var(--color-text-3)]"
-              : "text-[oklch(0.14_0_0)] [background:linear-gradient(180deg,var(--color-accent-2),var(--color-accent))] shadow-[inset_0_1px_0_oklch(1_0_0_/_0.3),0_4px_14px_-4px_var(--color-accent-glow)]"
-          }`}
+          disabled
+          className="focus-ring inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-[var(--color-hairline)] bg-[oklch(0.22_0.011_265_/_0.6)] px-3.5 py-2.5 text-sm font-semibold text-[var(--color-text-3)]"
         >
-          {inFlight ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              <span>{t("reference_preview_generating")}</span>
-            </>
-          ) : (
-            <>
-              {failed ? (
-                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              <span>{ctaLabel}</span>
-              {hasCost(estimatedCost) && (
-                <span className="ml-1 font-mono text-[11px] tabular-nums opacity-70">
-                  ≈ {formatCost(estimatedCost)}
-                </span>
-              )}
-            </>
-          )}
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          <span>{t("reference_preview_generating")}</span>
         </button>
+      )}
+
+      {onGenerate && !inFlight && (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onGenerate(unit.unit_id, "draft")}
+            className="focus-ring inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-[oklch(0.14_0_0)] transition-colors [background:linear-gradient(180deg,var(--color-accent-2),var(--color-accent))] shadow-[inset_0_1px_0_oklch(1_0_0_/_0.3),0_4px_14px_-4px_var(--color-accent-glow)]"
+          >
+            {failed ? (
+              <RotateCcw className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span>{draftCtaLabel}</span>
+            {hasCost(estimatedCost) && (
+              <span className="font-mono text-[11px] tabular-nums opacity-70">
+                ≈ {formatCost(estimatedCost)}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => onGenerate(unit.unit_id, "final")}
+            className="focus-ring inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-hairline)] bg-[oklch(0.22_0.011_265_/_0.6)] px-3 py-2.5 text-sm font-semibold text-[var(--color-text-2)] transition-colors hover:bg-[oklch(0.26_0.013_265_/_0.8)] hover:text-[var(--color-text)]"
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>{finalCtaLabel}</span>
+          </button>
+        </div>
       )}
 
       <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[oklch(0.18_0.010_265_/_0.5)] p-3">

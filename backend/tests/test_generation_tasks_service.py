@@ -6,6 +6,7 @@ import pytest
 from lib.video_backends.base import VideoCapability, VideoCapabilityError
 from server.services import generation_tasks
 from server.services.generation_tasks import assert_duration_supported
+from server.services.generation_route_resolver import default_generation_profiles
 
 
 class TestAssertDurationSupported:
@@ -269,7 +270,7 @@ class TestGenerationTasks:
 
         assert gemini_aistudio.supports_generated_audio is True
         assert openai.supports_generated_audio is False
-        assert grok.supports_generated_audio is True
+        assert grok.supports_generated_audio is False
         assert vidu.supports_generated_audio is True
         assert vidu.compact is True
         assert unknown.supports_generated_audio is False
@@ -479,8 +480,8 @@ class TestGenerationTasks:
         assert "Mouth_Cue" not in prompt
         assert "Speaking_Rules" not in prompt
 
-    async def test_execute_video_task_rejects_unsupported_duration(self, monkeypatch, tmp_path):
-        """执行层在解析出 ProviderModel 后，对越界 duration 以明确错误拒绝。"""
+    async def test_execute_video_task_coerces_unsupported_duration(self, monkeypatch, tmp_path):
+        """执行层在解析出 ProviderModel 后，把不支持的 duration 收敛到可生成值。"""
         project_path = _prepare_files(tmp_path)
         fake_pm = _FakePM(project_path)
         fake_generator = _FakeGenerator()
@@ -500,19 +501,17 @@ class TestGenerationTasks:
             _async_return({"supported_durations": [4, 6, 8], "default_duration": None}),
         )
 
-        with pytest.raises(VideoCapabilityError) as exc:
-            await generation_tasks.execute_video_task(
-                "demo",
-                "E1S01",
-                {
-                    "script_file": "episode_1.json",
-                    "prompt": {"action": "跑", "camera_motion": "Static", "dialogue": []},
-                    "duration_seconds": 5,
-                },
-            )
-        assert exc.value.code == "video_duration_not_supported"
-        # 越界 duration 在起跑时被拒，绝不应调用后端生成。
-        assert fake_generator.video_calls == []
+        await generation_tasks.execute_video_task(
+            "demo",
+            "E1S01",
+            {
+                "script_file": "episode_1.json",
+                "prompt": {"action": "跑", "camera_motion": "Static", "dialogue": []},
+                "duration_seconds": 5,
+            },
+        )
+        assert fake_generator.video_calls[0]["duration_seconds"] == 6
+        assert fake_generator.video_calls[0]["generation_route_warnings"][0]["key"] == "video_duration_adjusted"
 
     async def test_execute_video_task_supported_duration_passes(self, monkeypatch, tmp_path):
         """合法 duration 通过守卫，正常进入后端生成。"""
@@ -548,6 +547,58 @@ class TestGenerationTasks:
         )
         assert result["resource_type"] == "videos"
         assert fake_generator.video_calls[0]["duration_seconds"] == 8
+
+    async def test_execute_video_final_requires_non_draft_storyboard(self, monkeypatch, tmp_path):
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+        fake_pm.project["generation_profiles"] = default_generation_profiles()
+
+        class _DraftStoryboardGenerator(_FakeGenerator):
+            def get_versions(self, resource_type, resource_id):
+                if resource_type == "storyboards":
+                    return {
+                        "current_version": 1,
+                        "versions": [
+                            {
+                                "version": 1,
+                                "is_current": True,
+                                "generation_quality": "draft",
+                                "created_at": "2026-01-01T00:00:00Z",
+                            }
+                        ],
+                    }
+                return super().get_versions(resource_type, resource_id)
+
+        fake_generator = _DraftStoryboardGenerator()
+
+        from lib.config import resolver as resolver_mod
+        from lib.config.resolver import ProviderModel
+
+        monkeypatch.setattr(generation_tasks, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(generation_tasks, "get_media_generator", _async_return(fake_generator))
+        monkeypatch.setattr(generation_tasks, "extract_video_thumbnail", _async_return(None))
+        monkeypatch.setattr(generation_tasks, "emit_project_change_batch", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            resolver_mod.ConfigResolver, "resolve_video_backend", _async_return(ProviderModel("ark", "seedance"))
+        )
+        monkeypatch.setattr(
+            resolver_mod.ConfigResolver,
+            "video_capabilities_for_model",
+            _async_return({"supported_durations": [4, 6, 8], "resolutions": ["720p", "1080p"]}),
+        )
+
+        with pytest.raises(ValueError, match="最终版分镜"):
+            await generation_tasks.execute_video_task(
+                "demo",
+                "E1S01",
+                {
+                    "script_file": "episode_1.json",
+                    "prompt": {"action": "跑", "camera_motion": "Static", "dialogue": []},
+                    "quality": "final",
+                    "duration_seconds": 6,
+                },
+            )
+        assert fake_generator.video_calls == []
 
     async def test_execute_video_task_default_duration_from_caps(self, monkeypatch, tmp_path):
         """无显式 duration 时，默认值由 caps 收口（取 supported_durations[0]），且必然合法。"""
