@@ -2,7 +2,11 @@ import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, Plus, X } from "lucide-react";
 import { Popover } from "@/components/ui/Popover";
-import type { Dialogue } from "@/types";
+import {
+  DIALOGUE_SCREEN_POSITION_I18N_KEYS,
+  DIALOGUE_SCREEN_POSITIONS,
+} from "@/types";
+import type { Dialogue, DialogueScreenPosition } from "@/types";
 
 interface DialogueListEditorProps {
   dialogue: Dialogue[];
@@ -38,30 +42,58 @@ export function DialogueListEditor({
   return (
     <div className="flex flex-col gap-1.5">
       {dialogue.map((d, i) => (
-        <div key={i} className="flex items-start gap-1.5">
-          <SpeakerSelect
-            value={speakerOptions.includes(d.speaker) ? d.speaker : ""}
-            options={speakerOptions}
-            placeholder={t("speaker_placeholder")}
-            onChange={(speaker) => update(i, { speaker })}
-          />
-          <input
-            type="text"
-            value={d.line}
-            onChange={(e) => update(i, { line: e.target.value })}
-            placeholder={t("line_placeholder")}
-            className="dlg-input min-w-0 flex-1"
-          />
-          <button
-            type="button"
-            onClick={() => remove(i)}
-            aria-label={t("dialogue_remove")}
-            title={t("dialogue_remove")}
-            className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)]"
-            style={{ color: "var(--color-text-4)" }}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+        <div key={i} className="flex flex-col gap-1.5">
+          <div className="flex items-start gap-1.5">
+            <SpeakerSelect
+              value={speakerOptions.includes(d.speaker) ? d.speaker : ""}
+              options={speakerOptions}
+              placeholder={t("speaker_placeholder")}
+              onChange={(speaker) => update(i, { speaker })}
+            />
+            <input
+              type="text"
+              value={d.line}
+              onChange={(e) => update(i, { line: e.target.value })}
+              placeholder={t("line_placeholder")}
+              className="dlg-input min-w-0 flex-1"
+            />
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              aria-label={t("dialogue_remove")}
+              title={t("dialogue_remove")}
+              className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)]"
+              style={{ color: "var(--color-text-4)" }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-1.5 pl-0 sm:flex-row sm:items-start sm:pl-[102px]">
+            <input
+              type="text"
+              value={d.emotion ?? ""}
+              onChange={(e) => update(i, { emotion: e.target.value })}
+              placeholder={t("dialogue_emotion_placeholder")}
+              className="dlg-input min-w-0 flex-1"
+            />
+            <select
+              value={d.screen_position ?? ""}
+              onChange={(e) =>
+                update(i, {
+                  screen_position: e.target.value as DialogueScreenPosition,
+                })
+              }
+              aria-label={t("dialogue_position")}
+              className="dlg-input h-[30px] w-full shrink-0 px-2 py-0 text-[12px] sm:w-24"
+            >
+              {DIALOGUE_SCREEN_POSITIONS.map((position) => (
+                <option key={position || "unspecified"} value={position}>
+                  {t(DIALOGUE_SCREEN_POSITION_I18N_KEYS[position])}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       ))}
 

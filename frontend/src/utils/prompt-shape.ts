@@ -22,7 +22,7 @@ export function isStructuredImagePrompt(value: unknown): value is ImagePrompt {
 
 /**
  * 严格守卫：VideoPrompt 必须含 action + camera_motion + ambiance_audio；dialogue 可省略，
- * 但若提供必须是 {speaker, line} 数组。
+ * 但若提供必须是 {speaker, line} 数组，可附加 emotion / screen_position。
  */
 export function isStructuredVideoPrompt(value: unknown): value is VideoPrompt {
   if (
@@ -40,7 +40,9 @@ export function isStructuredVideoPrompt(value: unknown): value is VideoPrompt {
     (item) =>
       isRecord(item) &&
       typeof item.speaker === "string" &&
-      typeof item.line === "string",
+      typeof item.line === "string" &&
+      (item.emotion === undefined || typeof item.emotion === "string") &&
+      (item.screen_position === undefined || typeof item.screen_position === "string"),
   );
 }
 

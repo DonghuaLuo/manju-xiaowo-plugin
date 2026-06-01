@@ -40,6 +40,7 @@ class GrokVideoBackend:
         self._capabilities: set[VideoCapability] = {
             VideoCapability.TEXT_TO_VIDEO,
             VideoCapability.IMAGE_TO_VIDEO,
+            VideoCapability.GENERATE_AUDIO,
         }
 
     @property

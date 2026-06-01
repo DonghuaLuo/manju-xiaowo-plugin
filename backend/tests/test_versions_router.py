@@ -6,10 +6,11 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from server.auth import CurrentUserInfo, get_current_user
-from server.routers import versions
+from lib.prompt_utils import VideoPromptPolicy
 from lib.script_editor import ScriptEditError
 from lib.version_manager import VersionManager
+from server.auth import CurrentUserInfo, get_current_user
+from server.routers import versions
 
 
 class _FakePM:
@@ -495,6 +496,13 @@ class TestVersionsRouter:
         source = tmp_path / "external.mp4"
         source.write_bytes(b"video-data")
         fake_pm = _ExternalUploadPM(project_path)
+        fake_pm.project["characters"] = {"Alice": {"voice_style": "warm, calm voice"}}
+        fake_pm.script["segments"][0]["characters_in_segment"] = ["Alice"]
+        fake_pm.script["segments"][0]["video_prompt"] = {
+            "action": "Alice 回头说话",
+            "camera_motion": "Static",
+            "dialogue": [{"speaker": "Alice", "line": "快走", "emotion": "urgent"}],
+        }
 
         monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
         monkeypatch.setattr(versions, "get_version_manager", lambda name: VersionManager(project_path))
@@ -504,6 +512,11 @@ class TestVersionsRouter:
 
         monkeypatch.setattr(versions, "extract_video_thumbnail", _fake_thumbnail)
         monkeypatch.setattr(versions, "emit_project_change_batch", lambda *args, **kwargs: None)
+
+        async def _fake_video_prompt_policy(project, payload=None, *, project_name=None):
+            return VideoPromptPolicy(supports_generated_audio=False)
+
+        monkeypatch.setattr(versions, "resolve_video_prompt_policy", _fake_video_prompt_policy)
 
         upload = SimpleNamespace(
             filename="external.mp4",
@@ -525,3 +538,7 @@ class TestVersionsRouter:
         assert result["success"] is True
         assert current_path.read_bytes() == b"video-data"
         assert ("E1S01", "video_clip", result["file_path"]) in fake_pm.update_calls
+        stored_prompt = VersionManager(project_path).get_versions("videos", "E1S01")["versions"][-1]["prompt"]
+        assert "Voice_Style" not in stored_prompt
+        assert "Mouth_Cue" not in stored_prompt
+        assert "Speaking_Rules" not in stored_prompt

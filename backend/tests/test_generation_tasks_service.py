@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.video_backends.base import VideoCapabilityError
+from lib.video_backends.base import VideoCapability, VideoCapabilityError
 from server.services import generation_tasks
 from server.services.generation_tasks import assert_duration_supported
 
@@ -173,6 +173,13 @@ class _FakeGenerator:
         return {"versions": [{"created_at": "2026-01-01T00:00:00Z"}]}
 
 
+class _FakeVideoBackend:
+    def __init__(self, capabilities=(), name="openai", model="sora-2"):
+        self.capabilities = set(capabilities)
+        self.name = name
+        self.model = model
+
+
 def _prepare_files(tmp_path: Path):
     project_path = tmp_path / "projects" / "demo"
     (project_path / "storyboards").mkdir(parents=True, exist_ok=True)
@@ -212,10 +219,15 @@ class TestGenerationTasks:
                 "action": "行走",
                 "camera_motion": "",
                 "ambiance_audio": "风声",
-                "dialogue": [{"speaker": "Alice", "line": "hello"}],
-            }
+                "dialogue": [{"speaker": "Alice", "line": "hello", "emotion": "urgent", "screen_position": "left"}],
+            },
+            project={"characters": {"Alice": {"voice_style": "clear voice"}}},
+            target_item={"characters_in_scene": ["Alice"]},
         )
         assert "Camera_Motion" in video_yaml
+        assert "Voice_Style" in video_yaml
+        assert "clear voice" in video_yaml
+        assert "Emotion: urgent" in video_yaml
 
         with pytest.raises(ValueError):
             generation_tasks._normalize_video_prompt({"action": ""})
@@ -225,6 +237,60 @@ class TestGenerationTasks:
 
         with pytest.raises(ValueError):
             generation_tasks._normalize_video_prompt("   ")
+
+    def test_video_prompt_policy_from_backend_matches_model_audio_support(self):
+        no_audio = generation_tasks._video_prompt_policy_from_backend(
+            _FakeVideoBackend(capabilities=[], name="openai", model="sora-2")
+        )
+        with_audio = generation_tasks._video_prompt_policy_from_backend(
+            _FakeVideoBackend(capabilities=[VideoCapability.GENERATE_AUDIO], name="ark", model="doubao-seedance-2.0")
+        )
+        gemini_aistudio = generation_tasks._video_prompt_policy_from_backend(
+            _FakeVideoBackend(capabilities=[], name="gemini-aistudio", model="veo-3.1-lite-generate-preview")
+        )
+        compact = generation_tasks._video_prompt_policy_from_backend(
+            _FakeVideoBackend(capabilities=[VideoCapability.GENERATE_AUDIO], name="vidu", model="viduq3-pro")
+        )
+
+        assert no_audio.supports_generated_audio is False
+        assert with_audio.supports_generated_audio is True
+        assert gemini_aistudio.supports_generated_audio is True
+        assert compact.compact is True
+
+    def test_video_prompt_policy_from_provider_model_matches_registry(self):
+        gemini_aistudio = generation_tasks._video_prompt_policy_from_provider_model(
+            "gemini-aistudio",
+            "veo-3.1-lite-generate-preview",
+        )
+        openai = generation_tasks._video_prompt_policy_from_provider_model("openai", "sora-2")
+        grok = generation_tasks._video_prompt_policy_from_provider_model("grok", "grok-imagine-video")
+        vidu = generation_tasks._video_prompt_policy_from_provider_model("vidu", "viduq3-pro")
+        unknown = generation_tasks._video_prompt_policy_from_provider_model("unknown", "future-video")
+
+        assert gemini_aistudio.supports_generated_audio is True
+        assert openai.supports_generated_audio is False
+        assert grok.supports_generated_audio is True
+        assert vidu.supports_generated_audio is True
+        assert vidu.compact is True
+        assert unknown.supports_generated_audio is False
+
+    async def test_resolve_video_prompt_policy_uses_custom_backend_capabilities(self, monkeypatch):
+        from lib.config import resolver as resolver_mod
+        from lib.config.resolver import ProviderModel
+
+        custom_backend = _FakeVideoBackend(capabilities=[], name="custom-provider:1", model="sora-2")
+
+        monkeypatch.setattr(
+            resolver_mod.ConfigResolver,
+            "resolve_video_backend",
+            _async_return(ProviderModel("custom-provider:1", "sora-2")),
+        )
+        monkeypatch.setattr(generation_tasks, "is_custom_provider", lambda provider_id: provider_id == "custom-provider:1")
+        monkeypatch.setattr(generation_tasks, "_create_custom_backend", _async_return(custom_backend))
+
+        policy = await generation_tasks.resolve_video_prompt_policy({}, project_name="demo")
+
+        assert policy.supports_generated_audio is False
 
     async def test_execute_task_dispatch(self, tmp_path, monkeypatch):
         project_path = _prepare_files(tmp_path)
@@ -367,6 +433,51 @@ class TestGenerationTasks:
         asset_types = [call["asset_type"] for call in fake_pm.updated_assets]
         assert "video_thumbnail" in asset_types
         assert thumbnail_path.exists()
+
+    async def test_execute_video_task_uses_no_audio_prompt_policy(self, monkeypatch, tmp_path):
+        """不支持音频的模型不应收到 Voice_Style / Mouth_Cue 等音频口型提示。"""
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+        fake_pm.project["characters"]["Alice"]["voice_style"] = "clear and bright"
+        fake_pm.script["segments"][0]["characters_in_segment"] = ["Alice"]
+        fake_generator = _FakeGenerator()
+        fake_generator._video_backend = _FakeVideoBackend(capabilities=[], name="openai", model="sora-2")
+
+        from lib.config import resolver as resolver_mod
+        from lib.config.resolver import ProviderModel
+
+        monkeypatch.setattr(generation_tasks, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(generation_tasks, "get_media_generator", _async_return(fake_generator))
+        monkeypatch.setattr(generation_tasks, "resolve_resolution", _async_return("720p"))
+        monkeypatch.setattr(generation_tasks, "extract_video_thumbnail", _async_return(None))
+        monkeypatch.setattr(generation_tasks, "emit_project_change_batch", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            resolver_mod.ConfigResolver, "resolve_video_backend", _async_return(ProviderModel("openai", "sora-2"))
+        )
+        monkeypatch.setattr(
+            resolver_mod.ConfigResolver,
+            "video_capabilities_for_model",
+            _async_return({"supported_durations": [4], "default_duration": None}),
+        )
+
+        await generation_tasks.execute_video_task(
+            "demo",
+            "E1S01",
+            {
+                "script_file": "episode_1.json",
+                "prompt": {
+                    "action": "Alice looks up and speaks",
+                    "camera_motion": "Static",
+                    "dialogue": [{"speaker": "Alice", "line": "hello", "screen_position": "center"}],
+                },
+                "duration_seconds": 4,
+            },
+        )
+
+        prompt = fake_generator.video_calls[0]["prompt"]
+        assert "Voice_Style" not in prompt
+        assert "Mouth_Cue" not in prompt
+        assert "Speaking_Rules" not in prompt
 
     async def test_execute_video_task_rejects_unsupported_duration(self, monkeypatch, tmp_path):
         """执行层在解析出 ProviderModel 后，对越界 duration 以明确错误拒绝。"""

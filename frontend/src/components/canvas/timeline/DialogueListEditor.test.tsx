@@ -35,4 +35,30 @@ describe("DialogueListEditor", () => {
 
     expect(onChange).toHaveBeenCalledWith([{ speaker: "阿城", line: "我们走吧" }]);
   });
+
+  it("edits dialogue emotion and screen position", () => {
+    const onChange = vi.fn();
+
+    render(
+      <DialogueListEditor
+        dialogue={[{ speaker: "小月", line: "我们走吧" }]}
+        speakerOptions={["小月", "阿城"]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("情绪 / 语气"), {
+      target: { value: "紧张，压低声音" },
+    });
+    expect(onChange).toHaveBeenCalledWith([
+      { speaker: "小月", line: "我们走吧", emotion: "紧张，压低声音" },
+    ]);
+
+    fireEvent.change(screen.getByLabelText("画面位置"), {
+      target: { value: "left" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith([
+      { speaker: "小月", line: "我们走吧", screen_position: "left" },
+    ]);
+  });
 });

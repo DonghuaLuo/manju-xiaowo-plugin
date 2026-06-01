@@ -18,7 +18,7 @@ from lib.generation_queue_client import (
     enqueue_and_wait,
 )
 from lib.project_manager import ProjectManager
-from lib.prompt_utils import is_structured_video_prompt, video_prompt_to_yaml
+from lib.prompt_utils import is_structured_video_prompt
 from lib.reference_video import assemble_shots_text
 from lib.storyboard_sequence import get_storyboard_items
 from server.agent_runtime.sdk_tools._context import (
@@ -29,13 +29,13 @@ from server.agent_runtime.sdk_tools._context import (
 )
 
 
-def _get_video_prompt(item: dict[str, Any]) -> str:
+def _get_video_prompt(item: dict[str, Any]) -> str | dict[str, Any]:
     prompt = item.get("video_prompt")
     if not prompt:
         item_id = item.get("segment_id") or item.get("scene_id")
         raise ValueError(f"片段/场景缺少 video_prompt 字段: {item_id}")
     if is_structured_video_prompt(prompt):
-        return video_prompt_to_yaml(prompt)
+        return prompt
     if isinstance(prompt, dict):
         item_id = item.get("segment_id") or item.get("scene_id")
         raise ValueError(f"片段/场景 video_prompt 为对象但格式不符合结构化规范: {item_id}")
@@ -388,7 +388,7 @@ def generate_video_episode_tool(ctx: ToolContext):
                 )
 
             episode = ProjectManager.resolve_episode_from_script(script, script_filename)
-            items, id_field, _chars, _scenes, _props = get_storyboard_items(script)
+            items, id_field, _char_field, _scenes, _props = get_storyboard_items(script)
             content_mode = script.get("content_mode", "narration")
             if not items:
                 raise ValueError(f"第 {episode} 集剧本为空：{script_filename}")
@@ -475,7 +475,7 @@ def generate_video_scene_tool(ctx: ToolContext):
                     ctx=ctx, script=script, script_filename=script_filename, resume=False, log=log
                 )
 
-            items, id_field, _chars, _scenes, _props = get_storyboard_items(script)
+            items, id_field, _char_field, _scenes, _props = get_storyboard_items(script)
             item = next((s for s in items if s.get(id_field) == scene_id or s.get("scene_id") == scene_id), None)
             if not item:
                 raise ValueError(f"场景/片段 '{scene_id}' 不存在")

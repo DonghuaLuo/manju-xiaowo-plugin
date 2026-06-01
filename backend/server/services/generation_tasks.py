@@ -27,6 +27,8 @@ from lib.project_change_hints import emit_project_change_batch, project_change_s
 from lib.project_manager import ProjectManager
 from lib.prompt_builders import build_character_prompt, build_prop_prompt, build_scene_prompt
 from lib.prompt_utils import (
+    VideoPromptPolicy,
+    build_speaker_profiles,
     image_prompt_to_yaml,
     is_structured_image_prompt,
     is_structured_video_prompt,
@@ -387,7 +389,14 @@ def _normalize_storyboard_prompt(prompt: str | dict, style: str) -> str:
     return image_prompt_to_yaml(normalized_prompt, style)
 
 
-def _normalize_video_prompt(prompt: str | dict) -> str:
+def _normalize_video_prompt(
+    prompt: str | dict,
+    *,
+    project: dict | None = None,
+    target_item: dict | None = None,
+    char_field: str | None = None,
+    policy: VideoPromptPolicy | None = None,
+) -> str:
     """归一化视频 prompt 并在末尾追加统一文本化的反向提示词。"""
     from lib.prompt_builders import append_video_negative_tail
 
@@ -418,8 +427,15 @@ def _normalize_video_prompt(prompt: str | dict) -> str:
             continue
         speaker = str(item.get("speaker", "") or "").strip()
         line = str(item.get("line", "") or "").strip()
+        emotion = str(item.get("emotion", "") or "").strip()
+        screen_position = str(item.get("screen_position", "") or "").strip()
         if speaker or line:
-            normalized_dialogue.append({"speaker": speaker, "line": line})
+            normalized = {"speaker": speaker, "line": line}
+            if emotion:
+                normalized["emotion"] = emotion
+            if screen_position:
+                normalized["screen_position"] = screen_position
+            normalized_dialogue.append(normalized)
 
     normalized_prompt: dict[str, Any] = {
         "action": action_text,
@@ -427,7 +443,152 @@ def _normalize_video_prompt(prompt: str | dict) -> str:
         "ambiance_audio": str(prompt.get("ambiance_audio", "") or ""),
         "dialogue": normalized_dialogue,
     }
-    return append_video_negative_tail(video_prompt_to_yaml(normalized_prompt))
+    speaker_profiles = build_speaker_profiles(
+        project,
+        target_item,
+        char_field=char_field,
+        dialogue=normalized_dialogue,
+    )
+    return append_video_negative_tail(
+        video_prompt_to_yaml(normalized_prompt, speaker_profiles=speaker_profiles, policy=policy)
+    )
+
+
+_GENERATE_AUDIO_CAPABILITY = "generate_audio"
+_TRUTHY_VIDEO_AUDIO_VALUES = frozenset({"true", "1", "yes"})
+
+
+def _is_gemini_aistudio_veo(provider_name: str, model_name: str) -> bool:
+    return provider_name == "gemini-aistudio" and model_name.startswith("veo-")
+
+
+def _video_prompt_policy_with_audio_setting(policy: VideoPromptPolicy, generate_audio_enabled: bool) -> VideoPromptPolicy:
+    if generate_audio_enabled or not policy.supports_generated_audio:
+        return policy
+    return VideoPromptPolicy(
+        supports_generated_audio=False,
+        compact=policy.compact,
+        max_visible_characters=policy.max_visible_characters,
+        voice_style_max_chars=policy.voice_style_max_chars,
+        mouth_cue_silent_name_limit=policy.mouth_cue_silent_name_limit,
+    )
+
+
+def _video_prompt_policy_from_provider_model(provider_id: str | None, model_id: str | None) -> VideoPromptPolicy:
+    provider_key = str(provider_id or "")
+    model_key = str(model_id or "")
+    provider_name = provider_key.lower()
+    model_name = model_key.lower()
+    compact = "vidu" in provider_name or "vidu" in model_name
+
+    provider_meta = PROVIDER_REGISTRY.get(provider_key)
+    model_info = provider_meta.models.get(model_key) if provider_meta is not None else None
+    if model_info is None:
+        supports_generated_audio = False
+    else:
+        capability_values = {str(capability).lower() for capability in model_info.capabilities}
+        supports_generated_audio = _GENERATE_AUDIO_CAPABILITY in capability_values
+
+    if _is_gemini_aistudio_veo(provider_name, model_name):
+        supports_generated_audio = True
+
+    return VideoPromptPolicy(supports_generated_audio=supports_generated_audio, compact=compact)
+
+
+async def _video_prompt_policy_from_custom_provider(provider_id: str, model_id: str | None) -> VideoPromptPolicy:
+    compact = "vidu" in provider_id.lower() or "vidu" in str(model_id or "").lower()
+    try:
+        backend = await _create_custom_backend(provider_id, model_id, "video")
+    except Exception:
+        logger.warning("解析自定义视频 prompt 策略失败，按不支持生成音频处理: %s/%s", provider_id, model_id, exc_info=True)
+        return VideoPromptPolicy(supports_generated_audio=False, compact=compact)
+    return _video_prompt_policy_from_backend(backend)
+
+
+def _video_prompt_policy_from_backend(backend: Any | None) -> VideoPromptPolicy:
+    if backend is None:
+        return VideoPromptPolicy()
+
+    provider_name = str(getattr(backend, "name", "") or "").lower()
+    model_name = str(getattr(backend, "model", "") or "").lower()
+
+    try:
+        raw_capabilities = getattr(backend, "capabilities")
+    except Exception:
+        raw_capabilities = None
+
+    if raw_capabilities is None:
+        supports_generated_audio = True
+    else:
+        capability_values = {str(getattr(cap, "value", cap)).lower() for cap in raw_capabilities}
+        supports_generated_audio = _GENERATE_AUDIO_CAPABILITY in capability_values
+
+    if _is_gemini_aistudio_veo(provider_name, model_name):
+        supports_generated_audio = True
+
+    compact = "vidu" in provider_name or "vidu" in model_name
+    return VideoPromptPolicy(supports_generated_audio=supports_generated_audio, compact=compact)
+
+
+async def resolve_video_prompt_policy(
+    project: dict | None,
+    payload: dict | None = None,
+    *,
+    project_name: str | None = None,
+) -> VideoPromptPolicy:
+    """Resolve the video prompt policy from the same provider/model path used by generation."""
+    from lib.config.resolver import ConfigResolver
+    from lib.db import async_session_factory
+
+    resolver = ConfigResolver(async_session_factory)
+    try:
+        resolved = await resolver.resolve_video_backend(project, payload)
+    except Exception:
+        logger.warning("解析视频 prompt 策略失败，回退默认策略", exc_info=True)
+        return VideoPromptPolicy()
+
+    if is_custom_provider(resolved.provider_id):
+        policy = await _video_prompt_policy_from_custom_provider(resolved.provider_id, resolved.model_id)
+    else:
+        policy = _video_prompt_policy_from_provider_model(resolved.provider_id, resolved.model_id)
+    if not policy.supports_generated_audio:
+        return policy
+
+    raw_project_audio = project.get("video_generate_audio") if isinstance(project, dict) else None
+    if raw_project_audio is not None:
+        if isinstance(raw_project_audio, str):
+            generate_audio_enabled = raw_project_audio.strip().lower() in _TRUTHY_VIDEO_AUDIO_VALUES
+        else:
+            generate_audio_enabled = bool(raw_project_audio)
+    else:
+        try:
+            generate_audio_enabled = bool(await resolver.video_generate_audio(project_name))
+        except Exception:
+            generate_audio_enabled = True
+
+    return _video_prompt_policy_with_audio_setting(policy, generate_audio_enabled)
+
+
+async def _video_prompt_policy_from_generator(generator: MediaGenerator, project_name: str) -> VideoPromptPolicy:
+    backend = getattr(generator, "_video_backend", None)
+    policy = _video_prompt_policy_from_backend(backend)
+    if not policy.supports_generated_audio:
+        return policy
+
+    try:
+        config = getattr(generator, "_config", None)
+        if config is not None:
+            generate_audio_enabled = bool(await config.video_generate_audio(project_name))
+        else:
+            from lib.config.resolver import ConfigResolver
+
+            generate_audio_enabled = ConfigResolver._DEFAULT_VIDEO_GENERATE_AUDIO
+    except Exception:
+        generate_audio_enabled = True
+
+    if generate_audio_enabled:
+        return policy
+    return _video_prompt_policy_with_audio_setting(policy, generate_audio_enabled)
 
 
 def _get_model_default_duration(provider_name: str, model_name: str | None) -> int:
@@ -800,12 +961,12 @@ async def execute_video_task(
         _project = _pm.load_project(project_name)
         _project_path = _pm.get_project_path(project_name)
         _script = _pm.load_script(project_name, script_file)
-        _items, _id_field, _, _, _ = get_storyboard_items(_script)
+        _items, _id_field, _char_field, _, _ = get_storyboard_items(_script)
         _resolved = find_storyboard_item(_items, _id_field, resource_id)
         _item = _resolved[0] if _resolved else {}
-        return _project, _project_path, _item
+        return _project, _project_path, _item, _char_field
 
-    project, project_path, item = await asyncio.to_thread(_load)
+    project, project_path, item, char_field = await asyncio.to_thread(_load)
     generator = await get_media_generator(project_name, payload=payload, user_id=user_id)
 
     # 优先读取 generated_assets.storyboard_image，回退默认路径。
@@ -819,7 +980,14 @@ async def execute_video_task(
     if not storyboard_file.exists():
         raise ValueError(f"storyboard not found: {storyboard_file.name}")
 
-    prompt_text = _normalize_video_prompt(prompt)
+    prompt_policy = await _video_prompt_policy_from_generator(generator, project_name)
+    prompt_text = _normalize_video_prompt(
+        prompt,
+        project=project,
+        target_item=item,
+        char_field=char_field,
+        policy=prompt_policy,
+    )
     aspect_ratio = get_aspect_ratio(project, "videos")
     seed = payload.get("seed")
     service_tier = payload.get("video_provider_settings", {}).get("service_tier", "default")

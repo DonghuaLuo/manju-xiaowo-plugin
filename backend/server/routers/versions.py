@@ -31,6 +31,7 @@ from server.services.generation_tasks import (
     _normalize_storyboard_prompt,
     _normalize_video_prompt,
     get_aspect_ratio,
+    resolve_video_prompt_policy,
 )
 
 router = APIRouter()
@@ -347,9 +348,10 @@ def _script_media_version_payload(
     project: dict,
     script: dict,
     resource_id: str,
+    video_prompt_policy=None,
 ) -> tuple[str, dict[str, Any]]:
     try:
-        items, id_field, _, _, _ = get_storyboard_items(script)
+        items, id_field, char_field, _, _ = get_storyboard_items(script)
         resolved = find_storyboard_item(items, id_field, resource_id)
         if resolved is None:
             raise ValueError(f"未找到当前分镜/场景: {resource_id}")
@@ -358,7 +360,13 @@ def _script_media_version_payload(
             prompt = _normalize_storyboard_prompt(item.get("image_prompt"), project.get("style", ""))
             return prompt, {"aspect_ratio": get_aspect_ratio(project, "storyboards")}
 
-        prompt = _normalize_video_prompt(item.get("video_prompt"))
+        prompt = _normalize_video_prompt(
+            item.get("video_prompt"),
+            project=project,
+            target_item=item,
+            char_field=char_field,
+            policy=video_prompt_policy,
+        )
         duration_seconds = _coerce_duration_seconds(item.get("duration_seconds"))
         if duration_seconds is None:
             duration_seconds = _coerce_duration_seconds(project.get("default_duration"))
@@ -656,6 +664,12 @@ async def upload_external_media_version(
             allowed = ", ".join(sorted(_EXTERNAL_UPLOAD_EXTENSIONS[resource_type]))
             raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext or '无扩展名'}，允许: {allowed}")
 
+        video_prompt_policy = None
+        if resource_type == "videos":
+            manager = get_project_manager()
+            project_for_policy = await asyncio.to_thread(manager.load_project, project_name)
+            video_prompt_policy = await resolve_video_prompt_policy(project_for_policy, project_name=project_name)
+
         def _write_current() -> dict[str, Any]:
             manager = get_project_manager()
             project = manager.load_project(project_name)
@@ -666,7 +680,13 @@ async def upload_external_media_version(
             current_file.parent.mkdir(parents=True, exist_ok=True)
 
             version_manager = get_version_manager(project_name)
-            version_prompt, version_metadata = _script_media_version_payload(resource_type, project, script, resource_id)
+            version_prompt, version_metadata = _script_media_version_payload(
+                resource_type,
+                project,
+                script,
+                resource_id,
+                video_prompt_policy=video_prompt_policy,
+            )
             if current_file.exists():
                 version_manager.ensure_current_tracked(
                     resource_type=resource_type,

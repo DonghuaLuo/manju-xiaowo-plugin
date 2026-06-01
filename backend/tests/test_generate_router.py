@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lib.prompt_utils import VideoPromptPolicy
 from lib.script_editor import ScriptEditError
 from server.auth import CurrentUserInfo, get_current_user
 from server.routers import generate
@@ -198,6 +199,38 @@ class TestGenerateRouter:
             )
             assert video.status_code == 200, video.text
             assert video.json()["success"] is True
+
+    def test_external_package_uses_resolved_video_prompt_policy(self, tmp_path, monkeypatch):
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+        fake_pm.project["characters"]["Alice"]["voice_style"] = "warm, calm voice"
+        fake_pm.script["segments"][1]["image_prompt"] = {
+            "scene": "雨夜祠堂",
+            "composition": {"shot_type": "Medium Shot", "lighting": "暖光", "ambiance": "薄雾"},
+        }
+        fake_pm.script["segments"][1]["video_prompt"] = {
+            "action": "Alice 回头说话",
+            "camera_motion": "Static",
+            "dialogue": [{"speaker": "Alice", "line": "快走", "emotion": "urgent"}],
+        }
+
+        async def _fake_video_prompt_policy(project, payload=None, *, project_name=None):
+            return VideoPromptPolicy(supports_generated_audio=False)
+
+        monkeypatch.setattr(generate, "resolve_video_prompt_policy", _fake_video_prompt_policy)
+        client = _client(monkeypatch, fake_pm, _FakeQueue())
+
+        with client:
+            resp = client.get(
+                "/api/v1/projects/demo/generate/external-package/E1S02",
+                params={"script_file": "episode_1.json"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        video_prompt = resp.json()["video"]["prompt"]
+        assert "Voice_Style" not in video_prompt
+        assert "Mouth_Cue" not in video_prompt
+        assert "Speaking_Rules" not in video_prompt
 
     def test_storyboard_dirty_script_returns_400(self, tmp_path, monkeypatch):
         project_path = _prepare_files(tmp_path)

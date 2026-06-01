@@ -33,6 +33,7 @@ from server.services.generation_tasks import (
     _collect_reference_images,
     _normalize_storyboard_prompt,
     _normalize_video_prompt,
+    resolve_video_prompt_policy,
 )
 
 router = APIRouter()
@@ -224,10 +225,11 @@ async def get_external_generation_package(
 ):
     """返回当前分镜用于外部生成的真实 prompt 与参考图清单。"""
     try:
+        manager = get_project_manager()
+        project = await asyncio.to_thread(manager.load_project, project_name)
+        video_prompt_policy = await resolve_video_prompt_policy(project, project_name=project_name)
 
         def _sync() -> dict[str, Any]:
-            manager = get_project_manager()
-            project = manager.load_project(project_name)
             project_path = manager.get_project_path(project_name)
             script = manager.load_script(project_name, script_file)
             items, id_field, char_field, scene_field, prop_field = get_storyboard_items(script)
@@ -240,7 +242,13 @@ async def get_external_generation_package(
                 target_item.get("image_prompt"),
                 project.get("style", ""),
             )
-            video_prompt = _normalize_video_prompt(target_item.get("video_prompt"))
+            video_prompt = _normalize_video_prompt(
+                target_item.get("video_prompt"),
+                project=project,
+                target_item=target_item,
+                char_field=char_field,
+                policy=video_prompt_policy,
+            )
 
             labels = _reference_labels(project, project_path)
             previous_path = resolve_previous_storyboard_path(project_path, items, id_field, segment_id)

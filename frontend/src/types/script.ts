@@ -58,10 +58,29 @@ export const CAMERA_MOTION_I18N_KEYS: Record<CameraMotion, string> = {
 export type TransitionType = "cut" | "fade" | "dissolve";
 export type DurationSeconds = number;
 export type AssetStatus = "pending" | "storyboard_ready" | "completed";
+export const DIALOGUE_SCREEN_POSITIONS = [
+  "",
+  "left",
+  "center",
+  "right",
+  "offscreen",
+] as const;
+
+export type DialogueScreenPosition = (typeof DIALOGUE_SCREEN_POSITIONS)[number];
+
+export const DIALOGUE_SCREEN_POSITION_I18N_KEYS: Record<DialogueScreenPosition, string> = {
+  "": "dialogue_position_unspecified",
+  left: "dialogue_position_left",
+  center: "dialogue_position_center",
+  right: "dialogue_position_right",
+  offscreen: "dialogue_position_offscreen",
+};
 
 export interface Dialogue {
   speaker: string;
   line: string;
+  emotion?: string;
+  screen_position?: DialogueScreenPosition;
 }
 
 export interface Composition {

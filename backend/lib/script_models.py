@@ -54,6 +54,8 @@ class Dialogue(BaseModel):
 
     speaker: str = Field(description="说话人名称")
     line: str = Field(description="对话内容")
+    emotion: str = Field(default="", description="这句台词的情绪/语气，例如紧张、低声、哽咽或愤怒但克制")
+    screen_position: str = Field(default="", description="说话人在画面中的大致位置：left、center、right 或 offscreen")
 
 
 class Composition(BaseModel):
