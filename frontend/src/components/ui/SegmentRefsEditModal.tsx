@@ -23,6 +23,12 @@ import { WARM_TONE } from "@/utils/severity-tone";
 
 type Asset = Character | Scene | Prop;
 
+const VIRTUALIZE_ROW_THRESHOLD = 36;
+const VIRTUAL_GRID_COLUMNS = 1;
+const VIRTUAL_ROW_ESTIMATE = 48;
+const VIRTUAL_SECTION_MAX_HEIGHT = 288;
+const VIRTUAL_SECTION_OVERSCAN = 4;
+
 interface RefRow {
   kind: AssetKind;
   name: string;
@@ -360,10 +366,36 @@ function Section({
   searchEmptyText,
 }: SectionProps) {
   const { t } = useTranslation("dashboard");
+  const [scrollTop, setScrollTop] = useState(0);
   const selectedCount = rows.reduce(
     (n, r) => (selectedSet.has(r.name) ? n + 1 : n),
     0,
   );
+  const rowGroups = useMemo(() => {
+    const groups: RefRow[][] = [];
+    for (let i = 0; i < rows.length; i += VIRTUAL_GRID_COLUMNS) {
+      groups.push(rows.slice(i, i + VIRTUAL_GRID_COLUMNS));
+    }
+    return groups;
+  }, [rows]);
+  const shouldVirtualize = rows.length > VIRTUALIZE_ROW_THRESHOLD;
+  const visibleRowCount = Math.ceil(VIRTUAL_SECTION_MAX_HEIGHT / VIRTUAL_ROW_ESTIMATE);
+  const rawFirstVisibleRow = shouldVirtualize ? Math.floor(scrollTop / VIRTUAL_ROW_ESTIMATE) : 0;
+  const maxFirstVisibleRow = Math.max(0, rowGroups.length - visibleRowCount);
+  const firstVisibleRow = Math.min(rawFirstVisibleRow, maxFirstVisibleRow);
+  const virtualStart = shouldVirtualize
+    ? Math.max(0, firstVisibleRow - VIRTUAL_SECTION_OVERSCAN)
+    : 0;
+  const virtualEnd = shouldVirtualize
+    ? Math.min(rowGroups.length, firstVisibleRow + visibleRowCount + VIRTUAL_SECTION_OVERSCAN)
+    : rowGroups.length;
+  const virtualRows = shouldVirtualize
+    ? rowGroups.slice(virtualStart, virtualEnd).map((group, offset) => ({
+        group,
+        index: virtualStart + offset,
+      }))
+    : [];
+
   return (
     <section>
       <div className="mb-2 flex items-center gap-2">
@@ -436,7 +468,7 @@ function Section({
           )}
         </div>
       )}
-      {rows.length > 0 && (
+      {rows.length > 0 && !shouldVirtualize && (
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
           {rows.map((r) => (
             <Row
@@ -448,6 +480,43 @@ function Section({
               staleHint={staleHint}
             />
           ))}
+        </div>
+      )}
+      {rows.length > 0 && shouldVirtualize && (
+        <div
+          data-testid={`segment-refs-virtual-${kind}`}
+          className="relative max-h-72 overflow-y-auto overscroll-contain pr-1"
+          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        >
+          <div
+            className="relative"
+            style={{ height: `${rowGroups.length * VIRTUAL_ROW_ESTIMATE}px` }}
+          >
+            {virtualRows.map((virtualRow) => {
+              const group = virtualRow.group;
+              return (
+                <div
+                  key={`${kind}-virtual-row-${virtualRow.index}`}
+                  data-index={virtualRow.index}
+                  className="absolute left-0 right-0 grid grid-cols-1 gap-1.5"
+                  style={{
+                    transform: `translateY(${virtualRow.index * VIRTUAL_ROW_ESTIMATE}px)`,
+                  }}
+                >
+                  {group.map((r) => (
+                    <Row
+                      key={`${kind}-${r.name}`}
+                      row={r}
+                      selected={selectedSet.has(r.name)}
+                      onToggle={() => onToggle(r.kind, r.name)}
+                      projectName={projectName}
+                      staleHint={staleHint}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </section>
@@ -554,6 +623,8 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
             <img
               src={thumbSrc}
               alt="资产图片"
+              loading="lazy"
+              decoding="async"
               className={`h-8 w-8 shrink-0 object-cover ${thumbShape}`}
               draggable={false}
             />

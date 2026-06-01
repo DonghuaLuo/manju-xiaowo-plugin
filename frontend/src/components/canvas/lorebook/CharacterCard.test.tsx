@@ -119,4 +119,34 @@ describe("CharacterCard", () => {
       expect(textarea).toHaveStyle({ height: "128px" });
     });
   });
+
+  it("renders voice style as a multiline textarea and saves edited lines", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CharacterCard
+        name="Hero"
+        character={{ description: "hero desc", voice_style: "warm" }}
+        projectName="demo"
+        onSave={onSave}
+        onGenerate={vi.fn()}
+      />,
+    );
+
+    const voiceStyle = screen.getByLabelText("声音风格") as HTMLTextAreaElement;
+    expect(voiceStyle.tagName).toBe("TEXTAREA");
+    expect(voiceStyle.rows).toBe(3);
+
+    fireEvent.change(voiceStyle, {
+      target: { value: "温柔但有威严\n语速偏慢，尾音稳定" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith("Hero", {
+        description: "hero desc",
+        voiceStyle: "温柔但有威严\n语速偏慢，尾音稳定",
+        referenceFile: null,
+      });
+    });
+  });
 });

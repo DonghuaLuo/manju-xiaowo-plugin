@@ -162,6 +162,45 @@ describe("SegmentRefsEditModal", () => {
     expect(screen.queryByRole("button", { name: /Mentor/ })).toBeNull();
   });
 
+  it("virtualizes large asset sections but still finds offscreen rows through search", () => {
+    const manyProps: Record<string, Prop> = Object.fromEntries(
+      Array.from({ length: 80 }, (_, i) => [
+        `Prop ${String(i).padStart(2, "0")}`,
+        {
+          description: `prop ${i}`,
+          prop_sheet: `props/prop-${String(i).padStart(2, "0")}.png`,
+        } satisfies Prop,
+      ]),
+    );
+
+    render(<SegmentRefsEditModal {...baseProps} props={manyProps} />);
+
+    expect(screen.getByRole("button", { name: /Prop 00/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prop 79/ })).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("搜索…"), { target: { value: "Prop 79" } });
+
+    expect(screen.getByRole("button", { name: /Prop 79/ })).toBeInTheDocument();
+  });
+
+  it("keeps filtered rows visible after a virtualized section was scrolled", () => {
+    const manyProps: Record<string, Prop> = Object.fromEntries(
+      Array.from({ length: 80 }, (_, i) => [
+        `Prop ${String(i).padStart(2, "0")}`,
+        { description: `prop ${i}` } satisfies Prop,
+      ]),
+    );
+
+    render(<SegmentRefsEditModal {...baseProps} props={manyProps} />);
+
+    fireEvent.scroll(screen.getByTestId("segment-refs-virtual-prop"), {
+      target: { scrollTop: 2400 },
+    });
+    fireEvent.change(screen.getByPlaceholderText("搜索…"), { target: { value: "Prop 01" } });
+
+    expect(screen.getByRole("button", { name: /Prop 01/ })).toBeInTheDocument();
+  });
+
   it("close (X) button invokes onClose", () => {
     const onClose = vi.fn();
     render(<SegmentRefsEditModal {...baseProps} onClose={onClose} />);

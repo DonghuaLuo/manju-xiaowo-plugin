@@ -65,7 +65,8 @@ export function CharacterCard({
   const [saving, setSaving] = useState(false);
   const [uploadingSheet, setUploadingSheet] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const voiceTextareaRef = useRef<HTMLTextAreaElement>(null);
   const descId = useId();
   const voiceId = useId();
 
@@ -119,17 +120,28 @@ export function CharacterCard({
     };
   }, [referencePreview]);
 
-  const autoResize = useCallback(() => {
-    const el = textareaRef.current;
+  const resizeTextarea = useCallback((el: HTMLTextAreaElement | null) => {
     if (el) {
       el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
     }
   }, []);
 
+  const autoResizeDescription = useCallback(() => {
+    resizeTextarea(descTextareaRef.current);
+  }, [resizeTextarea]);
+
+  const autoResizeVoiceStyle = useCallback(() => {
+    resizeTextarea(voiceTextareaRef.current);
+  }, [resizeTextarea]);
+
   useEffect(() => {
-    autoResize();
-  }, [autoResize, description]);
+    autoResizeDescription();
+  }, [autoResizeDescription, description]);
+
+  useEffect(() => {
+    autoResizeVoiceStyle();
+  }, [autoResizeVoiceStyle, voiceStyle]);
 
   const isDirty =
     description !== character.description ||
@@ -392,11 +404,11 @@ export function CharacterCard({
 
       <CapsLabel htmlFor={descId}>{t("description")}</CapsLabel>
       <textarea
-        ref={textareaRef}
+        ref={descTextareaRef}
         id={descId}
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        onInput={autoResize}
+        onInput={autoResizeDescription}
         rows={3}
         className="focus-ring mt-1.5 w-full resize-none overflow-hidden rounded-lg px-3 py-2 text-[13px] leading-[1.55] outline-none transition-[border-color,box-shadow]"
         style={FIELD_STYLE}
@@ -405,12 +417,14 @@ export function CharacterCard({
 
       <div className="mt-3">
         <CapsLabel htmlFor={voiceId}>{t("voice_style")}</CapsLabel>
-        <input
+        <textarea
+          ref={voiceTextareaRef}
           id={voiceId}
-          type="text"
           value={voiceStyle}
           onChange={(e) => setVoiceStyle(e.target.value)}
-          className="focus-ring mt-1.5 w-full rounded-lg px-3 py-2 text-[13px] outline-none transition-[border-color,box-shadow]"
+          onInput={autoResizeVoiceStyle}
+          rows={3}
+          className="focus-ring mt-1.5 w-full resize-none overflow-hidden rounded-lg px-3 py-2 text-[13px] leading-[1.55] outline-none transition-[border-color,box-shadow]"
           style={FIELD_STYLE}
           placeholder={t("voice_style_example")}
         />
