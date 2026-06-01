@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
+import { PluginSDK } from "xiaowo-sdk";
 import { API } from "@/api";
 import zhDashboard from "@/i18n/zh/dashboard";
 import { useAppStore } from "@/stores/app-store";
@@ -226,6 +227,92 @@ describe("ProjectsPage", () => {
     });
   });
 
+  it("opens the asset export dialog with asset libraries selected by default", async () => {
+    vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
+    vi.spyOn(API, "getAssetArchiveExportInfo").mockResolvedValue({
+      projectsRoot: "D:\\ArcReel\\projects",
+      globalAssetsRoot: "D:\\ArcReel\\projects\\_global_assets",
+      styleFavoritesRoot: "D:\\ArcReel\\projects\\_style_favorites",
+    });
+
+    renderPage();
+    await screen.findByText("新建项目");
+
+    fireEvent.click(screen.getByRole("button", { name: "导出资产" }));
+
+    expect(await screen.findByRole("heading", { name: "导出资产" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /角色库/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /场景库/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /道具库/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /自定义风格收藏/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /同时导出全局配置/ })).not.toBeChecked();
+    expect(await screen.findByText("D:\\ArcReel\\projects")).toBeInTheDocument();
+  });
+
+  it("starts asset export with the selected options", async () => {
+    vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
+    vi.spyOn(API, "getAssetArchiveExportInfo").mockResolvedValue({
+      projectsRoot: "D:\\ArcReel\\projects",
+    });
+    vi.spyOn(API, "startAssetArchiveExport").mockResolvedValue({
+      taskId: "asset-task-1",
+      status: "queued",
+      exportPath: "C:\\exports\\assets.zip",
+    });
+    vi.spyOn(API, "getExportTaskStatus").mockResolvedValue(null);
+    vi.mocked(PluginSDK.dialog.save).mockResolvedValueOnce("C:\\exports\\assets.zip");
+
+    renderPage();
+    await screen.findByText("新建项目");
+
+    fireEvent.click(screen.getByRole("button", { name: "导出资产" }));
+    await screen.findByRole("heading", { name: "导出资产" });
+    fireEvent.click(screen.getByRole("checkbox", { name: /同时导出全局配置/ }));
+    const exportButtons = screen.getAllByRole("button", { name: "导出资产" });
+    fireEvent.click(exportButtons[exportButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(API.startAssetArchiveExport).toHaveBeenCalledWith("C:\\exports\\assets.zip", {
+        includeAssets: {
+          character: true,
+          scene: true,
+          prop: true,
+          styleFavorites: true,
+        },
+        includeGlobalConfig: true,
+      });
+    });
+  });
+
+  it("retries loading asset export info after a failed attempt", async () => {
+    vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
+    const infoSpy = vi.spyOn(API, "getAssetArchiveExportInfo")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({
+        projectsRoot: "D:\\ArcReel\\projects",
+      });
+
+    renderPage();
+    await screen.findByText("新建项目");
+
+    fireEvent.click(screen.getByRole("button", { name: "导出资产" }));
+    await screen.findByRole("heading", { name: "导出资产" });
+    await waitFor(() => {
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "导出资产" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "导出资产" }));
+    await waitFor(() => {
+      expect(infoSpy).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("D:\\ArcReel\\projects")).toBeInTheDocument();
+  });
+
   it("imports a zip project, refreshes the list, and navigates to the workspace", async () => {
     vi.spyOn(API, "listProjects")
       .mockResolvedValueOnce({ projects: [] })
@@ -284,6 +371,44 @@ describe("ProjectsPage", () => {
     await waitFor(() => {
       expect(location.history?.at(-1)).toBe("/app/projects/imported-demo");
     });
+  });
+
+  it("imports an asset archive, refreshes the lobby, and stays on the projects page", async () => {
+    vi.spyOn(API, "listProjects")
+      .mockResolvedValueOnce({ projects: [] })
+      .mockResolvedValueOnce({ projects: [] });
+    vi.spyOn(API, "importProject").mockResolvedValue({
+      success: true,
+      import_type: "asset_archive",
+      summary: {
+        assets: 2,
+        asset_files: 3,
+        style_favorites_files: 1,
+        global_config: true,
+        global_config_rows: { system_settings: 1 },
+        global_config_files: 0,
+      },
+      warnings: [],
+      diagnostics: {
+        auto_fixed: [],
+        warnings: [],
+      },
+    });
+
+    const { location } = renderPage();
+    await screen.findByText("新建项目");
+
+    const file = projectArchiveRef("assets.zip");
+    desktopFileMock.pickDesktopFile.mockResolvedValueOnce(file);
+    clickImportZip();
+
+    await waitFor(() => {
+      expect(API.importProject).toHaveBeenCalledWith(file, "prompt");
+    });
+    await waitFor(() => {
+      expect(useAppStore.getState().toast?.text).toContain("资产导入完成");
+    });
+    expect(location.history?.at(-1)).toBe("/app/projects");
   });
 
   it("shows a structured toast when import fails", async () => {

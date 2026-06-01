@@ -183,9 +183,27 @@ export interface ExportDiagnostics {
 
 export interface ImportProjectResponse {
   success: boolean;
+  import_type?: "project";
   project_name: string;
   project: ProjectData;
   warnings: string[];
   conflict_resolution: "none" | "renamed" | "overwritten";
   diagnostics: ImportSuccessDiagnostics;
 }
+
+export interface ImportAssetArchiveResponse {
+  success: boolean;
+  import_type: "asset_archive";
+  summary: {
+    assets?: number;
+    asset_files?: number;
+    style_favorites_files?: number;
+    global_config?: boolean;
+    global_config_rows?: Record<string, number>;
+    global_config_files?: number;
+  };
+  warnings: string[];
+  diagnostics: ImportSuccessDiagnostics;
+}
+
+export type ImportArchiveResponse = ImportProjectResponse | ImportAssetArchiveResponse;

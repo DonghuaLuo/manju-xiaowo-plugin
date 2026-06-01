@@ -10,7 +10,7 @@ import type {
   ProjectData,
   ProjectSummary,
   ImportConflictPolicy,
-  ImportProjectResponse,
+  ImportArchiveResponse,
   ImportFailureDiagnostics,
   EpisodeScript,
   TaskItem,
@@ -498,8 +498,20 @@ type DesktopContent =
   | { kind: "text"; text: string; mimeType?: string }
   | { kind: "binary"; base64: string; mimeType?: string };
 
-export type ExportTaskKind = "project_archive" | "jianying_draft";
+export type ExportTaskKind = "project_archive" | "jianying_draft" | "asset_archive";
 export type ExportTaskStatus = "queued" | "running" | "completed" | "failed";
+
+export interface AssetArchiveIncludeOptions {
+  character: boolean;
+  scene: boolean;
+  prop: boolean;
+  styleFavorites: boolean;
+}
+
+export interface AssetArchiveExportOptions {
+  includeAssets: AssetArchiveIncludeOptions;
+  includeGlobalConfig: boolean;
+}
 
 export interface ExportTaskStartResponse {
   ok?: boolean;
@@ -521,8 +533,17 @@ export interface ExportTaskEvent {
   draftPath?: string;
   draftDir?: string;
   diagnostics?: unknown;
+  summary?: unknown;
   error?: string;
   updatedAt?: string;
+}
+
+export interface AssetArchiveExportInfoResponse {
+  ok?: boolean;
+  projectsRoot?: string;
+  globalAssetsRoot?: string;
+  styleFavoritesRoot?: string;
+  detail?: string;
 }
 
 export interface DetectJianyingDraftRootResponse {
@@ -870,6 +891,39 @@ class API {
     return ensureExportTaskStarted(result);
   }
 
+  static async getAssetArchiveExportInfo(): Promise<{
+    projectsRoot: string;
+    globalAssetsRoot?: string;
+    styleFavoritesRoot?: string;
+  }> {
+    const result = await PluginSDK.callBackend<AssetArchiveExportInfoResponse>(
+      "arcreel_asset_archive_export_info",
+      {},
+    );
+    if (!result.ok || !result.projectsRoot) {
+      throw new Error(result.detail || "读取项目目录失败");
+    }
+    return {
+      projectsRoot: result.projectsRoot,
+      globalAssetsRoot: result.globalAssetsRoot,
+      styleFavoritesRoot: result.styleFavoritesRoot,
+    };
+  }
+
+  static async startAssetArchiveExport(
+    exportPath: string,
+    options: AssetArchiveExportOptions,
+  ): Promise<{ taskId: string; status: ExportTaskStatus; exportPath?: string }> {
+    const result = await PluginSDK.callBackend<ExportTaskStartResponse>(
+      "arcreel_start_asset_archive_export",
+      {
+        exportPath,
+        ...options,
+      },
+    );
+    return ensureExportTaskStarted(result);
+  }
+
   static async getExportTaskStatus(taskId: string): Promise<ExportTaskEvent | null> {
     const result = await PluginSDK.callBackend<ExportTaskStatusResponse>("arcreel_export_task_status", {
       taskId,
@@ -924,7 +978,7 @@ class API {
   static async importProject(
     file: UploadFileInput,
     conflictPolicy: ImportConflictPolicy = "prompt"
-  ): Promise<ImportProjectResponse> {
+  ): Promise<ImportArchiveResponse> {
     const response = await requestWithLocalFiles(
       `${API_BASE}/projects/import`,
       { conflict_policy: conflictPolicy },
@@ -952,18 +1006,25 @@ class API {
       if (typeof payload.conflict_project_name === "string") {
         error.conflict_project_name = payload.conflict_project_name;
       }
-      error.diagnostics = normalizeImportFailureDiagnostics(payload.diagnostics);
+      const diagnostics = normalizeImportFailureDiagnostics(payload.diagnostics);
+      if (
+        diagnostics.blocking.length > 0
+        || diagnostics.auto_fixable.length > 0
+        || diagnostics.warnings.length > 0
+      ) {
+        error.diagnostics = diagnostics;
+      }
       throw error;
     }
 
-    const payload = await response.json() as ImportProjectResponse & { diagnostics?: { auto_fixed?: unknown[]; warnings?: unknown[] } };
+    const payload = await response.json() as ImportArchiveResponse & { diagnostics?: { auto_fixed?: unknown[]; warnings?: unknown[] } };
     return {
       ...payload,
       diagnostics: {
         auto_fixed: normalizeDiagnosticsBucket(payload?.diagnostics?.auto_fixed),
         warnings: normalizeDiagnosticsBucket(payload?.diagnostics?.warnings),
       },
-    };
+    } as ImportArchiveResponse;
   }
 
   // ==================== 角色管理 ====================

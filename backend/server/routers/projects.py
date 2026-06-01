@@ -40,6 +40,11 @@ from lib.style_templates import is_known_template, list_style_templates, resolve
 from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
 from server.auth import CurrentUser, create_download_token, verify_download_token
 from server.routers._validators import validate_backend_value
+from server.services.asset_archive import (
+    UNSUPPORTED_ARCHIVE_DETAIL,
+    AssetArchiveService,
+    detect_import_archive_kind,
+)
 from server.services.project_archive import (
     ProjectArchiveService,
     ProjectArchiveValidationError,
@@ -72,6 +77,10 @@ def _manager_data_root(manager: ProjectManager) -> Path:
 
 def get_archive_service() -> ProjectArchiveService:
     return ProjectArchiveService(get_project_manager())
+
+
+def get_asset_archive_service() -> AssetArchiveService:
+    return AssetArchiveService(_manager_data_root(get_project_manager()))
 
 
 class CreateProjectRequest(BaseModel):
@@ -167,7 +176,7 @@ async def import_project_archive(
     file: UploadFile = File(...),
     conflict_policy: str = Form("prompt"),
 ):
-    """从 ZIP 导入项目。"""
+    """从 ZIP 导入项目包或全局资产/配置包。"""
     upload_path: str | None = None
     try:
         source_path = local_upload_path(file)
@@ -179,16 +188,35 @@ async def import_project_archive(
             archive_path = Path(upload_path)
             await asyncio.to_thread(copy_upload_file, file, archive_path)
 
-        def _sync():
+        archive_kind = await asyncio.to_thread(detect_import_archive_kind, archive_path)
+        if archive_kind.kind == "unsupported":
+            raise ProjectArchiveValidationError(
+                UNSUPPORTED_ARCHIVE_DETAIL,
+                errors=["请选择项目导出 ZIP，或通过“导出资产”生成的全局资产 ZIP。"],
+                extra={"archive_type": "unsupported"},
+            )
+
+        if archive_kind.kind == "asset_archive":
+            result = await get_asset_archive_service().import_archive(archive_path)
+            return {
+                "success": True,
+                "import_type": "asset_archive",
+                "summary": result.summary,
+                "warnings": result.warnings,
+                "diagnostics": result.diagnostics,
+            }
+
+        def _sync_project():
             return get_archive_service().import_project_archive(
                 archive_path,
                 uploaded_filename=file.filename,
                 conflict_policy=conflict_policy,
             )
 
-        result = await asyncio.to_thread(_sync)
+        result = await asyncio.to_thread(_sync_project)
         return {
             "success": True,
+            "import_type": "project",
             "project_name": result.project_name,
             "project": result.project,
             "warnings": result.warnings,

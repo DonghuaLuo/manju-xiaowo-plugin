@@ -109,6 +109,22 @@ async def handle_arcreel_start_project_archive_export(params):
     return await start_project_archive_export(params)
 
 
+@sdk.handler("arcreel_asset_archive_export_info")
+async def handle_arcreel_asset_archive_export_info(params):
+    """桌面资产导出：返回全局资产导出所需路径信息。"""
+    from utils.arcreel_ipc_bridge import asset_archive_export_info
+
+    return await asset_archive_export_info(params)
+
+
+@sdk.handler("arcreel_start_asset_archive_export")
+async def handle_arcreel_start_asset_archive_export(params):
+    """桌面资产导出：前端选择目标路径后，后端异步直接写入 ZIP。"""
+    from utils.arcreel_ipc_bridge import start_asset_archive_export
+
+    return await start_asset_archive_export(params)
+
+
 @sdk.handler("arcreel_export_task_status")
 async def handle_arcreel_export_task_status(params):
     """查询桌面导出任务状态。"""

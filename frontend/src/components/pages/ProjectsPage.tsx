@@ -12,6 +12,9 @@ import { formatDate } from "@/utils/date-format";
 import { Link, useLocation } from "wouter";
 import {
   AlertTriangle,
+  Archive,
+  Download,
+  FolderOpen,
   Library,
   Loader2,
   MoreHorizontal,
@@ -24,13 +27,15 @@ import {
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { PluginSDK } from "xiaowo-sdk";
-import { API } from "@/api";
+import { API, type AssetArchiveExportOptions, type ExportTaskEvent } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { ArchiveDiagnosticsDialog } from "@/components/shared/ArchiveDiagnosticsDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { GlassModal } from "@/components/ui/GlassModal";
+import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
+import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { Typewriter, type TypewriterSegment } from "@/components/ui/Typewriter";
@@ -54,6 +59,11 @@ import {
 // 数据：仅消费 ProjectSummary 真实字段；hue 由 project.name 哈希派生
 
 type PhaseFilter = Phase | "all";
+type AssetArchiveExportInfo = {
+  projectsRoot: string;
+  globalAssetsRoot?: string;
+  styleFavoritesRoot?: string;
+};
 type GreetingKey =
   | "lobby_hero_greeting_morning"
   | "lobby_hero_greeting_afternoon"
@@ -826,10 +836,12 @@ interface TopBarProps {
   searchValue: string;
   onSearch: (v: string) => void;
   onImport: () => void;
+  onExportAssets: () => void;
   onCreate: () => void;
   onSettings: () => void;
   onAssets: () => void;
   importing: boolean;
+  assetExporting: boolean;
   configIncomplete: boolean;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -838,10 +850,12 @@ function TopBar({
   searchValue,
   onSearch,
   onImport,
+  onExportAssets,
   onCreate,
   onSettings,
   onAssets,
   importing,
+  assetExporting,
   configIncomplete,
   searchInputRef,
 }: TopBarProps) {
@@ -908,6 +922,19 @@ function TopBar({
               <Upload className="h-3.5 w-3.5" />
             )}
             {importing ? t("dashboard:importing") : t("dashboard:import_zip")}
+          </button>
+          <button
+            type="button"
+            onClick={onExportAssets}
+            disabled={assetExporting}
+            className="inline-flex items-center gap-1.5 rounded-[7px] border border-hairline bg-bg-grad-a/50 px-3 py-1.5 text-[12px] text-text-2 transition-colors hover:border-hairline-strong hover:bg-bg-grad-a focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {assetExporting ? (
+              <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            {assetExporting ? t("dashboard:asset_exporting") : t("dashboard:export_assets")}
           </button>
           <button
             type="button"
@@ -1166,10 +1193,14 @@ export function ProjectsPage() {
   } = useProjectsStore();
 
   const [importingProject, setImportingProject] = useState(false);
+  const [assetExportDialogOpen, setAssetExportDialogOpen] = useState(false);
+  const [assetExporting, setAssetExporting] = useState(false);
+  const [assetExportInfo, setAssetExportInfo] = useState<AssetArchiveExportInfo | null>(null);
+  const [assetExportInfoLoading, setAssetExportInfoLoading] = useState(false);
   const [conflictProject, setConflictProject] = useState<string | null>(null);
   const [conflictFile, setConflictFile] = useState<UploadFileInput | null>(null);
   type ImportDiagnosticsState =
-    | { source: "success"; diagnostics: ImportFailureDiagnostics; navigateTo: string }
+    | { source: "success"; diagnostics: ImportFailureDiagnostics; navigateTo?: string }
     | { source: "failure"; diagnostics: ImportFailureDiagnostics };
   const [importDiagnostics, setImportDiagnostics] =
     useState<ImportDiagnosticsState | null>(null);
@@ -1179,6 +1210,8 @@ export function ProjectsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const projectsFetchSeqRef = useRef(0);
+  const assetExportTaskIdsRef = useRef(new Set<string>());
+  const assetExportInfoRequestedRef = useRef(false);
   const isConfigComplete = useConfigStatusStore((s) => s.isComplete);
 
   const phaseLabels = useMemo<Record<Phase, string>>(
@@ -1241,6 +1274,67 @@ export function ProjectsPage() {
   }, [fetchProjects]);
 
   useEffect(() => {
+    if (!assetExportDialogOpen || assetExportInfo || assetExportInfoRequestedRef.current) return;
+    assetExportInfoRequestedRef.current = true;
+    setAssetExportInfoLoading(true);
+    API.getAssetArchiveExportInfo()
+      .then((info) => {
+        setAssetExportInfo(info);
+      })
+      .catch((err) => {
+        assetExportInfoRequestedRef.current = false;
+        useAppStore
+          .getState()
+          .pushNotification(
+            t("dashboard:asset_export_info_failed", { message: errMsg(err) }),
+            "error",
+          );
+      })
+      .finally(() => {
+        setAssetExportInfoLoading(false);
+      });
+  }, [assetExportDialogOpen, assetExportInfo, t]);
+
+  const handleAssetExportTask = useCallback((event: ExportTaskEvent) => {
+    const taskId = event.taskId;
+    if (!taskId || !assetExportTaskIdsRef.current.has(taskId)) return;
+    if (event.status !== "completed" && event.status !== "failed") return;
+
+    assetExportTaskIdsRef.current.delete(taskId);
+    setAssetExporting(false);
+
+    if (event.status === "failed") {
+      useAppStore
+        .getState()
+        .pushNotification(
+          t("dashboard:asset_export_failed", { message: event.error || "" }),
+          "error",
+        );
+      return;
+    }
+
+    const savedPath = event.exportPath || "";
+    useAppStore
+      .getState()
+      .pushToast(`${t("dashboard:asset_export_completed")}：${savedPath}`, "success");
+  }, [t]);
+
+  const syncAssetExportTaskStatus = useCallback((taskId: string) => {
+    void API.getExportTaskStatus(taskId)
+      .then((event) => {
+        if (event) handleAssetExportTask(event);
+      })
+      .catch(() => {});
+  }, [handleAssetExportTask]);
+
+  useEffect(() => {
+    PluginSDK.onBackendEvent<ExportTaskEvent>("arcreel_export_task", handleAssetExportTask);
+    return () => {
+      PluginSDK.offBackendEvent("arcreel_export_task", handleAssetExportTask);
+    };
+  }, [handleAssetExportTask]);
+
+  useEffect(() => {
     function handler(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -1260,6 +1354,54 @@ export function ProjectsPage() {
     await doImport(file);
   };
 
+  const handleOpenProjectsRoot = async () => {
+    const path = assetExportInfo?.projectsRoot;
+    if (!path) return;
+    try {
+      await API.openDesktopPath(path);
+    } catch (err) {
+      useAppStore
+        .getState()
+        .pushNotification(
+          t("dashboard:open_projects_root_failed", { message: errMsg(err) }),
+          "error",
+        );
+    }
+  };
+
+  const handleExportAssets = async (options: AssetArchiveExportOptions) => {
+    if (assetExporting) return;
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    try {
+      const selectedPath = await PluginSDK.dialog.save({
+        title: t("dashboard:asset_export_save_title"),
+        defaultPath: `manju-assets-${stamp}.zip`,
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+      });
+      if (!selectedPath) return;
+
+      setAssetExporting(true);
+      const { taskId, exportPath } = await API.startAssetArchiveExport(selectedPath, options);
+      assetExportTaskIdsRef.current.add(taskId);
+      syncAssetExportTaskStatus(taskId);
+      setAssetExportDialogOpen(false);
+      useAppStore
+        .getState()
+        .pushToast(
+          `${t("dashboard:asset_export_started")}：${exportPath || selectedPath}`,
+          "success",
+        );
+    } catch (err) {
+      setAssetExporting(false);
+      useAppStore
+        .getState()
+        .pushNotification(
+          t("dashboard:asset_export_failed", { message: errMsg(err) }),
+          "error",
+        );
+    }
+  };
+
   const doImport = async (file: UploadFileInput, policy: ImportConflictPolicy = "prompt") => {
     setImportingProject(true);
     try {
@@ -1268,6 +1410,42 @@ export function ProjectsPage() {
       setConflictFile(null);
       setImportDiagnostics(null);
       await fetchProjects();
+
+      if (result.import_type === "asset_archive") {
+        const summary = result.summary ?? {};
+        const importedFiles =
+          (summary.asset_files ?? 0) +
+          (summary.style_favorites_files ?? 0) +
+          (summary.global_config_files ?? 0);
+        useAppStore
+          .getState()
+          .pushToast(
+            t(
+              summary.global_config
+                ? "dashboard:asset_import_success_with_config"
+                : "dashboard:asset_import_success",
+              {
+                assets: summary.assets ?? 0,
+                files: importedFiles,
+              },
+            ),
+            "success",
+          );
+
+        const autoFixedCount = result.diagnostics.auto_fixed.length;
+        const warningCount = result.diagnostics.warnings.length;
+        if (warningCount > 0 || autoFixedCount > 0) {
+          setImportDiagnostics({
+            source: "success",
+            diagnostics: {
+              blocking: [],
+              auto_fixable: result.diagnostics.auto_fixed,
+              warnings: result.diagnostics.warnings,
+            },
+          });
+        }
+        return;
+      }
 
       const autoFixedCount = result.diagnostics.auto_fixed.length;
       const warningCount = result.diagnostics.warnings.length;
@@ -1443,6 +1621,7 @@ export function ProjectsPage() {
         searchValue={searchQuery}
         onSearch={setSearchQuery}
         onImport={() => voidCall(handleImport())}
+        onExportAssets={() => setAssetExportDialogOpen(true)}
         onCreate={() => setShowCreateModal(true)}
         onSettings={() => navigate("/app/settings")}
         onAssets={() => {
@@ -1450,6 +1629,7 @@ export function ProjectsPage() {
           navigate("/app/assets");
         }}
         importing={importingProject}
+        assetExporting={assetExporting}
         configIncomplete={!isConfigComplete}
         searchInputRef={searchInputRef}
       />
@@ -1543,6 +1723,17 @@ export function ProjectsPage() {
         )}
       </main>
 
+      {assetExportDialogOpen && (
+        <AssetExportDialog
+          info={assetExportInfo}
+          loadingInfo={assetExportInfoLoading}
+          exporting={assetExporting}
+          onClose={() => setAssetExportDialogOpen(false)}
+          onOpenProjectsRoot={() => voidCall(handleOpenProjectsRoot())}
+          onExport={(options) => voidCall(handleExportAssets(options))}
+        />
+      )}
+
       {conflictProject && conflictFile && (
         <ConflictDialog
           projectName={conflictProject}
@@ -1589,7 +1780,7 @@ export function ProjectsPage() {
           ]}
           onClose={() => {
             const target =
-              importDiagnostics.source === "success" ? importDiagnostics.navigateTo : null;
+              importDiagnostics.source === "success" ? importDiagnostics.navigateTo ?? null : null;
             setImportDiagnostics(null);
             if (target) navigate(target);
           }}
@@ -1619,6 +1810,232 @@ export function ProjectsPage() {
         onConfirm={handleDeleteProject}
       />
     </div>
+  );
+}
+
+// -- AssetExportDialog ---------------------------------------------------------
+
+function AssetExportDialog({
+  info,
+  loadingInfo,
+  exporting,
+  onClose,
+  onOpenProjectsRoot,
+  onExport,
+}: {
+  info: AssetArchiveExportInfo | null;
+  loadingInfo: boolean;
+  exporting: boolean;
+  onClose: () => void;
+  onOpenProjectsRoot: () => void;
+  onExport: (options: AssetArchiveExportOptions) => void;
+}) {
+  const { t } = useTranslation(["common", "dashboard"]);
+  const [options, setOptions] = useState<AssetArchiveExportOptions>({
+    includeAssets: {
+      character: true,
+      scene: true,
+      prop: true,
+      styleFavorites: true,
+    },
+    includeGlobalConfig: false,
+  });
+
+  const selectedCount =
+    Object.values(options.includeAssets).filter(Boolean).length +
+    (options.includeGlobalConfig ? 1 : 0);
+  const canExport = selectedCount > 0 && !exporting;
+
+  const setAssetChecked = (key: keyof AssetArchiveExportOptions["includeAssets"], checked: boolean) => {
+    setOptions((current) => ({
+      ...current,
+      includeAssets: {
+        ...current.includeAssets,
+        [key]: checked,
+      },
+    }));
+  };
+
+  return (
+    <GlassModal
+      open
+      onClose={onClose}
+      labelledBy="asset-export-title"
+      describedBy="asset-export-description"
+      widthClassName="w-full max-w-[560px]"
+      closeOnBackdrop={!exporting}
+      closeOnEscape={!exporting}
+    >
+      <div
+        className="flex items-start justify-between gap-4 px-6 py-5"
+        style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            aria-hidden
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent/35 bg-accent-dim text-accent-2"
+          >
+            <Archive className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2
+              id="asset-export-title"
+              className="display-serif text-[17px] font-semibold tracking-tight text-text"
+            >
+              {t("dashboard:asset_export_title")}
+            </h2>
+            <p
+              id="asset-export-description"
+              className="mt-1 text-[12.5px] leading-relaxed text-text-3"
+            >
+              {t("dashboard:asset_export_description")}
+            </p>
+          </div>
+        </div>
+        <ModalCloseButton onClick={onClose} disabled={exporting} />
+      </div>
+
+      <div className="space-y-4 px-6 py-5">
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-4">
+            {t("dashboard:asset_export_assets_label")}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <AssetExportCheckbox
+              checked={options.includeAssets.character}
+              label={t("dashboard:asset_export_character_library")}
+              description={t("dashboard:asset_export_character_library_hint")}
+              onChange={(checked) => setAssetChecked("character", checked)}
+            />
+            <AssetExportCheckbox
+              checked={options.includeAssets.scene}
+              label={t("dashboard:asset_export_scene_library")}
+              description={t("dashboard:asset_export_scene_library_hint")}
+              onChange={(checked) => setAssetChecked("scene", checked)}
+            />
+            <AssetExportCheckbox
+              checked={options.includeAssets.prop}
+              label={t("dashboard:asset_export_prop_library")}
+              description={t("dashboard:asset_export_prop_library_hint")}
+              onChange={(checked) => setAssetChecked("prop", checked)}
+            />
+            <AssetExportCheckbox
+              checked={options.includeAssets.styleFavorites}
+              label={t("dashboard:asset_export_style_favorites")}
+              description={t("dashboard:asset_export_style_favorites_hint")}
+              onChange={(checked) => setAssetChecked("styleFavorites", checked)}
+            />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-hairline-soft bg-bg/35 p-3.5">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={options.includeGlobalConfig}
+              onChange={(event) =>
+                setOptions((current) => ({
+                  ...current,
+                  includeGlobalConfig: event.target.checked,
+                }))
+              }
+              className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-text">
+                {t("dashboard:asset_export_global_config")}
+              </span>
+              <span className="mt-1 block text-[12px] leading-relaxed text-text-3">
+                {t("dashboard:asset_export_global_config_hint")}
+              </span>
+            </span>
+          </label>
+          {options.includeGlobalConfig ? (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-warm-ring bg-warm-tint px-3 py-2 text-[12px] leading-relaxed text-warm-bright">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{t("dashboard:asset_export_global_config_warning")}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-xl border border-hairline-soft bg-bg/35 p-3.5">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-4">
+            {t("dashboard:asset_export_projects_root_label")}
+          </div>
+          <button
+            type="button"
+            onClick={onOpenProjectsRoot}
+            disabled={!info?.projectsRoot || loadingInfo}
+            className="focus-ring flex w-full min-w-0 items-center gap-2 rounded-lg border border-hairline bg-bg-grad-a/55 px-3 py-2 text-left text-[12px] text-text-2 transition-colors hover:border-accent/50 hover:text-text disabled:cursor-not-allowed disabled:opacity-60"
+            title={info?.projectsRoot || ""}
+          >
+            {loadingInfo ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+            ) : (
+              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {loadingInfo
+                ? t("dashboard:asset_export_projects_root_loading")
+                : info?.projectsRoot || t("dashboard:asset_export_projects_root_unavailable")}
+            </span>
+          </button>
+          <p className="mt-2 text-[12px] leading-relaxed text-text-3">
+            {t("dashboard:asset_export_projects_root_hint")}
+          </p>
+        </div>
+      </div>
+
+      <div
+        className="flex justify-end gap-2 px-6 py-4"
+        style={{ borderTop: "1px solid var(--color-hairline-soft)" }}
+      >
+        <SecondaryButton size="sm" onClick={onClose} disabled={exporting}>
+          {t("common:cancel")}
+        </SecondaryButton>
+        <PrimaryButton
+          size="sm"
+          onClick={() => onExport(options)}
+          disabled={!canExport}
+          leadingIcon={
+            exporting ? (
+              <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )
+          }
+        >
+          {exporting ? t("dashboard:asset_exporting") : t("dashboard:export_assets")}
+        </PrimaryButton>
+      </div>
+    </GlassModal>
+  );
+}
+
+function AssetExportCheckbox({
+  checked,
+  label,
+  description,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  description: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-hairline-soft bg-bg/35 p-3 transition-colors hover:border-accent/45">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+      />
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium text-text">{label}</span>
+        <span className="mt-1 block text-[12px] leading-relaxed text-text-3">{description}</span>
+      </span>
+    </label>
   );
 }
 

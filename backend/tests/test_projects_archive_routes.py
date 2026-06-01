@@ -105,7 +105,7 @@ class TestProjectArchiveRoutes:
             assert "demo/project.json" in archive.namelist()
             assert "demo/arcreel-export.json" in archive.namelist()
 
-    def test_import_route_returns_structured_validation_errors(self, tmp_path, monkeypatch):
+    def test_import_route_rejects_unrecognized_zip(self, tmp_path, monkeypatch):
         pm = ProjectManager(tmp_path / "projects")
         client = _client(monkeypatch, pm)
         archive_path = tmp_path / "broken.zip"
@@ -121,9 +121,41 @@ class TestProjectArchiveRoutes:
             )
 
         assert response.status_code == 400
-        assert response.json()["detail"] == "导入包校验失败"
-        assert any("project.json" in error for error in response.json()["errors"])
-        assert "diagnostics" in response.json()
+        assert response.json()["detail"] == "不是当前需要的压缩包"
+        assert response.json()["archive_type"] == "unsupported"
+
+    def test_import_route_accepts_asset_archive_zip(self, tmp_path, monkeypatch):
+        pm = ProjectManager(tmp_path / "projects")
+        client = _client(monkeypatch, pm)
+        archive_path = tmp_path / "assets.zip"
+
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "arcreel-assets-export.json",
+                json.dumps({"format_version": 1}, ensure_ascii=False),
+            )
+            archive.writestr("_global_assets/character/hero.png", b"png")
+            archive.writestr("_style_favorites/templates.json", json.dumps({"templates": []}))
+            archive.writestr("global_config/config.json", json.dumps({}))
+            archive.writestr("global_config/legacy/.system_config.json", '{"legacy": true}')
+
+        with client:
+            response = client.post(
+                "/api/v1/projects/import",
+                data={"conflict_policy": "rename"},
+                files={"file": ("assets.zip", archive_path.read_bytes(), "application/zip")},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["import_type"] == "asset_archive"
+        assert payload["summary"]["asset_files"] == 1
+        assert payload["summary"]["style_favorites_files"] == 1
+        assert payload["summary"]["global_config_files"] == 1
+        assert payload["summary"]["global_config"] is True
+        assert (pm.projects_root / "_global_assets" / "character" / "hero.png").read_bytes() == b"png"
+        assert (pm.projects_root / "_style_favorites" / "templates.json").exists()
+        assert (pm.projects_root / ".system_config.json").read_text(encoding="utf-8") == '{"legacy": true}'
 
     def test_import_route_returns_conflict_payload_for_secondary_confirmation(
         self,

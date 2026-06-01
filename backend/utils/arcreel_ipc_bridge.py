@@ -590,6 +590,52 @@ def _run_project_archive_export_task(
         )
 
 
+def _run_asset_archive_export_task(
+    *,
+    task_id: str,
+    export_path: Path,
+    options: Any,
+    payload: dict[str, Any],
+) -> None:
+    _emit_export_task_event(
+        task_id,
+        {
+            "kind": "asset_archive",
+            "status": "running",
+            "exportPath": str(export_path),
+        },
+    )
+    try:
+        from server.services.asset_archive import AssetArchiveService
+
+        service = AssetArchiveService()
+        target_path, summary = service.export_to_path(
+            export_path,
+            options=options,
+            payload=payload,
+        )
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "asset_archive",
+                "status": "completed",
+                "exportPath": str(target_path),
+                "summary": summary,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        _emit_export_task_event(
+            task_id,
+            {
+                "kind": "asset_archive",
+                "status": "failed",
+                "exportPath": str(export_path),
+                "error": str(exc),
+            },
+        )
+
+
 def _run_jianying_draft_export_task(
     *,
     task_id: str,
@@ -768,6 +814,56 @@ async def _start_project_archive_export(params: dict[str, Any]) -> dict[str, Any
 async def start_project_archive_export(params: dict[str, Any]) -> dict[str, Any]:
     try:
         return await _start_project_archive_export(params)
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
+
+
+async def asset_archive_export_info(params: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        await _ensure_runtime()
+        from server.services.asset_archive import AssetArchiveService
+
+        return {"ok": True, **AssetArchiveService().get_export_info()}
+    except Exception as exc:  # noqa: BLE001
+        _log_exception()
+        return {"ok": False, "detail": str(exc)}
+
+
+async def _start_asset_archive_export(params: dict[str, Any]) -> dict[str, Any]:
+    await _ensure_runtime()
+    from server.services.asset_archive import AssetArchiveService, normalize_asset_archive_options
+
+    export_path = _normalize_zip_export_path(params.get("exportPath"))
+    options = normalize_asset_archive_options(params)
+    service = AssetArchiveService()
+    payload = await service.build_archive_payload(options)
+
+    task_id = uuid4().hex
+    _record_export_task(
+        task_id,
+        {
+            "kind": "asset_archive",
+            "status": "queued",
+            "exportPath": str(export_path),
+        },
+    )
+    _start_export_thread(
+        f"arcreel-export-assets-{task_id}",
+        _run_asset_archive_export_task,
+        {
+            "task_id": task_id,
+            "export_path": export_path,
+            "options": options,
+            "payload": payload,
+        },
+    )
+    return {"ok": True, "taskId": task_id, "status": "queued", "exportPath": str(export_path)}
+
+
+async def start_asset_archive_export(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await _start_asset_archive_export(params)
     except Exception as exc:  # noqa: BLE001
         _log_exception()
         return {"ok": False, "detail": str(exc)}
