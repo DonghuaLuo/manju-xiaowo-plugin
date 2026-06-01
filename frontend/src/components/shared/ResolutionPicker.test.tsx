@@ -126,4 +126,30 @@ describe("ResolutionPicker", () => {
     expect(screen.getByRole("listbox", { name: "图片分辨率" }).parentElement).toHaveClass("z-50");
     expect(screen.getByRole("option", { name: "1K" })).toBeInTheDocument();
   });
+
+  it("combobox mode opens the full option list from the dropdown button after a selection", async () => {
+    render(
+      <ResolutionPicker
+        mode="combobox"
+        options={["512px", "1K", "2K"]}
+        value={null}
+        onChange={() => {}}
+        placeholder="默认（不传）"
+        aria-label="图片分辨率"
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("combobox", { name: "图片分辨率" }));
+    fireEvent.click(screen.getByRole("option", { name: "1K" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "图片分辨率" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "图片分辨率" }));
+
+    expect(screen.getByRole("option", { name: "默认（不传）" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "512px" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "1K" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "2K" })).toBeInTheDocument();
+  });
 });

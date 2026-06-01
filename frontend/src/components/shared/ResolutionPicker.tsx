@@ -71,6 +71,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
   const [local, setLocal] = useState<string>(value ?? "");
   const [lastSync, setLastSync] = useState<string | null>(value);
   const [open, setOpen] = useState(false);
+  const [showAllOptions, setShowAllOptions] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [panelWidth, setPanelWidth] = useState<number | null>(null);
   if (value !== lastSync) {
@@ -79,10 +80,11 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
   }
 
   const filteredOptions = useMemo(() => {
+    if (showAllOptions) return options;
     const q = local.trim().toLowerCase();
     if (!q) return options;
     return options.filter((o) => o.toLowerCase().includes(q));
-  }, [local, options]);
+  }, [local, options, showAllOptions]);
 
   const choices = useMemo(
     () => [
@@ -104,6 +106,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
     setLocal(next);
     onChange(next === "" ? null : next);
     setOpen(false);
+    setShowAllOptions(false);
     focusInput(false);
   };
 
@@ -124,6 +127,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
     if (e.key === "ArrowDown") {
       e.preventDefault();
       if (!open) {
+        setShowAllOptions(true);
         setOpen(true);
         return;
       }
@@ -131,6 +135,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) {
+        setShowAllOptions(true);
         setOpen(true);
         return;
       }
@@ -141,6 +146,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
       if (choice) selectChoice(choice.value);
     } else if (e.key === "Escape") {
       setOpen(false);
+      setShowAllOptions(false);
     }
   };
 
@@ -161,6 +167,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
         onChange={(e) => {
           const raw = e.target.value;
           setLocal(raw);
+          setShowAllOptions(false);
           onChange(raw === "" ? null : raw);
           setOpen(true);
         }}
@@ -189,6 +196,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
         tabIndex={-1}
         onClick={() => {
           const nextOpen = !open;
+          setShowAllOptions(nextOpen);
           setOpen(nextOpen);
           focusInput(nextOpen);
         }}
@@ -200,7 +208,10 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
       </button>
       <Popover
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          setShowAllOptions(false);
+        }}
         anchorRef={anchorRef}
         align="start"
         layer="modal"
