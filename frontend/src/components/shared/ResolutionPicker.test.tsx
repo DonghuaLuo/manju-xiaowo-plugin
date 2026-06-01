@@ -106,4 +106,24 @@ describe("ResolutionPicker", () => {
       expect(screen.queryByRole("listbox", { name: "分辨率" })).not.toBeInTheDocument();
     });
   });
+
+  it("combobox mode renders its dropdown above modal overlays", () => {
+    render(
+      <div className="fixed inset-0 z-50">
+        <ResolutionPicker
+          mode="combobox"
+          options={["512px", "1K", "2K"]}
+          value={null}
+          onChange={() => {}}
+          placeholder="默认（不传）"
+          aria-label="图片分辨率"
+        />
+      </div>,
+    );
+
+    fireEvent.focus(screen.getByRole("combobox", { name: "图片分辨率" }));
+
+    expect(screen.getByRole("listbox", { name: "图片分辨率" }).parentElement).toHaveClass("z-50");
+    expect(screen.getByRole("option", { name: "1K" })).toBeInTheDocument();
+  });
 });

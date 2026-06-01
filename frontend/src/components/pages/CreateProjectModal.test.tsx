@@ -9,6 +9,7 @@ import { CreateProjectModal } from "./CreateProjectModal";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
+import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 
 const desktopFileMock = vi.hoisted(() => ({
   pickDesktopFile: vi.fn(),
@@ -97,9 +98,11 @@ describe("CreateProjectModal", () => {
     useProjectsStore.setState(useProjectsStore.getInitialState(), true);
     useProjectsStore.setState({ showCreateModal: true });
     useAppStore.setState(useAppStore.getInitialState(), true);
+    useEndpointCatalogStore.setState(useEndpointCatalogStore.getInitialState(), true);
     vi.spyOn(API, "getSystemConfig").mockResolvedValue(mockSysConfig as never);
     vi.spyOn(API, "getProviders").mockResolvedValue(mockProviders as never);
     vi.spyOn(API, "listCustomProviders").mockResolvedValue({ providers: [] });
+    vi.spyOn(API, "listEndpointCatalog").mockResolvedValue({ endpoints: [] });
     vi.spyOn(API, "getStyleTemplates").mockResolvedValue({
       success: true,
       templates: [
@@ -163,6 +166,68 @@ describe("CreateProjectModal", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /创建项目/ })).toBeInTheDocument()
     );
+  });
+
+  it("shows custom image resolution dropdown above the create-project modal", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValueOnce({
+      ...mockSysConfig,
+      settings: {
+        ...mockSysConfig.settings,
+        default_image_backend_t2i: "custom-1/custom-image",
+        default_image_backend_i2i: "custom-1/custom-image",
+      },
+      options: {
+        ...mockSysConfig.options,
+        image_backends: ["custom-1/custom-image"],
+        provider_names: {
+          ...mockSysConfig.options.provider_names,
+          "custom-1": "自定义图片供应商",
+        },
+      },
+    } as never);
+    vi.spyOn(API, "listCustomProviders").mockResolvedValueOnce({
+      providers: [
+        {
+          id: 1,
+          display_name: "自定义图片供应商",
+          discovery_format: "openai",
+          base_url: "https://example.test",
+          api_key_masked: "sk-***",
+          created_at: "2026-01-01T00:00:00Z",
+          models: [
+            {
+              id: 11,
+              model_id: "custom-image",
+              display_name: "custom-image",
+              endpoint: "image_generation",
+              is_default: true,
+              is_enabled: true,
+              price_unit: null,
+              price_input: null,
+              price_output: null,
+              currency: null,
+              supported_durations: null,
+              resolution: null,
+            },
+          ],
+        },
+      ],
+    } as never);
+    useEndpointCatalogStore.setState({
+      initialized: true,
+      endpointToMediaType: { image_generation: "image" },
+      endpointToImageCapabilities: { image_generation: ["text_to_image", "image_to_image"] },
+    });
+
+    render(<CreateProjectModal />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+
+    const resolution = await screen.findByRole("combobox", { name: "分辨率" });
+    fireEvent.focus(resolution);
+
+    expect(screen.getByRole("listbox", { name: "分辨率" }).parentElement).toHaveClass("z-50");
+    expect(screen.getByRole("option", { name: "1K" })).toBeInTheDocument();
   });
 
   it("submits createProject with default template when Create clicked on step 3", async () => {

@@ -203,6 +203,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
         onClose={() => setOpen(false)}
         anchorRef={anchorRef}
         align="start"
+        layer="modal"
         sideOffset={5}
         width=""
         className={DROPDOWN_PANEL_CLS}
