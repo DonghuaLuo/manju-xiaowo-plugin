@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginSDK } from "xiaowo-sdk";
 import { API } from "@/api";
 import { MediaCard } from "./MediaCard";
@@ -9,6 +9,16 @@ afterEach(() => {
 });
 
 describe("MediaCard", () => {
+  beforeEach(() => {
+    vi.spyOn(API, "getVersions").mockResolvedValue({
+      resource_type: "videos",
+      resource_id: "SEG-1",
+      current_version: 0,
+      versions: [],
+    });
+    vi.spyOn(API, "getQualityRatings").mockResolvedValue({ ratings: [] });
+  });
+
   it("uses a plugin lightbox for generated video fullscreen", async () => {
     render(
       <MediaCard
@@ -66,5 +76,88 @@ describe("MediaCard", () => {
         defaultPath: "scene_SEG-1.mp4",
       }),
     );
+  });
+
+  it("shows current version quality and input status badges", async () => {
+    vi.spyOn(API, "getVersions").mockResolvedValueOnce({
+      resource_type: "videos",
+      resource_id: "SEG-1",
+      current_version: 1,
+      versions: [
+        {
+          version: 1,
+          filename: "scene_SEG-1.mp4",
+          created_at: "2026-01-01T00:00:00Z",
+          file_size: 1024,
+          is_current: true,
+          generation_quality: "final",
+          generation_route: {
+            provider: "doubao",
+            model: "seedance",
+            resolution: "1080p",
+            duration_seconds: 6,
+          },
+          provider_input_images: {
+            start_image: {
+              resized: true,
+              transcoded: false,
+              source_bytes: 4_000_000,
+              input_bytes: 800_000,
+            },
+          },
+          source_storyboard_generation_quality: "final",
+        },
+      ],
+    });
+
+    render(
+      <MediaCard
+        kind="video"
+        projectName="demo"
+        segmentId="SEG-1"
+        assetPath="videos/scene_SEG-1.mp4"
+        aspectRatio="16:9"
+        hideGenerateButton
+      />,
+    );
+
+    expect(await screen.findByText("最终版")).toBeInTheDocument();
+    expect(screen.getByText("1080p")).toBeInTheDocument();
+    expect(screen.getByText("6s")).toBeInTheDocument();
+    expect(screen.getByText("doubao/seedance")).toBeInTheDocument();
+    expect(screen.getByText("已优化输入图")).toBeInTheDocument();
+    expect(screen.getByText("基于最终分镜")).toBeInTheDocument();
+  });
+
+  it("shows grid storyboard as a valid video source badge", async () => {
+    vi.spyOn(API, "getVersions").mockResolvedValueOnce({
+      resource_type: "videos",
+      resource_id: "SEG-1",
+      current_version: 1,
+      versions: [
+        {
+          version: 1,
+          filename: "scene_SEG-1.mp4",
+          created_at: "2026-01-01T00:00:00Z",
+          file_size: 1024,
+          is_current: true,
+          generation_quality: "final",
+          source_storyboard_generation_quality: "grid",
+        },
+      ],
+    });
+
+    render(
+      <MediaCard
+        kind="video"
+        projectName="demo"
+        segmentId="SEG-1"
+        assetPath="videos/scene_SEG-1.mp4"
+        aspectRatio="16:9"
+        hideGenerateButton
+      />,
+    );
+
+    expect(await screen.findByText("基于宫格镜头板")).toBeInTheDocument();
   });
 });

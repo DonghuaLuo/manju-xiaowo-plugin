@@ -1,4 +1,4 @@
-import type { GenerationProfiles } from "@/types";
+import type { GenerationProfiles, ShotTier, ShotTierProfile } from "@/types";
 
 export const IMAGE_PROFILE_RESOLUTIONS = ["512px", "1K", "2K", "4K"] as const;
 export const VIDEO_PROFILE_RESOLUTIONS = ["480p", "720p", "1080p", "4K"] as const;
@@ -112,4 +112,64 @@ export function normalizeGenerationProfiles(
 
 export function generationProfilesSignature(profiles?: GenerationProfiles | null): string {
   return JSON.stringify(normalizeGenerationProfiles(profiles));
+}
+
+export const SHOT_TIERS = ["S", "A", "B"] as const satisfies readonly ShotTier[];
+export const REFERENCE_IMAGE_POLICIES = ["full_context", "balanced", "lean"] as const;
+
+export type ShotTierProfiles = Partial<Record<ShotTier, ShotTierProfile>>;
+
+export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfile> {
+  return {
+    S: {
+      label: "hero",
+      retry_budget: 3,
+      reference_image_policy: "full_context",
+      prefer_final_storyboard_source: true,
+      profiles: {},
+    },
+    A: {
+      label: "standard",
+      retry_budget: 2,
+      reference_image_policy: "balanced",
+      prefer_final_storyboard_source: true,
+      profiles: {},
+    },
+    B: {
+      label: "utility",
+      retry_budget: 1,
+      reference_image_policy: "lean",
+      prefer_final_storyboard_source: false,
+      profiles: {},
+    },
+  };
+}
+
+export function normalizeShotTierProfiles(
+  profiles?: ShotTierProfiles | null,
+): Record<ShotTier, ShotTierProfile> {
+  const defaults = createDefaultShotTierProfiles();
+  return Object.fromEntries(
+    SHOT_TIERS.map((tier) => {
+      const raw: ShotTierProfile = profiles?.[tier] ?? {};
+      return [
+        tier,
+        {
+          ...defaults[tier],
+          ...raw,
+          retry_budget: Number.isFinite(Number(raw.retry_budget))
+            ? Math.max(1, Math.floor(Number(raw.retry_budget)))
+            : defaults[tier].retry_budget,
+          profiles: {
+            ...(defaults[tier].profiles ?? {}),
+            ...(raw.profiles ?? {}),
+          },
+        },
+      ];
+    }),
+  ) as Record<ShotTier, ShotTierProfile>;
+}
+
+export function shotTierProfilesSignature(profiles?: ShotTierProfiles | null): string {
+  return JSON.stringify(normalizeShotTierProfiles(profiles));
 }

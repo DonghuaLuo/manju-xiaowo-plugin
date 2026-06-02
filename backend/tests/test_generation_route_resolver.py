@@ -7,6 +7,7 @@ import pytest
 from lib.config.resolver import ProviderModel
 from server.services.generation_route_resolver import (
     default_generation_profiles,
+    is_video_resolution_below,
     resolve_generation_route,
     should_resolve_generation_route,
 )
@@ -41,6 +42,11 @@ class _FakeResolver:
 
     async def video_generate_audio(self, project_name=None):
         return True
+
+
+class _FailingCapsResolver(_FakeResolver):
+    async def video_capabilities_for_model(self, provider_id, model_id, project):
+        raise ValueError("supported_durations is empty")
 
 
 @pytest.mark.asyncio
@@ -118,6 +124,40 @@ async def test_video_profile_translates_backend_and_runtime_options():
 
 
 @pytest.mark.asyncio
+async def test_shot_tier_applies_project_profile_override_and_metadata():
+    project = {
+        "generation_profiles": default_generation_profiles(),
+        "shot_tier_profiles": {
+            "S": {
+                "retry_budget": 4,
+                "profiles": {
+                    "video_final": {
+                        "resolution": "4K",
+                        "service_tier": "priority",
+                    }
+                },
+            }
+        },
+    }
+    resolver = _FakeResolver({"supported_durations": [4, 6, 8], "resolutions": ["1080p", "4K"]})
+
+    route = await resolve_generation_route(
+        project=project,
+        payload={"quality": "final", "shot_tier": "S", "prompt": "p"},
+        task_kind="video",
+        resolver=resolver,  # type: ignore[arg-type]
+        project_name="demo",
+    )
+
+    assert route.shot_tier == "S"
+    assert route.resolution == "4K"
+    assert route.service_tier == "priority"
+    assert route.shot_tier_strategy["retry_budget"] == 4
+    assert route.metadata["shot_tier"] == "S"
+    assert route.metadata["generation_route"]["shot_tier_strategy"]["retry_budget"] == 4
+
+
+@pytest.mark.asyncio
 async def test_video_draft_duration_follows_project_or_payload_duration():
     project = {"generation_profiles": default_generation_profiles(), "default_duration": 6}
     resolver = _FakeResolver()
@@ -190,6 +230,22 @@ async def test_video_profile_coerces_resolution_to_model_capability():
 
     assert route.resolution == "720p"
     assert route.metadata["generation_route_warnings"][0]["key"] == "video_resolution_adjusted"
+
+
+@pytest.mark.asyncio
+async def test_video_profile_warns_when_capabilities_are_unavailable():
+    project = {"generation_profiles": default_generation_profiles()}
+
+    route = await resolve_generation_route(
+        project=project,
+        payload={"quality": "draft", "prompt": "p"},
+        task_kind="video",
+        resolver=_FailingCapsResolver(),  # type: ignore[arg-type]
+        project_name="demo",
+    )
+
+    assert route.warnings[0]["key"] == "video_capabilities_unavailable"
+    assert route.metadata["generation_route_warnings"][0]["params"]["reason"] == "supported_durations is empty"
 
 
 @pytest.mark.asyncio
@@ -271,7 +327,30 @@ async def test_reference_video_profile_resolves_draft_video_route():
     assert route.metadata["generation_route"]["task_kind"] == "reference_video"
 
 
+@pytest.mark.asyncio
+async def test_reference_video_route_rejects_models_without_reference_images():
+    project = {"generation_profiles": default_generation_profiles()}
+    resolver = _FakeResolver({"supported_durations": [4, 8], "max_reference_images": 0})
+
+    with pytest.raises(ValueError, match="supports 0 reference images"):
+        await resolve_generation_route(
+            project=project,
+            payload={"quality": "final", "prompt": "p"},
+            task_kind="reference_video",
+            resolver=resolver,  # type: ignore[arg-type]
+            project_name="demo",
+        )
+
+
 def test_should_resolve_generation_route_only_for_new_inputs():
     assert should_resolve_generation_route({}, {"prompt": "p"}) is False
     assert should_resolve_generation_route({}, {"prompt": "p", "quality": "draft"}) is True
+    assert should_resolve_generation_route({}, {"prompt": "p", "shot_tier": "S"}) is True
     assert should_resolve_generation_route({"generation_profiles": {}}, {"prompt": "p"}) is True
+
+
+def test_video_resolution_below_compares_rank_not_equality():
+    assert is_video_resolution_below("720p", "1080p") is True
+    assert is_video_resolution_below("4K", "1080p") is False
+    assert is_video_resolution_below("1080p", "1080p") is False
+    assert is_video_resolution_below("weird", "1080p") is False

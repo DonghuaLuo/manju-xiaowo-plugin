@@ -57,6 +57,7 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const [exportingProject, setExportingProject] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [jianyingExporting, setJianyingExporting] = useState(false);
+  const [finalizingEpisode, setFinalizingEpisode] = useState(false);
   const [exportDiagnostics, setExportDiagnostics] = useState<ExportDiagnostics | null>(null);
   const [openSavedPath, setOpenSavedPath] = useState<string | null>(null);
   const usageAnchorRef = useRef<HTMLDivElement>(null);
@@ -232,6 +233,44 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           t("dashboard:jianying_export_failed", { message: errMsg(err) }),
           "error",
         );
+    }
+  };
+
+  const handleFinalizeEpisode = async (episode: number) => {
+    if (!currentProjectName || finalizingEpisode) return;
+
+    setFinalizingEpisode(true);
+    try {
+      const result = await API.finalizeEpisode(currentProjectName, episode);
+      const summary = result.summary ?? {};
+      const taskCount =
+        (summary.storyboards_enqueued ?? 0) +
+        (summary.videos_enqueued ?? 0) +
+        (summary.reference_videos_enqueued ?? 0);
+      if (taskCount > 0) {
+        useAppStore.getState().pushToast(
+          t("dashboard:finalize_episode_started", { count: taskCount }),
+          "success",
+        );
+      } else {
+        useAppStore.getState().pushToast(t("dashboard:finalize_episode_noop"), "success");
+      }
+      if ((summary.issues ?? 0) > 0) {
+        useAppStore.getState().pushNotification(
+          t("dashboard:finalize_episode_has_issues", { count: summary.issues }),
+          "warning",
+        );
+      }
+      setExportDialogOpen(false);
+    } catch (err) {
+      useAppStore
+        .getState()
+        .pushNotification(
+          t("dashboard:finalize_episode_failed", { message: errMsg(err) }),
+          "error",
+        );
+    } finally {
+      setFinalizingEpisode(false);
     }
   };
 
@@ -496,6 +535,10 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
                 void handleJianyingExport(episode, draftPath, jianyingVersion);
               }}
               jianyingExporting={jianyingExporting}
+              onFinalizeEpisode={(episode) => {
+                void handleFinalizeEpisode(episode);
+              }}
+              finalizingEpisode={finalizingEpisode}
             />
           </div>
 

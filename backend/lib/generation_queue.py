@@ -374,6 +374,11 @@ class GenerationQueue:
             repo = TaskRepository(session)
             await repo.persist_api_call_id(task_id, call_id)
 
+    async def append_task_diagnostic(self, task_id: str, data: dict[str, Any]) -> None:
+        async with self._session_factory() as session:
+            repo = TaskRepository(session)
+            await repo.append_diagnostic_event(task_id, data)
+
     async def mark_task_succeeded(self, task_id: str, result: dict[str, Any] | None) -> int:
         """Returns rows_affected (0 = 已被外部翻成非 running 终/中间态，worker 走 0-rows-cancelled 协议)."""
         async with self._session_factory() as session:
@@ -394,6 +399,35 @@ class GenerationQueue:
             logger.warning("任务失败 task_id=%s error=%s", task_id, error_message[:200])
         else:
             logger.info("mark_failed 0 rows task_id=%s (已被外部翻状态)", task_id)
+        return affected
+
+    async def requeue_task_for_retry(
+        self,
+        task_id: str,
+        *,
+        payload: dict[str, Any],
+        error_message: str,
+        failure: dict[str, Any] | None = None,
+    ) -> int:
+        async with self._session_factory() as session:
+            repo = TaskRepository(session)
+            affected = await repo.requeue_failed_attempt(
+                task_id=task_id,
+                payload=payload,
+                error_message=error_message,
+                failure=failure,
+            )
+        if affected > 0:
+            retry = payload.get("_retry") if isinstance(payload, dict) else None
+            logger.warning(
+                "任务自动重试回队 task_id=%s attempt=%s/%s failure=%s",
+                task_id,
+                retry.get("attempt") if isinstance(retry, dict) else None,
+                retry.get("max_attempts") if isinstance(retry, dict) else None,
+                (failure or {}).get("failure_type"),
+            )
+        else:
+            logger.info("requeue_task_for_retry 0 rows task_id=%s (已被外部翻状态)", task_id)
         return affected
 
     async def mark_task_cancelled(self, task_id: str, *, cancelled_by: str = "user") -> int:

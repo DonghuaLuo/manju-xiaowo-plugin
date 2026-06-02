@@ -27,7 +27,7 @@ def patch_episode_script_tool(ctx: ToolContext):
     @tool(
         "patch_episode_script",
         "按分镜 id（segment_id/scene_id/unit_id）编辑剧本的一个字段，支持嵌套路径"
-        "（如 image_prompt.scene、duration_seconds、video_prompt.action）。三种内容/生成模式通用。"
+        "（如 image_prompt.scene、duration_seconds、video_prompt.action、shot_tier）。三种内容/生成模式通用。"
         "纯字段 setter，不触碰已生成资产；改 prompt 后如需重生图片/视频，应另行触发生成动作。"
         "叶子字段不存在会被创建（允许补 LLM 漏写的 optional 字段）；"
         "不可改 generated_assets 或分镜 id，拼写错误会在写盘结构校验阶段拒绝。",

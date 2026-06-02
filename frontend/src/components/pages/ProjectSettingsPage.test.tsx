@@ -352,6 +352,46 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });
 
+  it("previews grid generation against both text-to-image and image-to-image routes", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      ...FAKE_CONFIG_WITH_DEFAULTS,
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        video_backend: "gemini/veo-3",
+        image_provider_t2i: "gemini/nano-banana",
+        image_provider_i2i: "gemini/nano-banana",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const previewSpy = vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({ routes: [] });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalled());
+    const payload = previewSpy.mock.calls.at(-1)?.[1];
+    const gridRoutes = payload?.routes.filter((route) => route.task_kind === "grid") ?? [];
+
+    expect(gridRoutes).toEqual([
+      expect.objectContaining({ quality: "final", capability: "t2i" }),
+      expect.objectContaining({ quality: "final", capability: "i2i" }),
+    ]);
+  });
+
   it("loads existing model_settings resolution into video/image pickers", async () => {
     vi.spyOn(API, "getSystemConfig").mockResolvedValue({
       ...FAKE_CONFIG_WITH_DEFAULTS,

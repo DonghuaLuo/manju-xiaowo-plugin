@@ -35,6 +35,7 @@ _TRANSITION_MAP: dict[str, TransitionType] = {
 }
 
 from lib.project_manager import ProjectManager
+from server.services.generation_route_resolver import is_video_resolution_below, merged_generation_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +62,21 @@ class JianyingDraftService:
         script_data = self.pm.load_script(project_name, filename)
         return script_data, filename
 
+    @staticmethod
+    def _is_reference_video_script(script: dict[str, Any]) -> bool:
+        return script.get("generation_mode") == "reference_video" or isinstance(script.get("video_units"), list)
+
     def _collect_video_clips(self, script: dict, project_dir: Path) -> list[dict[str, Any]]:
         """从剧本中提取已完成视频的片段列表"""
-        content_mode = script.get("content_mode", "narration")
-        items = script.get("segments" if content_mode == "narration" else "scenes", [])
-        id_field = "segment_id" if content_mode == "narration" else "scene_id"
+        if self._is_reference_video_script(script):
+            items = script.get("video_units") or []
+            id_field = "unit_id"
+            resource_type = "reference_videos"
+        else:
+            content_mode = script.get("content_mode", "narration")
+            items = script.get("segments" if content_mode == "narration" else "scenes", [])
+            id_field = "segment_id" if content_mode == "narration" else "scene_id"
+            resource_type = "videos"
 
         clips = []
         for item in items:
@@ -82,13 +93,14 @@ class JianyingDraftService:
                 continue
 
             item_id = item.get(id_field, "")
-            version_metadata = self._get_current_version_metadata(project_dir, "videos", str(item_id))
+            version_metadata = self._get_current_version_metadata(project_dir, resource_type, str(item_id))
             clip = {
                 "id": item_id,
                 "duration_seconds": item.get("duration_seconds", 8),
                 "video_clip": video_clip,
                 "abs_path": abs_path,
                 "novel_text": item.get("novel_text", ""),
+                "resource_type": resource_type,
                 "transition_to_next": item.get("transition_to_next", "cut"),
             }
             if version_metadata:
@@ -128,15 +140,92 @@ class JianyingDraftService:
         return {}
 
     @staticmethod
-    def _assert_no_draft_video_clips(clips: list[dict[str, Any]], episode: int) -> None:
+    def _final_video_resolution(project: dict[str, Any], resource_type: str = "videos") -> str | None:
+        profile_key = "reference_video_final" if resource_type == "reference_videos" else "video_final"
+        profile = merged_generation_profiles(project).get(profile_key) or {}
+        value = profile.get("resolution")
+        return str(value) if value else None
+
+    @staticmethod
+    def _version_resolution(metadata: dict[str, Any]) -> str | None:
+        route = metadata.get("generation_route")
+        if isinstance(route, dict) and route.get("resolution"):
+            return str(route["resolution"])
+        value = metadata.get("resolution")
+        return str(value) if value else None
+
+    @classmethod
+    def _assert_export_ready(cls, project: dict[str, Any], clips: list[dict[str, Any]], episode: int) -> None:
         draft_ids = [str(clip.get("id") or "") for clip in clips if clip.get("generation_quality") == "draft"]
         draft_ids = [item_id for item_id in draft_ids if item_id]
-        if not draft_ids:
+        if draft_ids:
+            shown = "、".join(draft_ids[:12])
+            if len(draft_ids) > 12:
+                shown = f"{shown} 等 {len(draft_ids)} 个"
+            raise ValueError(f"第 {episode} 集包含草稿视频片段：{shown}。请先生成最终版视频后再导出剪映草稿。")
+
+        draft_source_ids = [
+            str(clip.get("id") or "")
+            for clip in clips
+            if clip.get("resource_type", "videos") == "videos"
+            and (clip.get("version_metadata") or {}).get("source_storyboard_generation_quality") == "draft"
+        ]
+        draft_source_ids = [item_id for item_id in draft_source_ids if item_id]
+        if draft_source_ids:
+            shown = "、".join(draft_source_ids[:12])
+            if len(draft_source_ids) > 12:
+                shown = f"{shown} 等 {len(draft_source_ids)} 个"
+            raise ValueError(f"第 {episode} 集包含基于草稿分镜生成的视频：{shown}。请先最终化本集后再导出剪映草稿。")
+
+        if isinstance(project.get("generation_profiles"), dict):
+            missing_source_ids = [
+                str(clip.get("id") or "")
+                for clip in clips
+                if clip.get("resource_type", "videos") == "videos"
+                and clip.get("generation_quality") == "final"
+                and "source_storyboard_generation_quality" not in (clip.get("version_metadata") or {})
+            ]
+            missing_source_ids = [item_id for item_id in missing_source_ids if item_id]
+            if missing_source_ids:
+                shown = "、".join(missing_source_ids[:12])
+                if len(missing_source_ids) > 12:
+                    shown = f"{shown} 等 {len(missing_source_ids)} 个"
+                raise ValueError(f"第 {episode} 集包含缺少分镜来源记录的视频：{shown}。请先最终化本集后再导出剪映草稿。")
+
+        low_resolution_by_target: dict[str, list[str]] = {}
+        for clip in clips:
+            target_resolution = cls._final_video_resolution(project, str(clip.get("resource_type") or "videos"))
+            if not target_resolution:
+                continue
+            metadata = clip.get("version_metadata") or {}
+            resolution = cls._version_resolution(metadata)
+            if is_video_resolution_below(resolution, target_resolution):
+                low_resolution_by_target.setdefault(target_resolution, []).append(f"{clip.get('id') or ''}({resolution})")
+        low_resolution_by_target = {
+            target: [item for item in items if item]
+            for target, items in low_resolution_by_target.items()
+            if any(items)
+        }
+        if not low_resolution_by_target:
             return
-        shown = "、".join(draft_ids[:12])
-        if len(draft_ids) > 12:
-            shown = f"{shown} 等 {len(draft_ids)} 个"
-        raise ValueError(f"第 {episode} 集包含草稿视频片段：{shown}。请先生成最终版视频后再导出剪映草稿。")
+        if len(low_resolution_by_target) == 1:
+            target_resolution, low_resolution = next(iter(low_resolution_by_target.items()))
+            shown = "、".join(low_resolution[:12])
+            if len(low_resolution) > 12:
+                shown = f"{shown} 等 {len(low_resolution)} 个"
+            raise ValueError(
+                f"第 {episode} 集包含低于最终规格 {target_resolution} 的视频片段：{shown}。"
+                "请先最终化本集后再导出剪映草稿。"
+            )
+        shown_parts = []
+        total = 0
+        for target_resolution, items in low_resolution_by_target.items():
+            total += len(items)
+            shown_parts.append(f"{target_resolution}: {'、'.join(items[:12])}")
+        shown = "；".join(shown_parts)
+        if total > 12:
+            shown = f"{shown} 等 {total} 个"
+        raise ValueError(f"第 {episode} 集包含低于最终规格的视频片段：{shown}。请先最终化本集后再导出剪映草稿。")
 
     def _resolve_canvas_size(self, project: dict, first_video_path: Path | None = None) -> tuple[int, int]:
         """根据项目 aspect_ratio 确定画布尺寸，缺失时从首个视频自动检测"""
@@ -316,7 +405,7 @@ class JianyingDraftService:
         clips = self._collect_video_clips(script_data, project_dir)
         if not clips:
             raise ValueError(f"第 {episode} 集没有已完成的视频片段，请先生成视频")
-        self._assert_no_draft_video_clips(clips, episode)
+        self._assert_export_ready(project, clips, episode)
 
         # 3. 画布尺寸（项目未设 aspect_ratio 时从首个视频自动检测）
         width, height = self._resolve_canvas_size(project, clips[0]["abs_path"])

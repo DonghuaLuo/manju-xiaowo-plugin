@@ -7,6 +7,8 @@
  * - server/routers/projects.py (ProjectSummary list response)
  */
 
+import type { ShotTier } from "./script";
+
 export interface ProjectOverview {
   synopsis: string;
   genre: string;
@@ -129,6 +131,14 @@ export interface GenerationProfiles {
   reference_video_final?: VideoGenerationProfile;
 }
 
+export interface ShotTierProfile {
+  label?: string | null;
+  retry_budget?: number | null;
+  reference_image_policy?: string | null;
+  prefer_final_storyboard_source?: boolean | null;
+  profiles?: Partial<Record<keyof GenerationProfiles, ImageGenerationProfile | VideoGenerationProfile>>;
+}
+
 export interface ProjectData {
   title: string;
   content_mode: "narration" | "drama";
@@ -160,6 +170,7 @@ export interface ProjectData {
   text_backend_style?: string | null;
   model_settings?: Record<string, ModelSettingEntry>;
   generation_profiles?: GenerationProfiles;
+  shot_tier_profiles?: Partial<Record<ShotTier, ShotTierProfile>>;
   /** Legacy field: keyed by model_id only (before composite key refactor). Read-only at UI layer. */
   video_model_settings?: Record<string, { resolution?: string | null }>;
   metadata?: {

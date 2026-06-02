@@ -12,6 +12,7 @@ from server.services.resolution_resolver import resolve_resolution
 GenerationQuality = Literal["draft", "final", "custom"]
 ImageCapability = Literal["t2i", "i2i"]
 MediaType = Literal["image", "video"]
+ShotTier = Literal["S", "A", "B"]
 
 
 PROFILED_TASK_KINDS = frozenset({"character", "scene", "prop", "storyboard", "grid", "video", "reference_video"})
@@ -25,6 +26,7 @@ ROUTE_TRIGGER_KEYS = frozenset(
         "generate_audio",
         "service_tier",
         "video_backend",
+        "shot_tier",
     }
 )
 
@@ -47,6 +49,8 @@ class GenerationRoute:
     supported_resolutions: list[str] = field(default_factory=list)
     supported_durations: list[int] = field(default_factory=list)
     duration_resolution_constraints: dict[str, list[int]] = field(default_factory=dict)
+    shot_tier: ShotTier | None = None
+    shot_tier_strategy: dict[str, Any] = field(default_factory=dict)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     effective_payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -107,6 +111,39 @@ def default_generation_profiles() -> dict[str, dict[str, Any]]:
     }
 
 
+def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
+    """Return built-in S/A/B shot strategies.
+
+    The defaults intentionally avoid hard-coding a provider choice. Projects can
+    attach per-profile overrides under ``profiles`` when they want a tier to
+    force a route field such as resolution, backend, audio, or service tier.
+    """
+
+    return {
+        "S": {
+            "label": "hero",
+            "retry_budget": 3,
+            "reference_image_policy": "full_context",
+            "prefer_final_storyboard_source": True,
+            "profiles": {},
+        },
+        "A": {
+            "label": "standard",
+            "retry_budget": 2,
+            "reference_image_policy": "balanced",
+            "prefer_final_storyboard_source": True,
+            "profiles": {},
+        },
+        "B": {
+            "label": "utility",
+            "retry_budget": 1,
+            "reference_image_policy": "lean",
+            "prefer_final_storyboard_source": False,
+            "profiles": {},
+        },
+    }
+
+
 def compact_generation_payload(values: dict[str, Any]) -> dict[str, Any]:
     """Drop unset generation override fields before enqueuing."""
 
@@ -133,6 +170,17 @@ def normalize_generation_quality(raw: object) -> GenerationQuality | None:
         return None
     value = raw.strip().lower()
     if value in {"draft", "final", "custom"}:
+        return value  # type: ignore[return-value]
+    return None
+
+
+def normalize_shot_tier(raw: object) -> ShotTier | None:
+    """Normalize shot tier values to S/A/B."""
+
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().upper()
+    if value in {"S", "A", "B"}:
         return value  # type: ignore[return-value]
     return None
 
@@ -196,17 +244,60 @@ def merged_generation_profiles(project: dict | None) -> dict[str, dict[str, Any]
     return profiles
 
 
+def merged_shot_tier_profiles(project: dict | None) -> dict[str, dict[str, Any]]:
+    """Merge project S/A/B strategy settings over the built-in schema."""
+
+    profiles = {key: dict(value) for key, value in default_shot_tier_profiles().items()}
+    raw_profiles = None
+    if isinstance(project, dict):
+        raw_profiles = project.get("shot_tier_profiles") or project.get("shot_tiers")
+    if isinstance(raw_profiles, dict):
+        for key, value in raw_profiles.items():
+            tier = normalize_shot_tier(key)
+            if tier is None or not isinstance(value, dict):
+                continue
+            merged = {**profiles.get(tier, {}), **value}
+            default_profile_overrides = profiles.get(tier, {}).get("profiles")
+            raw_profile_overrides = value.get("profiles")
+            if isinstance(default_profile_overrides, dict) or isinstance(raw_profile_overrides, dict):
+                merged["profiles"] = {
+                    **(default_profile_overrides if isinstance(default_profile_overrides, dict) else {}),
+                    **(raw_profile_overrides if isinstance(raw_profile_overrides, dict) else {}),
+                }
+            profiles[tier] = merged
+    return profiles
+
+
 def _profile_for(
     project: dict | None,
     task_kind: str,
     quality: GenerationQuality | None,
+    shot_tier: ShotTier | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     if quality is None and project and isinstance(project.get("generation_profiles"), dict):
         quality = default_quality_for_task(task_kind)
     profile_key = profile_key_for(task_kind, quality)
     if profile_key is None:
         return None, {}
-    return profile_key, dict(merged_generation_profiles(project).get(profile_key) or {})
+    profile = dict(merged_generation_profiles(project).get(profile_key) or {})
+    if shot_tier is not None:
+        strategy = merged_shot_tier_profiles(project).get(shot_tier) or {}
+        overrides = strategy.get("profiles")
+        profile_override = overrides.get(profile_key) if isinstance(overrides, dict) else None
+        legacy_profile_override = strategy.get(profile_key)
+        if isinstance(profile_override, dict):
+            profile.update(profile_override)
+        elif isinstance(legacy_profile_override, dict):
+            profile.update(legacy_profile_override)
+    return profile_key, profile
+
+
+def _shot_tier_strategy(project: dict | None, shot_tier: ShotTier | None) -> dict[str, Any]:
+    if shot_tier is None:
+        return {}
+    strategy = dict(merged_shot_tier_profiles(project).get(shot_tier) or {})
+    strategy.pop("profiles", None)
+    return compact_generation_payload(strategy)
 
 
 def _without_none(values: dict[str, Any]) -> dict[str, Any]:
@@ -257,6 +348,24 @@ def _resolution_rank(value: str) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def video_resolution_rank(value: object) -> int | None:
+    """Return a comparable video resolution rank when the value is known."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return _resolution_rank(value)
+
+
+def is_video_resolution_below(actual: object, target: object) -> bool:
+    """Return True only when both resolutions are known and actual < target."""
+
+    actual_rank = video_resolution_rank(actual)
+    target_rank = video_resolution_rank(target)
+    if actual_rank is None or target_rank is None:
+        return False
+    return actual_rank < target_rank
 
 
 def coerce_video_resolution_for_options(
@@ -436,7 +545,9 @@ async def resolve_generation_route(
     if normalized_quality is None and project and isinstance(project.get("generation_profiles"), dict):
         normalized_quality = default_quality_for_task(task_kind)
     normalized_quality = normalize_task_quality(task_kind, normalized_quality)
-    profile_key, profile = _profile_for(project, task_kind, normalized_quality)
+    shot_tier = normalize_shot_tier(payload.get("shot_tier") if isinstance(payload, dict) else None)
+    shot_tier_strategy = _shot_tier_strategy(project, shot_tier)
+    profile_key, profile = _profile_for(project, task_kind, normalized_quality, shot_tier)
     effective_payload = _merge_payload(profile, payload)
 
     if task_kind in {"video", "reference_video"}:
@@ -448,6 +559,8 @@ async def resolve_generation_route(
             profile_key=profile_key,
             profile=profile,
             effective_payload=effective_payload,
+            shot_tier=shot_tier,
+            shot_tier_strategy=shot_tier_strategy,
             resolver=resolver,
             project_name=project_name,
         )
@@ -460,6 +573,8 @@ async def resolve_generation_route(
         profile_key=profile_key,
         profile=profile,
         effective_payload=effective_payload,
+        shot_tier=shot_tier,
+        shot_tier_strategy=shot_tier_strategy,
         resolver=resolver,
         capability=capability or "t2i",
     )
@@ -474,6 +589,8 @@ async def _resolve_image_route(
     profile_key: str | None,
     profile: dict[str, Any],
     effective_payload: dict[str, Any],
+    shot_tier: ShotTier | None,
+    shot_tier_strategy: dict[str, Any],
     resolver: ConfigResolver,
     capability: ImageCapability,
 ) -> GenerationRoute:
@@ -488,6 +605,8 @@ async def _resolve_image_route(
         profile_key=profile_key,
         resolved=resolved,
         resolution=resolution,
+        shot_tier=shot_tier,
+        shot_tier_strategy=shot_tier_strategy,
         source_version=payload.get("source_version") if payload else None,
     )
     return GenerationRoute(
@@ -498,6 +617,8 @@ async def _resolve_image_route(
         provider_id=resolved.provider_id,
         model_id=resolved.model_id,
         resolution=resolution,
+        shot_tier=shot_tier,
+        shot_tier_strategy=shot_tier_strategy,
         effective_payload=effective_payload,
         metadata=metadata,
     )
@@ -512,6 +633,8 @@ async def _resolve_video_route(
     profile_key: str | None,
     profile: dict[str, Any],
     effective_payload: dict[str, Any],
+    shot_tier: ShotTier | None,
+    shot_tier_strategy: dict[str, Any],
     resolver: ConfigResolver,
     project_name: str | None,
 ) -> GenerationRoute:
@@ -525,6 +648,7 @@ async def _resolve_video_route(
     supports_generate_audio: bool | None = None
     supports_seed: bool | None = None
     service_tiers: list[str] = []
+    max_reference_images: int | None = None
     try:
         caps = await resolver.video_capabilities_for_model(resolved.provider_id, resolved.model_id, project)
         supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
@@ -536,13 +660,32 @@ async def _resolve_video_route(
         supports_generate_audio = bool(caps["supports_generate_audio"]) if "supports_generate_audio" in caps else None
         supports_seed = bool(caps["supports_seed"]) if "supports_seed" in caps else None
         service_tiers = [str(item) for item in caps.get("service_tiers") or [] if str(item)]
-    except Exception:
+        if caps.get("max_reference_images") is not None:
+            max_reference_images = int(caps.get("max_reference_images") or 0)
+    except Exception as exc:
         supported_resolutions = []
         supported_durations = []
         duration_resolution_constraints = {}
         supports_generate_audio = None
         supports_seed = None
         service_tiers = []
+        max_reference_images = None
+        warnings.append(
+            {
+                "key": "video_capabilities_unavailable",
+                "params": {
+                    "provider": resolved.provider_id,
+                    "model": resolved.model_id,
+                    "reason": str(exc),
+                },
+            }
+        )
+
+    if task_kind == "reference_video" and max_reference_images == 0:
+        raise ValueError(
+            f"reference_video requires a video model with reference image support, "
+            f"but {resolved.provider_id}/{resolved.model_id} supports 0 reference images"
+        )
 
     resolution = _payload_resolution(payload, profile)
     if resolution is None:
@@ -635,6 +778,8 @@ async def _resolve_video_route(
         generate_audio=generate_audio,
         service_tier=service_tier,
         seed=seed,
+        shot_tier=shot_tier,
+        shot_tier_strategy=shot_tier_strategy,
         supported_resolutions=supported_resolutions,
         supported_durations=effective_supported_durations,
         duration_resolution_constraints=duration_resolution_constraints,
@@ -653,6 +798,8 @@ async def _resolve_video_route(
         generate_audio=generate_audio,
         service_tier=service_tier,
         seed=seed,
+        shot_tier=shot_tier,
+        shot_tier_strategy=shot_tier_strategy,
         supported_resolutions=supported_resolutions,
         supported_durations=effective_supported_durations,
         duration_resolution_constraints=duration_resolution_constraints,
@@ -674,6 +821,8 @@ def _build_metadata(
     generate_audio: bool | None = None,
     service_tier: str | None = None,
     seed: int | None = None,
+    shot_tier: ShotTier | None = None,
+    shot_tier_strategy: dict[str, Any] | None = None,
     supported_resolutions: list[str] | None = None,
     supported_durations: list[int] | None = None,
     duration_resolution_constraints: dict[str, list[int]] | None = None,
@@ -691,6 +840,8 @@ def _build_metadata(
             "generate_audio": generate_audio,
             "service_tier": service_tier,
             "seed": seed,
+            "shot_tier": shot_tier,
+            "shot_tier_strategy": shot_tier_strategy or None,
             "supported_resolutions": supported_resolutions,
             "supported_durations": supported_durations,
             "duration_resolution_constraints": duration_resolution_constraints,
@@ -703,6 +854,8 @@ def _build_metadata(
             "generation_profile_key": profile_key,
             "generation_route": route,
             "generation_route_warnings": warnings or None,
+            "shot_tier": shot_tier,
+            "shot_tier_strategy": shot_tier_strategy or None,
             "source_version": source_version,
         }
     )

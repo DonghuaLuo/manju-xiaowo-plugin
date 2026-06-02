@@ -144,6 +144,67 @@ class TestCollectVideoClips:
         clips = svc._collect_video_clips(script, project_dir)
         assert clips[0]["generation_quality"] == "final"
 
+    def test_reference_video_mode_collects_video_units(self, tmp_path):
+        """reference_video 模式：从 video_units 收集 reference_videos。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        project_dir = tmp_path / "projects" / "demo"
+        reference_dir = project_dir / "reference_videos"
+        versions_dir = project_dir / "versions"
+        reference_dir.mkdir(parents=True)
+        versions_dir.mkdir()
+        (reference_dir / "E1U1.mp4").write_bytes(b"fake")
+        (reference_dir / "E1U2.mp4").write_bytes(b"fake")
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "reference_videos": {
+                        "E1U1": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "generation_route": {"resolution": "720p"},
+                                }
+                            ],
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        script = {
+            "generation_mode": "reference_video",
+            "content_mode": "narration",
+            "video_units": [
+                {
+                    "unit_id": "E1U1",
+                    "duration_seconds": 4,
+                    "generated_assets": {
+                        "video_clip": "reference_videos/E1U1.mp4",
+                        "status": "completed",
+                    },
+                },
+                {
+                    "unit_id": "E1U2",
+                    "duration_seconds": 6,
+                    "generated_assets": {
+                        "video_clip": "reference_videos/E1U2.mp4",
+                        "status": "completed",
+                    },
+                },
+            ],
+        }
+
+        svc = JianyingDraftService.__new__(JianyingDraftService)
+        clips = svc._collect_video_clips(script, project_dir)
+        assert [clip["id"] for clip in clips] == ["E1U1", "E1U2"]
+        assert clips[0]["resource_type"] == "reference_videos"
+        assert clips[0]["generation_quality"] == "final"
+
 
 class TestResolveCanvasSize:
     """测试画布尺寸解析"""
@@ -417,6 +478,101 @@ class TestExportEpisodeDraft:
 
         return pm, project_dir
 
+    def _setup_reference_video_project(self, tmp_path, *, reference_resolution: str = "1080p") -> tuple:
+        """创建 reference_video 模式的测试项目。"""
+        from lib.project_manager import ProjectManager
+
+        pm = ProjectManager(tmp_path / "projects")
+        project_dir = tmp_path / "projects" / "ref-demo"
+        project_dir.mkdir(parents=True)
+        reference_dir = project_dir / "reference_videos"
+        reference_dir.mkdir()
+        make_test_video(reference_dir / "E1U1.mp4")
+        make_test_video(reference_dir / "E1U2.mp4")
+
+        project_data = {
+            "title": "参考视频项目",
+            "content_mode": "narration",
+            "generation_mode": "reference_video",
+            "aspect_ratio": {"video": "9:16"},
+            "generation_profiles": {
+                "video_final": {"resolution": "1080p"},
+                "reference_video_final": {"resolution": reference_resolution},
+            },
+            "episodes": [
+                {
+                    "episode": 1,
+                    "title": "第一集",
+                    "script_file": "scripts/episode_1.json",
+                    "generation_mode": "reference_video",
+                },
+            ],
+        }
+        (project_dir / "project.json").write_text(json.dumps(project_data, ensure_ascii=False), encoding="utf-8")
+
+        scripts_dir = project_dir / "scripts"
+        scripts_dir.mkdir()
+        script_data = {
+            "generation_mode": "reference_video",
+            "content_mode": "narration",
+            "video_units": [
+                {
+                    "unit_id": "E1U1",
+                    "duration_seconds": 4,
+                    "shots": [{"duration": 4, "text": "Shot 1 (4s): A"}],
+                    "generated_assets": {
+                        "video_clip": "reference_videos/E1U1.mp4",
+                        "status": "completed",
+                    },
+                },
+                {
+                    "unit_id": "E1U2",
+                    "duration_seconds": 6,
+                    "shots": [{"duration": 6, "text": "Shot 1 (6s): B"}],
+                    "generated_assets": {
+                        "video_clip": "reference_videos/E1U2.mp4",
+                        "status": "completed",
+                    },
+                },
+            ],
+        }
+        (scripts_dir / "episode_1.json").write_text(json.dumps(script_data, ensure_ascii=False), encoding="utf-8")
+
+        versions_dir = project_dir / "versions"
+        versions_dir.mkdir()
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "reference_videos": {
+                        "E1U1": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "generation_route": {"resolution": reference_resolution},
+                                }
+                            ],
+                        },
+                        "E1U2": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "generation_route": {"resolution": reference_resolution},
+                                }
+                            ],
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        return pm, project_dir
+
     def test_exports_zip_with_correct_structure(self, tmp_path):
         """导出 ZIP 包含草稿 JSON + 视频素材"""
         from server.services.jianying_draft_service import JianyingDraftService
@@ -478,6 +634,33 @@ class TestExportEpisodeDraft:
         assert (draft_dir / "assets" / "segment_S1.mp4").exists()
         assert (draft_dir / "assets" / "segment_S2.mp4").exists()
         assert not list(draft_root.glob("*.zip"))
+
+    def test_exports_reference_video_units(self, tmp_path):
+        """reference_video 模式导出应收集 video_units 产物。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, _ = self._setup_reference_video_project(tmp_path)
+        svc = JianyingDraftService(pm)
+
+        zip_path = svc.export_episode_draft(project_name="ref-demo", episode=1, draft_path="/Users/test/drafts")
+
+        assert zip_path.exists()
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            assert any("draft_info.json" in n for n in names)
+            assert any("E1U1.mp4" in n for n in names)
+            assert any("E1U2.mp4" in n for n in names)
+
+    def test_reference_video_uses_reference_final_profile_for_export_check(self, tmp_path):
+        """reference_video 导出检查使用 reference_video_final，不误套 video_final。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, _ = self._setup_reference_video_project(tmp_path, reference_resolution="720p")
+        svc = JianyingDraftService(pm)
+
+        zip_path = svc.export_episode_draft(project_name="ref-demo", episode=1, draft_path="/Users/test/drafts")
+
+        assert zip_path.exists()
 
     def test_episode_not_found_raises(self, tmp_path):
         """集数不存在时抛出 FileNotFoundError"""
@@ -567,3 +750,138 @@ class TestExportEpisodeDraft:
         svc = JianyingDraftService(pm)
         with pytest.raises(ValueError, match="包含草稿视频片段：S1"):
             svc.export_episode_draft(project_name="demo", episode=1, draft_path="/tmp")
+
+    def test_video_based_on_draft_storyboard_blocks_jianying_export(self, tmp_path):
+        """最终导出不能混入基于草稿分镜生成的视频。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, project_dir = self._setup_project(tmp_path)
+        versions_dir = project_dir / "versions"
+        versions_dir.mkdir()
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "videos": {
+                        "S1": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "source_storyboard_generation_quality": "draft",
+                                    "generation_route": {"resolution": "1080p"},
+                                }
+                            ],
+                        },
+                        "S2": {
+                            "current_version": 1,
+                            "versions": [
+                                {"version": 1, "generation_quality": "final", "generation_route": {"resolution": "1080p"}}
+                            ],
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        svc = JianyingDraftService(pm)
+        with pytest.raises(ValueError, match="基于草稿分镜生成的视频：S1"):
+            svc.export_episode_draft(project_name="demo", episode=1, draft_path="/tmp")
+
+    def test_low_resolution_video_blocks_jianying_export_when_metadata_is_explicit(self, tmp_path):
+        """已知视频分辨率低于最终 profile 时，导出前应提示先最终化。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, project_dir = self._setup_project(tmp_path)
+        project_json = project_dir / "project.json"
+        project = json.loads(project_json.read_text(encoding="utf-8"))
+        project["generation_profiles"] = {"video_final": {"resolution": "1080p"}}
+        project_json.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+        versions_dir = project_dir / "versions"
+        versions_dir.mkdir()
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "videos": {
+                        "S1": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "source_storyboard_generation_quality": "final",
+                                    "generation_route": {"resolution": "720p"},
+                                }
+                            ],
+                        },
+                        "S2": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "source_storyboard_generation_quality": "final",
+                                    "generation_route": {"resolution": "1080p"},
+                                }
+                            ],
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        svc = JianyingDraftService(pm)
+        with pytest.raises(ValueError, match=r"低于最终规格 1080p 的视频片段：S1\(720p\)"):
+            svc.export_episode_draft(project_name="demo", episode=1, draft_path="/tmp")
+
+    def test_higher_resolution_video_does_not_block_jianying_export(self, tmp_path):
+        """高于最终 profile 的当前视频不应被误判为低规格。"""
+        from server.services.jianying_draft_service import JianyingDraftService
+
+        pm, project_dir = self._setup_project(tmp_path)
+        project_json = project_dir / "project.json"
+        project = json.loads(project_json.read_text(encoding="utf-8"))
+        project["generation_profiles"] = {"video_final": {"resolution": "1080p"}}
+        project_json.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+        versions_dir = project_dir / "versions"
+        versions_dir.mkdir()
+        (versions_dir / "versions.json").write_text(
+            json.dumps(
+                {
+                    "videos": {
+                        "S1": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "source_storyboard_generation_quality": "final",
+                                    "generation_route": {"resolution": "4K"},
+                                }
+                            ],
+                        },
+                        "S2": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "generation_quality": "final",
+                                    "source_storyboard_generation_quality": "final",
+                                    "generation_route": {"resolution": "1080p"},
+                                }
+                            ],
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        svc = JianyingDraftService(pm)
+        zip_path = svc.export_episode_draft(project_name="demo", episode=1, draft_path="/tmp")
+        assert zip_path.exists()

@@ -47,6 +47,57 @@ def _non_resumable_video_providers() -> frozenset[str]:
 NON_RESUMABLE_VIDEO_PROVIDERS = _non_resumable_video_providers()
 
 
+def _coerce_positive_int(value: Any, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _retry_attempt_from_payload(payload: dict[str, Any]) -> int:
+    retry = payload.get("_retry")
+    if not isinstance(retry, dict):
+        return 1
+    return _coerce_positive_int(retry.get("attempt"), 1)
+
+
+async def _retry_budget_for_task(task: dict[str, Any]) -> int:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    retry = payload.get("_retry") if isinstance(payload, dict) else None
+    if isinstance(retry, dict) and retry.get("max_attempts") is not None:
+        return _coerce_positive_int(retry.get("max_attempts"), 1)
+    if isinstance(payload, dict) and payload.get("retry_budget") is not None:
+        return _coerce_positive_int(payload.get("retry_budget"), 1)
+
+    shot_tier = payload.get("shot_tier") if isinstance(payload, dict) else None
+    if shot_tier not in {"S", "A", "B"}:
+        return 1
+
+    try:
+        from lib.config.resolver import get_project_manager
+        from server.services.generation_route_resolver import merged_shot_tier_profiles
+
+        project_name = task.get("project_name")
+        project = (
+            await asyncio.to_thread(get_project_manager().load_project, project_name)
+            if project_name
+            else None
+        )
+        strategy = merged_shot_tier_profiles(project).get(shot_tier) or {}
+        return _coerce_positive_int(strategy.get("retry_budget"), 1)
+    except Exception:
+        logger.debug("读取 shot_tier retry_budget 失败，按单次尝试处理", exc_info=True)
+        return 1
+
+
+async def _retry_plan_for_failure(task: dict[str, Any]) -> tuple[dict[str, Any], int, int]:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    current_attempt = _retry_attempt_from_payload(payload)
+    max_attempts = await _retry_budget_for_task(task)
+    return dict(payload), current_attempt, max_attempts
+
+
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -555,12 +606,45 @@ class GenerationWorker:
             raise
         except Exception as exc:
             logger.exception("任务失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
-            from lib.friendly_errors import summarize_generation_error
+            from lib.friendly_errors import (
+                append_failure_classification,
+                classify_generation_failure,
+                summarize_generation_error,
+            )
+
+            payload, attempt, max_attempts = await _retry_plan_for_failure(task)
+            classification = classify_generation_failure(exc)
+            summary = summarize_generation_error(exc, provider_id=provider_id, task=task)
+            if classification.get("retryable") and attempt < max_attempts:
+                next_attempt = attempt + 1
+                payload["_retry"] = {
+                    **(payload.get("_retry") if isinstance(payload.get("_retry"), dict) else {}),
+                    "attempt": next_attempt,
+                    "max_attempts": max_attempts,
+                    "failure_type": classification.get("failure_type"),
+                    "retry_suggestion": classification.get("retry_suggestion"),
+                    "last_error": summary,
+                }
+                rows = await asyncio.shield(
+                    self.queue.requeue_task_for_retry(
+                        task_id,
+                        payload=payload,
+                        error_message=summary,
+                        failure=classification,
+                    )
+                )
+                if rows == 0:
+                    await asyncio.shield(self.queue.mark_task_cancelled(task_id, cancelled_by="user"))
+                return
 
             rows = await asyncio.shield(
                 self.queue.mark_task_failed(
                     task_id,
-                    summarize_generation_error(exc, provider_id=provider_id, task=task),
+                    append_failure_classification(
+                        summary,
+                        classification,
+                        attempts={"attempt": attempt, "max_attempts": max_attempts},
+                    ),
                 )
             )
             if rows == 0:

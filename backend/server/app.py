@@ -35,6 +35,7 @@ from lib.config.env_keys import PROVIDER_SECRET_KEYS
 from lib.db import async_session_factory, close_db, init_db
 from lib.generation_worker import GenerationWorker
 from lib.httpx_shared import shutdown_http_client, startup_http_client
+from lib.image_utils import cleanup_stale_provider_inputs
 from lib.logging_config import attach_file_handler, migrate_legacy_log_dir, setup_logging
 from lib.project_migrations import cleanup_stale_backups, run_project_migrations
 from lib.source_loader.migration import migrate_project_source_encoding
@@ -55,6 +56,7 @@ from server.routers import (
     projects,
     props,
     providers,
+    quality,
     reference_videos,
     scenes,
     system,
@@ -345,6 +347,9 @@ async def lifespan(app: FastAPI):
             migration_summary.failed,
         )
     await asyncio.to_thread(cleanup_stale_backups, projects_root, 7)
+    provider_input_cleanup = await asyncio.to_thread(cleanup_stale_provider_inputs, max_age_hours=48)
+    if provider_input_cleanup.get("files_deleted"):
+        logger.info("清理过期供应商输入临时图: %s", provider_input_cleanup)
 
     # 源文件编码迁移（幂等；失败不阻塞启动）
     source_migration_summary = await _migrate_source_encoding_on_startup(projects_root)
@@ -555,6 +560,7 @@ app.include_router(cost_estimation.router, prefix="/api/v1", tags=["费用估算
 app.include_router(grids.router, prefix="/api/v1", tags=["宫格图"])
 app.include_router(reference_videos.router, prefix="/api/v1", tags=["参考生视频"])
 app.include_router(assets.router, prefix="/api/v1", tags=["全局资产库"])
+app.include_router(quality.router, prefix="/api/v1", tags=["质量统计"])
 
 
 def create_generation_worker() -> GenerationWorker:

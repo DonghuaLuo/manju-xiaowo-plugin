@@ -3,7 +3,14 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { BookmarkPlus, ChevronLeft, Loader2 } from "lucide-react";
-import { API, type StyleTemplateInfo } from "@/api";
+import {
+  API,
+  type GenerationRoutePreviewItem,
+  type GenerationRoutePreviewRequest,
+  type ProviderRecommendation,
+  type QualityStatsResponse,
+  type StyleTemplateInfo,
+} from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { getProviderModels, getCustomProviderModels } from "@/utils/provider-models";
@@ -15,6 +22,8 @@ import type {
   GenerationProfiles,
   ImageGenerationProfile,
   ProviderInfo,
+  ShotTier,
+  ShotTierProfile,
   VideoGenerationProfile,
 } from "@/types";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
@@ -26,10 +35,15 @@ import { getProjectDisplayName } from "@/utils/project-display";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import {
   IMAGE_PROFILE_RESOLUTIONS,
+  REFERENCE_IMAGE_POLICIES,
+  SHOT_TIERS,
   VIDEO_PROFILE_RESOLUTIONS,
   createDefaultGenerationProfiles,
+  createDefaultShotTierProfiles,
   generationProfilesSignature,
   normalizeGenerationProfiles,
+  normalizeShotTierProfiles,
+  shotTierProfilesSignature,
 } from "@/utils/generation-profiles";
 
 function deriveStyleValue(
@@ -88,6 +102,72 @@ const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
 const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
+
+function routeLabel(route: GenerationRoutePreviewItem): string {
+  return route.label ?? route.profile_key ?? route.task_kind;
+}
+
+function formatRouteWarning(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  route: GenerationRoutePreviewItem,
+  warning: { key: string; params?: Record<string, unknown> },
+): string {
+  const params = warning.params ?? {};
+  const label = routeLabel(route);
+  if (warning.key === "video_resolution_adjusted") {
+    return t("generation_route_warning_video_resolution_adjusted", {
+      defaultValue: "{{label}}：分辨率 {{requested}} 已调整为 {{resolved}}",
+      label,
+      requested: params.requested,
+      resolved: params.resolved,
+      supported: params.supported,
+    });
+  }
+  if (warning.key === "video_duration_adjusted") {
+    return t("generation_route_warning_video_duration_adjusted", {
+      defaultValue: "{{label}}：时长 {{requested}}s 已调整为 {{resolved}}s",
+      label,
+      requested: params.requested,
+      resolved: params.resolved,
+      supported: params.supported,
+    });
+  }
+  if (warning.key === "video_generate_audio_disabled") {
+    return t("generation_route_warning_video_generate_audio_disabled", {
+      defaultValue: "{{label}}：当前模型不支持音频，已关闭",
+      label,
+      provider: params.provider,
+      model: params.model,
+    });
+  }
+  if (warning.key === "video_service_tier_adjusted") {
+    return t("generation_route_warning_video_service_tier_adjusted", {
+      defaultValue: "{{label}}：服务档位 {{requested}} 已调整为 {{resolved}}",
+      label,
+      requested: params.requested,
+      resolved: params.resolved,
+      supported: params.supported,
+    });
+  }
+  if (warning.key === "video_seed_ignored") {
+    return t("generation_route_warning_video_seed_ignored", {
+      defaultValue: "{{label}}：当前模型不支持 seed，已忽略",
+      label,
+      provider: params.provider,
+      model: params.model,
+    });
+  }
+  if (warning.key === "video_capabilities_unavailable") {
+    return t("generation_route_warning_video_capabilities_unavailable", {
+      defaultValue: "{{label}}：无法确认当前模型能力，请检查时长 / 分辨率 / 参考图配置",
+      label,
+      provider: params.provider,
+      model: params.model,
+      reason: params.reason,
+    });
+  }
+  return `${label}: ${warning.key}`;
+}
 
 function normalizeSourceLanguage(value: unknown): SourceLanguage {
   return value === "en" || value === "vi" ? value : "zh";
@@ -190,10 +270,20 @@ export function ProjectSettingsPage() {
   const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(
     () => createDefaultGenerationProfiles(),
   );
+  const [shotTierProfiles, setShotTierProfiles] = useState<Record<ShotTier, ShotTierProfile>>(
+    () => createDefaultShotTierProfiles(),
+  );
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [projectTitle, setProjectTitle] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [routePreview, setRoutePreview] = useState<{
+    loading: boolean;
+    routes: GenerationRoutePreviewItem[];
+    recommendations: ProviderRecommendation[];
+    qualityStats?: QualityStatsResponse;
+    error?: string;
+  }>({ loading: false, routes: [], recommendations: [] });
 
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
@@ -212,6 +302,7 @@ export function ProjectSettingsPage() {
     videoResolution: null as string | null,
     imageResolution: null as string | null,
     generationProfiles: generationProfilesSignature(),
+    shotTierProfiles: shotTierProfilesSignature(),
   });
   // 风格区独立保存，但"未保存就离开"也需被 isDirty 拦截。
   const initialStyleRef = useRef<StylePickerValue | null>(null);
@@ -317,6 +408,10 @@ export function ProjectSettingsPage() {
         }),
       );
       setGenerationProfiles(normalizedProfiles);
+      const normalizedShotTiers = normalizeShotTierProfiles(
+        project.shot_tier_profiles as Partial<Record<ShotTier, ShotTierProfile>> | undefined,
+      );
+      setShotTierProfiles(normalizedShotTiers);
 
       const derivedStyle = deriveStyleValue(project, projectName, templates, templatePrompts);
       setStyleValue(derivedStyle);
@@ -328,6 +423,7 @@ export function ProjectSettingsPage() {
         episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
         videoResolution: vRes, imageResolution: iRes,
         generationProfiles: generationProfilesSignature(normalizedProfiles),
+        shotTierProfiles: shotTierProfilesSignature(normalizedShotTiers),
       };
     }));
 
@@ -374,6 +470,60 @@ export function ProjectSettingsPage() {
       videoResolution,
     }),
   );
+  const normalizedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
+  const normalizedGenerationProfilesSignature = generationProfilesSignature(normalizedGenerationProfiles);
+  const normalizedShotTierProfilesSignature = shotTierProfilesSignature(normalizedShotTierProfiles);
+  const routePreviewRequest = useMemo<GenerationRoutePreviewRequest>(() => {
+    const profiles = normalizeGenerationProfiles(
+      generationProfiles,
+      createDefaultGenerationProfiles({
+        imageResolution,
+        videoResolution,
+      }),
+    );
+    const tierProfiles = normalizeShotTierProfiles(shotTierProfiles);
+    return {
+      project_overrides: {
+        generation_profiles: profiles,
+        shot_tier_profiles: tierProfiles,
+        video_backend: videoBackend || null,
+        image_provider_t2i: imageBackendT2I || null,
+        image_provider_i2i: imageBackendI2I || null,
+        video_generate_audio: audioOverride,
+        default_duration: defaultDuration,
+        model_settings: modelSettings,
+      },
+      routes: [
+        { label: t("generation_profile_asset"), task_kind: "character", quality: "final", capability: "t2i" },
+        { label: t("generation_profile_storyboard_draft"), task_kind: "storyboard", quality: "draft", capability: "t2i" },
+        { label: t("generation_profile_storyboard_final"), task_kind: "storyboard", quality: "final", capability: "i2i" },
+        { label: `${t("generation_profile_grid")} T2I`, task_kind: "grid", quality: "final", capability: "t2i" },
+        { label: `${t("generation_profile_grid")} I2I`, task_kind: "grid", quality: "final", capability: "i2i" },
+        { label: t("generation_profile_video_draft"), task_kind: "video", quality: "draft" },
+        { label: t("generation_profile_video_final"), task_kind: "video", quality: "final" },
+        ...SHOT_TIERS.map((tier) => ({
+          label: `${tier} ${t("generation_profile_video_final")}`,
+          task_kind: "video" as const,
+          quality: "final" as const,
+          payload: { shot_tier: tier },
+        })),
+        { label: t("generation_profile_reference_video_draft"), task_kind: "reference_video", quality: "draft" },
+        { label: t("generation_profile_reference_video_final"), task_kind: "reference_video", quality: "final" },
+      ],
+    };
+  }, [
+    audioOverride,
+    defaultDuration,
+    generationProfiles,
+    imageBackendI2I,
+    imageBackendT2I,
+    imageResolution,
+    modelSettings,
+    shotTierProfiles,
+    t,
+    videoBackend,
+    videoResolution,
+  ]);
 
   const isDirty =
     videoBackend !== initialRef.current.videoBackend ||
@@ -390,11 +540,58 @@ export function ProjectSettingsPage() {
     sourceLanguage !== initialRef.current.sourceLanguage ||
     videoResolution !== initialRef.current.videoResolution ||
     imageResolution !== initialRef.current.imageResolution ||
-    generationProfilesSignature(normalizedGenerationProfiles) !== initialRef.current.generationProfiles ||
+    normalizedGenerationProfilesSignature !== initialRef.current.generationProfiles ||
+    normalizedShotTierProfilesSignature !== initialRef.current.shotTierProfiles ||
     styleIsDirty;
   /* eslint-enable react-hooks/refs */
 
   useWarnUnsaved(isDirty);
+
+  useEffect(() => {
+    if (!options || !projectName) return;
+    let disposed = false;
+    const controller = new AbortController();
+
+    const timer = window.setTimeout(() => {
+      setRoutePreview((prev) => ({ ...prev, loading: true, error: undefined }));
+      voidCall(Promise.all([
+        API.previewGenerationRoutes(projectName, routePreviewRequest, { signal: controller.signal }),
+        API.getProviderRecommendations({ projectName, callType: "video", minCalls: 1, limit: 3 })
+          .catch(() => ({ recommendations: [] as ProviderRecommendation[], min_calls: 1 })),
+        API.getQualityStats(projectName).catch(() => undefined),
+      ]).then(([preview, recommendations, qualityStats]) => {
+        if (disposed) return;
+        setRoutePreview({
+          loading: false,
+          routes: preview.routes,
+          recommendations: recommendations.recommendations,
+          qualityStats,
+        });
+      }).catch((error: unknown) => {
+        if (disposed || controller.signal.aborted) return;
+        setRoutePreview({
+          loading: false,
+          routes: [],
+          recommendations: [],
+          qualityStats: undefined,
+          error: errMsg(error),
+        });
+      }));
+    }, 350);
+
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [options, projectName, routePreviewRequest]);
+
+  const routePreviewIssues = useMemo(() => routePreview.routes.flatMap((route) => {
+    if (!route.ok) {
+      return [`${route.label ?? route.task_kind}: ${route.error ?? t("unknown_error", { defaultValue: "未知错误" })}`];
+    }
+    return (route.warnings ?? []).map((warning) => formatRouteWarning(t, route, warning));
+  }), [routePreview.routes, t]);
 
   const updateImageProfile = (
     key: ImageProfileKey,
@@ -423,6 +620,51 @@ export function ProjectSettingsPage() {
         [key]: {
           ...base[key],
           ...patch,
+        },
+      };
+    });
+  };
+
+  const updateShotTierProfile = (
+    tier: ShotTier,
+    patch: Partial<ShotTierProfile>,
+  ) => {
+    setShotTierProfiles((prev) => {
+      const base = normalizeShotTierProfiles(prev);
+      return {
+        ...base,
+        [tier]: {
+          ...base[tier],
+          ...patch,
+          profiles: {
+            ...(base[tier].profiles ?? {}),
+            ...(patch.profiles ?? {}),
+          },
+        },
+      };
+    });
+  };
+
+  const updateShotTierOverride = (
+    tier: ShotTier,
+    key: "storyboard_final" | "video_final",
+    patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
+  ) => {
+    setShotTierProfiles((prev) => {
+      const base = normalizeShotTierProfiles(prev);
+      const currentProfiles = base[tier].profiles ?? {};
+      const currentProfile = currentProfiles[key] ?? {};
+      return {
+        ...base,
+        [tier]: {
+          ...base[tier],
+          profiles: {
+            ...currentProfiles,
+            [key]: {
+              ...currentProfile,
+              ...patch,
+            },
+          },
         },
       };
     });
@@ -611,6 +853,7 @@ export function ProjectSettingsPage() {
           videoResolution,
         }),
       );
+      const savedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
 
       await API.updateProject(projectName, {
         video_backend: videoBackend || null,
@@ -627,11 +870,13 @@ export function ProjectSettingsPage() {
         source_language: sourceLanguage,
         model_settings: newModelSettings,
         generation_profiles: savedGenerationProfiles,
+        shot_tier_profiles: savedShotTierProfiles,
       });
       const savedEpisodeTargetUnits = String(normalizedEpisodeTargetUnits);
       setEpisodeTargetUnits(savedEpisodeTargetUnits);
       setModelSettings(newModelSettings);
       setGenerationProfiles(savedGenerationProfiles);
+      setShotTierProfiles(savedShotTierProfiles);
       initialRef.current = {
         videoBackend, imageBackendT2I, imageBackendI2I, audioOverride,
         textScript, textOverview, textStyle,
@@ -639,6 +884,7 @@ export function ProjectSettingsPage() {
         episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
         videoResolution, imageResolution,
         generationProfiles: generationProfilesSignature(savedGenerationProfiles),
+        shotTierProfiles: shotTierProfilesSignature(savedShotTierProfiles),
       };
       useAppStore.getState().pushToast(t("saved"), "success");
     } catch (e: unknown) {
@@ -646,7 +892,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
 
   return (
     <div
@@ -834,6 +1080,218 @@ export function ProjectSettingsPage() {
                 description={t("generation_profiles_section_desc")}
               >
                 <div className="space-y-4">
+                  <div className="rounded-[10px] border border-hairline-soft bg-bg-grad-b/35 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-3">
+                        {t("generation_route_preview_label", { defaultValue: "Route Check" })}
+                      </span>
+                      {routePreview.loading && (
+                        <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-accent-2" aria-hidden />
+                      )}
+                      {!routePreview.loading && !routePreview.error && routePreviewIssues.length === 0 && (
+                        <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] text-emerald-200">
+                          {t("generation_route_preview_ok", { defaultValue: "当前策略可用" })}
+                        </span>
+                      )}
+                    </div>
+                    {routePreview.error && (
+                      <div className="mt-2 text-[12px] text-rose-200">
+                        {routePreview.error}
+                      </div>
+                    )}
+                    {routePreviewIssues.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {routePreviewIssues.slice(0, 5).map((issue) => (
+                          <div key={issue} className="text-[12px] text-amber-100">
+                            {issue}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {routePreview.recommendations.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {routePreview.recommendations.map((item) => (
+                          <button
+                            type="button"
+                            key={`${item.provider}/${item.model}/${item.call_type}`}
+                            onClick={() => setVideoBackend(`${item.provider}/${item.model}`)}
+                            className="max-w-full truncate rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3 transition-colors hover:border-accent/45 hover:text-accent-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            title={`${item.provider}/${item.model}`}
+                          >
+                            {item.provider}/{item.model} · {Math.round(item.success_rate * 100)}%
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {routePreview.qualityStats && routePreview.qualityStats.count > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3">
+                          {t("quality_stats_average", {
+                            defaultValue: "平均 {{score}}",
+                            score: routePreview.qualityStats.average_rating?.toFixed(1) ?? "-",
+                          })}
+                        </span>
+                        {(routePreview.qualityStats.dimension_averages ?? []).slice(0, 4).map((item) => (
+                          <span
+                            key={item.key}
+                            className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3"
+                          >
+                            {item.key}: {item.average_rating?.toFixed(1) ?? "-"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    {SHOT_TIERS.map((tier) => {
+                      const tierProfile = normalizedShotTierProfiles[tier];
+                      const storyboardOverride = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
+                      const videoOverride = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+                      return (
+                        <div
+                          key={tier}
+                          className="rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3"
+                        >
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="num inline-flex h-6 min-w-6 items-center justify-center rounded-md bg-accent-soft px-2 text-[12px] font-bold text-bg-grad-b">
+                              {tier}
+                            </span>
+                            <span className="text-[13px] font-semibold text-text">
+                              {t("shot_tier_strategy_title", {
+                                defaultValue: "{{tier}} 档策略",
+                                tier,
+                              })}
+                            </span>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("shot_tier_retry_budget", { defaultValue: "重试预算" })}
+                              </span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={6}
+                                step={1}
+                                value={tierProfile.retry_budget ?? 1}
+                                onChange={(event) =>
+                                  updateShotTierProfile(tier, {
+                                    retry_budget: Math.max(1, Number(event.currentTarget.value) || 1),
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
+                              </span>
+                              <select
+                                value={tierProfile.reference_image_policy ?? "balanced"}
+                                onChange={(event) =>
+                                  updateShotTierProfile(tier, {
+                                    reference_image_policy: event.currentTarget.value,
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                              >
+                                {REFERENCE_IMAGE_POLICIES.map((policy) => (
+                                  <option key={policy} value={policy}>{policy}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("generation_profile_storyboard_final")}
+                              </span>
+                              <select
+                                value={storyboardOverride.resolution ?? ""}
+                                onChange={(event) =>
+                                  updateShotTierOverride(tier, "storyboard_final", {
+                                    resolution: event.currentTarget.value || null,
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                              >
+                                <option value="">{t("follow_global_default")}</option>
+                                {IMAGE_PROFILE_RESOLUTIONS.map((resolution) => (
+                                  <option key={resolution} value={resolution}>{resolution}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("generation_profile_video_final")}
+                              </span>
+                              <select
+                                value={videoOverride.resolution ?? ""}
+                                onChange={(event) =>
+                                  updateShotTierOverride(tier, "video_final", {
+                                    resolution: event.currentTarget.value || null,
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                              >
+                                <option value="">{t("follow_global_default")}</option>
+                                {VIDEO_PROFILE_RESOLUTIONS.map((resolution) => (
+                                  <option key={resolution} value={resolution}>{resolution}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("video_backend_label", { defaultValue: "视频供应商" })}
+                              </span>
+                              <select
+                                value={videoOverride.video_backend ?? ""}
+                                onChange={(event) =>
+                                  updateShotTierOverride(tier, "video_final", {
+                                    video_backend: event.currentTarget.value || null,
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                              >
+                                <option value="">{t("follow_global_default")}</option>
+                                {options.video_backends.map((backend) => (
+                                  <option key={backend} value={backend}>{backend}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("video_service_tier_label", { defaultValue: "服务档位" })}
+                              </span>
+                              <input
+                                value={videoOverride.service_tier ?? ""}
+                                onChange={(event) =>
+                                  updateShotTierOverride(tier, "video_final", {
+                                    service_tier: event.currentTarget.value || null,
+                                  })
+                                }
+                                className={PROFILE_INPUT_CLS}
+                                placeholder="default"
+                              />
+                            </label>
+                            <label className="flex items-center gap-2 pt-5 text-[12px] text-text-3">
+                              <input
+                                type="checkbox"
+                                checked={tierProfile.prefer_final_storyboard_source !== false}
+                                onChange={(event) =>
+                                  updateShotTierProfile(tier, {
+                                    prefer_final_storyboard_source: event.currentTarget.checked,
+                                  })
+                                }
+                                className="accent-[oklch(0.76_0.09_295)]"
+                              />
+                              {t("prefer_final_storyboard_source", { defaultValue: "优先最终分镜" })}
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
                   {([
                     ["asset", t("generation_profile_asset")],
                     ["storyboard_draft", t("generation_profile_storyboard_draft")],

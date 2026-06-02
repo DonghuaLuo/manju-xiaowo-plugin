@@ -96,6 +96,24 @@ interface ImportErrorPayload {
 }
 
 /** Version metadata returned by the versions API. */
+interface ProviderInputImageMetadata {
+  purpose?: string;
+  source_path?: string;
+  input_path?: string;
+  source_mime?: string;
+  input_mime?: string;
+  source_bytes?: number;
+  input_bytes?: number;
+  source_size?: { width?: number; height?: number };
+  input_size?: { width?: number; height?: number };
+  estimated_base64_bytes?: number;
+  resized?: boolean;
+  transcoded?: boolean;
+  copied?: boolean;
+  max_long_edge?: number;
+  jpeg_quality?: number | null;
+}
+
 export interface VersionInfo {
   version: number;
   file?: string;
@@ -118,12 +136,21 @@ export interface VersionInfo {
     generate_audio?: boolean;
     service_tier?: string;
     seed?: number;
+    shot_tier?: "S" | "A" | "B";
+    shot_tier_strategy?: Record<string, unknown>;
     supported_resolutions?: string[];
     supported_durations?: number[];
     duration_resolution_constraints?: Record<string, number[]>;
     warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
   };
   generation_route_warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+  shot_tier?: "S" | "A" | "B" | null;
+  shot_tier_strategy?: Record<string, unknown> | null;
+  provider_input_images?: Record<
+    string,
+    ProviderInputImageMetadata | ProviderInputImageMetadata[] | null | undefined
+  >;
+  provider_input_payload?: Record<string, unknown> | null;
   source_storyboard_generation_quality?: string;
   source_version?: number | string | null;
 }
@@ -264,16 +291,94 @@ export interface CreateProjectPayload {
   text_backend_style?: string | null;
   model_settings?: Record<string, { resolution?: string | null }>;
   generation_profiles?: GenerationProfiles;
+  shot_tier_profiles?: ProjectData["shot_tier_profiles"];
 }
 
 export interface GenerationRequestOptions {
   quality?: GenerationQuality;
+  shot_tier?: "S" | "A" | "B" | null;
   resolution?: string | null;
   source_version?: number | null;
   duration_seconds?: number | null;
   generate_audio?: boolean | null;
   service_tier?: string | null;
   seed?: number | null;
+}
+
+export interface GenerationRoutePreviewRequest {
+  project_overrides?: Partial<ProjectData>;
+  routes: Array<{
+    label?: string | null;
+    task_kind: "character" | "scene" | "prop" | "storyboard" | "grid" | "video" | "reference_video";
+    quality?: GenerationQuality | null;
+    capability?: "t2i" | "i2i" | null;
+    payload?: Record<string, unknown> | null;
+  }>;
+}
+
+export interface GenerationRoutePreviewItem {
+  ok: boolean;
+  label?: string | null;
+  task_kind: string;
+  media_type?: "image" | "video";
+  quality?: GenerationQuality | null;
+  profile_key?: string | null;
+  provider_id?: string | null;
+  model_id?: string | null;
+  resolution?: string | null;
+  duration_seconds?: number | null;
+  generate_audio?: boolean | null;
+  service_tier?: string | null;
+  seed?: number | null;
+  supported_resolutions?: string[];
+  supported_durations?: number[];
+  duration_resolution_constraints?: Record<string, number[]>;
+  shot_tier?: "S" | "A" | "B" | null;
+  shot_tier_strategy?: Record<string, unknown>;
+  warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+  error?: string;
+}
+
+export interface GenerationRoutePreviewResponse {
+  routes: GenerationRoutePreviewItem[];
+}
+
+export interface QualityRatingRequest {
+  resource_type: VersionResourceType | "reference_videos";
+  resource_id: string;
+  version?: number | null;
+  rating: number;
+  dimensions?: Record<string, number>;
+  note?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  generation_quality?: string | null;
+  shot_tier?: "S" | "A" | "B" | null;
+}
+
+export interface QualityStatsResponse {
+  count: number;
+  average_rating: number | null;
+  dimension_averages?: Array<{ key: string; count: number; average_rating: number | null }>;
+  groups: Record<string, Array<{ key: string; count: number; average_rating: number | null }>>;
+  ratings: Array<Record<string, unknown>>;
+}
+
+export interface FinalizationTaskReportResponse {
+  summary: Record<string, number>;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface ProviderRecommendation {
+  provider: string;
+  model: string;
+  call_type: string;
+  total_calls: number;
+  success_calls: number;
+  failed_calls: number;
+  success_rate: number;
+  avg_duration_seconds?: number | null;
+  avg_success_cost_usd?: number | null;
 }
 
 function compactGenerationOptions(options: GenerationRequestOptions = {}): Record<string, unknown> {
@@ -575,6 +680,25 @@ export interface ExportTaskEvent {
   summary?: unknown;
   error?: string;
   updatedAt?: string;
+}
+
+export interface FinalizeEpisodeResponse {
+  success?: boolean;
+  mode?: "storyboard" | "reference_video";
+  project_name?: string;
+  episode?: number;
+  script_file?: string;
+  storyboards?: Array<{ resource_id: string; task_id: string; deduped?: boolean }>;
+  videos?: Array<{ resource_id: string; task_id: string; deduped?: boolean; dependency_task_id?: string | null }>;
+  reference_videos?: Array<{ resource_id: string; task_id: string; deduped?: boolean }>;
+  issues?: Array<{ resource_id?: string; kind?: string; message?: string }>;
+  summary?: {
+    storyboards_enqueued?: number;
+    videos_enqueued?: number;
+    reference_videos_enqueued?: number;
+    already_final?: number;
+    issues?: number;
+  };
 }
 
 export interface AssetArchiveExportInfoResponse {
@@ -924,6 +1048,18 @@ class API {
     generation_mode?: string | null;
   }> {
     return this.request(`/projects/${encodeURIComponent(name)}/video-capabilities`);
+  }
+
+  static async previewGenerationRoutes(
+    name: string,
+    payload: GenerationRoutePreviewRequest,
+    options: RequestInit = {},
+  ): Promise<GenerationRoutePreviewResponse> {
+    return this.request(`/projects/${encodeURIComponent(name)}/generation/route-preview`, {
+      ...options,
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   static async startProjectArchiveExport(
@@ -1585,6 +1721,18 @@ class API {
     );
   }
 
+  static async finalizeEpisode(
+    projectName: string,
+    episode: number,
+  ): Promise<FinalizeEpisodeResponse> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/finalize/episode/${episode}`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
   /**
    * 生成角色设计图
    * @param projectName - 项目名称
@@ -2174,6 +2322,57 @@ class API {
    */
   static async getUsageProjects(): Promise<{ projects: string[] }> {
     return this.request("/usage/projects");
+  }
+
+  static async getProviderRecommendations(
+    filters: { projectName?: string; callType?: string; minCalls?: number; limit?: number } = {},
+  ): Promise<{
+    recommendations: ProviderRecommendation[];
+    min_calls: number;
+    project_name?: string | null;
+    call_type?: string | null;
+  }> {
+    const params = new URLSearchParams();
+    if (filters.projectName) params.append("project_name", filters.projectName);
+    if (filters.callType) params.append("call_type", filters.callType);
+    if (filters.minCalls) params.append("min_calls", String(filters.minCalls));
+    if (filters.limit) params.append("limit", String(filters.limit));
+    const query = params.toString();
+    return this.request(`/usage/provider-recommendations${query ? "?" + query : ""}`);
+  }
+
+  static async upsertQualityRating(
+    projectName: string,
+    payload: QualityRatingRequest,
+  ): Promise<{ rating: Record<string, unknown> }> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-ratings`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  static async getQualityRatings(
+    projectName: string,
+    filters: { resourceType?: string; resourceId?: string; version?: number } = {},
+  ): Promise<{ ratings: Array<Record<string, unknown>> }> {
+    const params = new URLSearchParams();
+    if (filters.resourceType) params.append("resource_type", filters.resourceType);
+    if (filters.resourceId) params.append("resource_id", filters.resourceId);
+    if (filters.version != null) params.append("version", String(filters.version));
+    const query = params.toString();
+    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-ratings${query ? "?" + query : ""}`);
+  }
+
+  static async getQualityStats(projectName: string): Promise<QualityStatsResponse> {
+    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-stats`);
+  }
+
+  static async getFinalizationReport(
+    projectName: string,
+    limit = 100,
+  ): Promise<FinalizationTaskReportResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/projects/${encodeURIComponent(projectName)}/finalize/report?${params}`);
   }
 
   // ==================== Provider 管理 API ====================

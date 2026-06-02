@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Loader2,
   PackageCheck,
+  WandSparkles,
 } from "lucide-react";
 import { PluginSDK } from "xiaowo-sdk";
 import { GlassPopover } from "@/components/ui/GlassPopover";
@@ -42,6 +43,8 @@ interface ExportScopeDialogProps {
   episodes?: EpisodeMeta[];
   onJianyingExport?: (episode: number, draftPath: string, jianyingVersion: string) => void;
   jianyingExporting?: boolean;
+  onFinalizeEpisode?: (episode: number) => void;
+  finalizingEpisode?: boolean;
 }
 
 export function ExportScopeDialog({
@@ -52,6 +55,8 @@ export function ExportScopeDialog({
   episodes = [],
   onJianyingExport,
   jianyingExporting = false,
+  onFinalizeEpisode,
+  finalizingEpisode = false,
 }: ExportScopeDialogProps) {
   const { t } = useTranslation(["dashboard", "common"]);
   const [mode, setMode] = useState<"select" | "jianying-form">("select");
@@ -325,10 +330,28 @@ export function ExportScopeDialog({
             </FormField>
 
             <PrimaryButton
+              tone="accent"
+              size="sm"
+              onClick={() => onFinalizeEpisode?.(selectedEpisode)}
+              disabled={!onFinalizeEpisode || finalizingEpisode || jianyingExporting}
+              leadingIcon={
+                finalizingEpisode ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <WandSparkles className="h-3.5 w-3.5" />
+                )
+              }
+            >
+              {finalizingEpisode
+                ? t("dashboard:finalizing_episode")
+                : t("dashboard:finalize_episode")}
+            </PrimaryButton>
+
+            <PrimaryButton
               tone="warm"
               size="sm"
               onClick={handleJianyingSubmit}
-              disabled={!draftPath.trim() || jianyingExporting}
+              disabled={!draftPath.trim() || jianyingExporting || finalizingEpisode}
               leadingIcon={
                 jianyingExporting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

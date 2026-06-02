@@ -5,6 +5,7 @@ from PIL import Image
 
 from lib.image_backends.base import ImageCapability, ImageGenerationResult
 from lib.media_generator import MediaGenerator
+from lib.video_backends.base import VideoCapabilities
 
 
 class _FakeImageBackend:
@@ -45,6 +46,16 @@ class _FakeVideoBackend:
 
     def __init__(self):
         self.calls = []
+        self._video_capabilities = VideoCapabilities(
+            first_frame=True,
+            last_frame=False,
+            reference_images=True,
+            max_reference_images=2,
+        )
+
+    @property
+    def video_capabilities(self):
+        return self._video_capabilities
 
     async def generate(self, request):
         self.calls.append(request)
@@ -235,3 +246,98 @@ class TestMediaGenerator:
         assert metadata["input_mime"] == "image/jpeg"
         assert metadata["resized"] is True
         assert gen.versions.add_calls[-1]["provider_input_payload"]["cleaned_up"] == 1
+
+    @pytest.mark.asyncio
+    async def test_video_provider_input_is_retained_on_failure_for_diagnostics(self, tmp_path, monkeypatch):
+        gen = _build_generator(tmp_path)
+        source = tmp_path / "storyboard.png"
+        Image.new("RGB", (3200, 1800), color="purple").save(source, format="PNG")
+        diagnostics: list[dict] = []
+
+        class _FakeQueue:
+            async def persist_api_call_id(self, task_id, call_id):
+                assert task_id == "task-1"
+                assert call_id == 1
+
+            async def append_task_diagnostic(self, task_id, data):
+                assert task_id == "task-1"
+                diagnostics.append(data)
+
+        monkeypatch.setattr("lib.generation_queue.get_generation_queue", lambda: _FakeQueue())
+
+        async def fail(request):
+            gen._video_backend.calls.append(request)
+            raise RuntimeError("provider failed")
+
+        gen._video_backend.generate = fail
+
+        with pytest.raises(RuntimeError, match="provider failed"):
+            await gen.generate_video_async(
+                prompt="p",
+                resource_type="videos",
+                resource_id="E1S07",
+                start_image=source,
+                task_id="task-1",
+            )
+
+        request = gen._video_backend.calls[-1]
+        assert request.start_image is not None
+        assert request.start_image != source
+        assert request.start_image.exists()
+        assert gen.usage_tracker.finished[-1]["status"] == "failed"
+        assert [d["diagnostic_type"] for d in diagnostics] == [
+            "provider_input_prepared",
+            "provider_input_retained_on_failure",
+        ]
+        retained = diagnostics[-1]["provider_input_payload"]
+        assert retained["retained_on_failure"] is True
+        assert retained["cleaned_up"] == 0
+        assert diagnostics[-1]["provider_input_images"]["start_image"]["input_path"] == str(request.start_image)
+
+    @pytest.mark.asyncio
+    async def test_video_reference_images_are_truncated_and_audited(self, tmp_path):
+        gen = _build_generator(tmp_path)
+        refs = []
+        for index in range(3):
+            path = tmp_path / f"ref-{index}.png"
+            Image.new("RGB", (64, 64), color="purple").save(path, format="PNG")
+            refs.append(path)
+
+        await gen.generate_video_async(
+            prompt="p",
+            resource_type="videos",
+            resource_id="E1S08",
+            reference_images=refs,
+        )
+
+        request = gen._video_backend.calls[-1]
+        assert request.reference_images is not None
+        assert len(request.reference_images) == 2
+        metadata = gen.versions.add_calls[-1]["provider_reference_policy"]
+        assert metadata["original_reference_image_count"] == 3
+        assert metadata["submitted_reference_image_count"] == 2
+        assert metadata["dropped_reference_image_count"] == 1
+        assert metadata["reason"] == "provider_max_reference_images"
+
+    @pytest.mark.asyncio
+    async def test_reference_video_fails_when_backend_drops_all_reference_images(self, tmp_path):
+        gen = _build_generator(tmp_path)
+        gen._video_backend._video_capabilities = VideoCapabilities(
+            first_frame=True,
+            reference_images=False,
+            max_reference_images=0,
+        )
+        ref = tmp_path / "ref.png"
+        Image.new("RGB", (64, 64), color="purple").save(ref, format="PNG")
+
+        with pytest.raises(ValueError, match="不支持参考图输入"):
+            await gen.generate_video_async(
+                prompt="p",
+                resource_type="reference_videos",
+                resource_id="E1U1",
+                reference_images=[ref],
+            )
+
+        assert gen._video_backend.calls == []
+        assert gen.usage_tracker.finished[-1]["status"] == "failed"
+        assert gen.versions.add_calls == []

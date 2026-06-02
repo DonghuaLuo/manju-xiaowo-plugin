@@ -405,6 +405,98 @@ async def test_generate_video_selected_no_match(fake_ctx: ToolContext) -> None:
     assert out.get("is_error") is True
 
 
+async def test_generate_video_scene_reference_mode_targets_single_unit(
+    fake_ctx: ToolContext,
+    monkeypatch,
+) -> None:
+    from server.agent_runtime.sdk_tools import enqueue_videos as mod
+
+    fake_ctx.pm.script_payload = {  # type: ignore[attr-defined]
+        "generation_mode": "reference_video",
+        "episode": 1,
+        "video_units": [
+            {"unit_id": "E1U1", "duration_seconds": 4, "shots": [{"duration": 4, "text": "@张三 起身"}]},
+            {"unit_id": "E1U2", "duration_seconds": 7, "shots": [{"duration": 7, "text": "@李四 转身"}]},
+        ],
+    }
+    captured: list[tuple[str, int | None, str]] = []
+
+    async def fake_batch(*, project_name, specs, on_success=None, on_failure=None):
+        from lib.generation_queue_client import BatchTaskResult
+
+        for spec in specs:
+            captured.append(
+                (
+                    spec.resource_id,
+                    spec.payload.get("duration_seconds"),
+                    spec.payload.get("quality"),
+                )
+            )
+            if on_success:
+                on_success(
+                    BatchTaskResult(
+                        resource_id=spec.resource_id,
+                        task_id=f"task-{spec.resource_id}",
+                        status="succeeded",
+                        result={"file_path": f"reference_videos/{spec.resource_id}.mp4"},
+                    )
+                )
+        return [], []
+
+    monkeypatch.setattr(mod, "batch_enqueue_and_wait", fake_batch)
+    tool_obj = generate_video_scene_tool(fake_ctx)
+    out = await _call(tool_obj, {"script": "episode_1.json", "scene_id": "E1U2", "quality": "final"})
+
+    assert out.get("is_error") is not True
+    assert captured == [("E1U2", 7, "final")]
+    assert "共 1 个 unit" in out["content"][0]["text"]
+
+
+async def test_generate_video_selected_reference_mode_targets_requested_units(
+    fake_ctx: ToolContext,
+    monkeypatch,
+) -> None:
+    from server.agent_runtime.sdk_tools import enqueue_videos as mod
+
+    fake_ctx.pm.script_payload = {  # type: ignore[attr-defined]
+        "generation_mode": "reference_video",
+        "episode": 1,
+        "video_units": [
+            {"unit_id": "E1U1", "duration_seconds": 4, "shots": [{"duration": 4, "text": "@张三 起身"}]},
+            {"unit_id": "E1U2", "duration_seconds": 8, "shots": [{"duration": 8, "text": "@李四 转身"}]},
+            {"unit_id": "E1U3", "duration_seconds": 6, "shots": [{"duration": 6, "text": "@王五 看向远处"}]},
+        ],
+    }
+    captured: list[str] = []
+
+    async def fake_batch(*, project_name, specs, on_success=None, on_failure=None):
+        from lib.generation_queue_client import BatchTaskResult
+
+        for spec in specs:
+            captured.append(spec.resource_id)
+            if on_success:
+                on_success(
+                    BatchTaskResult(
+                        resource_id=spec.resource_id,
+                        task_id=f"task-{spec.resource_id}",
+                        status="succeeded",
+                        result={"file_path": f"reference_videos/{spec.resource_id}.mp4"},
+                    )
+                )
+        return [], []
+
+    monkeypatch.setattr(mod, "batch_enqueue_and_wait", fake_batch)
+    tool_obj = generate_video_selected_tool(fake_ctx)
+    out = await _call(
+        tool_obj,
+        {"script": "episode_1.json", "scene_ids": ["E1U3", "NO_SUCH", "E1U1", "E1U3"]},
+    )
+
+    assert out.get("is_error") is not True
+    assert captured == ["E1U3", "E1U1"]
+    assert "NO_SUCH" in out["content"][0]["text"]
+
+
 def test_build_asset_specs_skips_invalid_description(monkeypatch) -> None:
     """空白 / 非字符串描述都被跳过并告警，不应抛错（.strip()）或漏到 from_request 而中断整批。"""
     from lib.asset_types import ASSET_SPECS
@@ -495,6 +587,7 @@ def test_build_reference_specs_routes_through_guard(tmp_path) -> None:
     units = [
         {
             "unit_id": "E1U1",
+            "duration_seconds": 7,
             "shots": [{"duration": 3, "text": "@张三 推门"}],
             "references": [{"type": "character", "name": "张三"}],
         }
@@ -508,6 +601,7 @@ def test_build_reference_specs_routes_through_guard(tmp_path) -> None:
     assert specs[0].payload["prompt"] == "@张三 推门"
     assert specs[0].payload["script_file"] == "episode_1.json"
     assert specs[0].payload["quality"] == "draft"
+    assert specs[0].payload["duration_seconds"] == 7
 
     specs_final, _ = _build_reference_specs(
         units=units,
@@ -571,10 +665,18 @@ def test_build_reference_specs_handles_malformed_shots(tmp_path) -> None:
 async def test_get_video_capabilities_happy(fake_ctx: ToolContext, monkeypatch) -> None:
     from server.agent_runtime.sdk_tools import text_generation as mod
 
-    async def fake_resolve(_project):
-        return {"provider_id": "fake", "supported_durations": [4, 6, 8]}
+    class FakeResolver:
+        def __init__(self, *_args, **_kwargs):
+            pass
 
-    monkeypatch.setattr(mod, "_resolve_video_capabilities", fake_resolve)
+        async def video_capabilities_for_project(self, _project):
+            return {"provider_id": "fake", "supported_durations": [4, 6, 8]}
+
+    async def fake_recommendations(**_kwargs):
+        return {"video": {"draft": {"provider_id": "fake"}}}
+
+    monkeypatch.setattr(mod, "ConfigResolver", FakeResolver)
+    monkeypatch.setattr(mod, "_build_video_quality_recommendations", fake_recommendations)
     tool_obj = get_video_capabilities_tool(fake_ctx)
     out = await _call(tool_obj, {})
     assert out.get("is_error") is not True
@@ -582,12 +684,10 @@ async def test_get_video_capabilities_happy(fake_ctx: ToolContext, monkeypatch) 
 
 
 async def test_get_video_capabilities_error(fake_ctx: ToolContext, monkeypatch) -> None:
-    from server.agent_runtime.sdk_tools import text_generation as mod
-
-    async def fake_resolve(_project):
+    def fake_load_project(_project_name):
         raise FileNotFoundError("missing project.json")
 
-    monkeypatch.setattr(mod, "_resolve_video_capabilities", fake_resolve)
+    fake_ctx.pm.load_project = fake_load_project  # type: ignore[method-assign]
     tool_obj = get_video_capabilities_tool(fake_ctx)
     out = await _call(tool_obj, {})
     assert out.get("is_error") is True

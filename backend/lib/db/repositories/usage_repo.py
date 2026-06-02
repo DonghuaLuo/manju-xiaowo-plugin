@@ -547,6 +547,81 @@ class UsageRepository(BaseRepository):
             "period": {"start": period_start, "end": period_end},
         }
 
+    async def get_provider_recommendations(
+        self,
+        *,
+        project_name: str | None = None,
+        call_type: CallType | None = None,
+        min_calls: int = 3,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        filters = self._build_filters(project_name=project_name, call_type=call_type)
+        min_calls = max(1, int(min_calls or 1))
+        limit = max(1, min(int(limit or 10), 50))
+
+        total_calls = func.count()
+        success_calls = func.count(case((ApiCall.status == "success", 1)))
+        failed_calls = func.count(case((ApiCall.status == "failed", 1)))
+        avg_duration_ms = func.avg(case((ApiCall.status == "success", ApiCall.duration_ms)))
+        avg_success_cost_usd = func.avg(
+            case(
+                (
+                    (ApiCall.status == "success") & (ApiCall.currency == "USD") & (ApiCall.cost_amount > 0),
+                    ApiCall.cost_amount,
+                )
+            )
+        )
+        success_rate = success_calls * 1.0 / total_calls
+
+        stmt = (
+            select(
+                ApiCall.provider,
+                ApiCall.model,
+                ApiCall.call_type,
+                total_calls.label("total_calls"),
+                success_calls.label("success_calls"),
+                failed_calls.label("failed_calls"),
+                avg_duration_ms.label("avg_duration_ms"),
+                avg_success_cost_usd.label("avg_success_cost_usd"),
+            )
+            .select_from(ApiCall)
+            .where(*filters, ApiCall.provider.isnot(None), ApiCall.model.isnot(None))
+            .group_by(ApiCall.provider, ApiCall.model, ApiCall.call_type)
+            .having(total_calls >= min_calls)
+            .order_by(success_rate.desc(), avg_success_cost_usd.asc().nulls_last(), total_calls.desc())
+            .limit(limit)
+        )
+        stmt = self._scope_query(stmt, ApiCall)
+        rows = (await self.session.execute(stmt)).all()
+
+        recommendations: list[dict[str, Any]] = []
+        for row in rows:
+            total = int(row.total_calls or 0)
+            success = int(row.success_calls or 0)
+            recommendations.append(
+                {
+                    "provider": row.provider,
+                    "model": row.model,
+                    "call_type": row.call_type,
+                    "total_calls": total,
+                    "success_calls": success,
+                    "failed_calls": int(row.failed_calls or 0),
+                    "success_rate": round(success / total, 4) if total else 0,
+                    "avg_duration_seconds": round((row.avg_duration_ms or 0) / 1000, 2)
+                    if row.avg_duration_ms
+                    else None,
+                    "avg_success_cost_usd": round(float(row.avg_success_cost_usd), 6)
+                    if row.avg_success_cost_usd is not None
+                    else None,
+                }
+            )
+        return {
+            "recommendations": recommendations,
+            "min_calls": min_calls,
+            "project_name": project_name,
+            "call_type": call_type,
+        }
+
     async def get_calls(
         self,
         *,

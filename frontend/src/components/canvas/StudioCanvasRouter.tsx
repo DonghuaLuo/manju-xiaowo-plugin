@@ -33,7 +33,7 @@ function resolveSegmentPrompt(
   segmentId: string,
   field: PromptField,
   scriptFile?: string,
-): { resolvedFile: string; prompt: unknown; duration?: number } | null {
+): { resolvedFile: string; prompt: unknown; duration?: number; shotTier?: "S" | "A" | "B" } | null {
   const resolvedFile = scriptFile ?? Object.keys(scripts)[0];
   if (!resolvedFile) return null;
   const script = scripts[resolvedFile];
@@ -46,6 +46,9 @@ function resolveSegmentPrompt(
     resolvedFile,
     prompt: seg?.[field] ?? "",
     duration: seg?.duration_seconds,
+    shotTier: seg?.shot_tier === "S" || seg?.shot_tier === "A" || seg?.shot_tier === "B"
+      ? seg.shot_tier
+      : undefined,
   };
 }
 
@@ -222,7 +225,7 @@ export function StudioCanvasRouter() {
         segmentId,
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
-        { quality },
+        { quality, ...(resolved.shotTier ? { shot_tier: resolved.shotTier } : {}) },
       );
       useAppStore.getState().pushToast(tRef.current("storyboard_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {
@@ -245,7 +248,7 @@ export function StudioCanvasRouter() {
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
         resolved.duration,
-        { quality },
+        { quality, ...(resolved.shotTier ? { shot_tier: resolved.shotTier } : {}) },
       );
       useAppStore.getState().pushToast(tRef.current("video_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {

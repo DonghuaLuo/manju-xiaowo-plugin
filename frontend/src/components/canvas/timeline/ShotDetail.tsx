@@ -19,6 +19,7 @@ import type {
   VideoPrompt,
   Dialogue,
   GenerationQuality,
+  ShotTier,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
 import { ImagePromptEditor } from "./ImagePromptEditor";
@@ -91,6 +92,80 @@ interface DurationPillProps {
   segmentId: string;
   durationOptions: number[];
   onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
+}
+
+const SHOT_TIERS: ShotTier[] = ["S", "A", "B"];
+
+function normalizeShotTier(value: unknown): ShotTier {
+  return value === "S" || value === "B" ? value : "A";
+}
+
+function ShotTierPill({
+  tier,
+  segmentId,
+  onUpdatePrompt,
+}: {
+  tier: ShotTier;
+  segmentId: string;
+  onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
+}) {
+  const { t } = useTranslation("dashboard");
+  const editable = !!onUpdatePrompt;
+  const label = t("shot_tier_label", { defaultValue: "镜头档位" });
+
+  if (!editable) {
+    return (
+      <span
+        className="num inline-flex items-center rounded-md px-2 py-[3px] text-[11.5px] font-semibold"
+        title={label}
+        style={{
+          background: "oklch(0.22 0.011 265 / 0.6)",
+          border: "1px solid var(--color-hairline-soft)",
+          color: "var(--color-text-2)",
+        }}
+      >
+        {tier}
+      </span>
+    );
+  }
+
+  return (
+    <div
+      className="inline-flex items-center rounded-md p-0.5"
+      role="radiogroup"
+      aria-label={label}
+      style={{
+        background: "oklch(0.22 0.011 265 / 0.6)",
+        border: "1px solid var(--color-hairline-soft)",
+      }}
+    >
+      {SHOT_TIERS.map((candidate) => {
+        const active = candidate === tier;
+        return (
+          <button
+            key={candidate}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={label}
+            onClick={() => {
+              if (!active) void onUpdatePrompt?.(segmentId, "shot_tier", candidate);
+            }}
+            className="num rounded px-1.5 py-0.5 text-[11px] font-bold transition-colors focus-ring"
+            style={{
+              minWidth: 22,
+              color: active ? "oklch(0.14 0 0)" : "var(--color-text-3)",
+              background: active
+                ? "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))"
+                : "transparent",
+            }}
+          >
+            {candidate}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function DurationPill({
@@ -299,6 +374,7 @@ export function ShotDetail({
   const { t } = useTranslation("dashboard");
   const status = statusFromAssets(segment.generated_assets?.status);
   const novelText = getNovelText(segment, contentMode);
+  const shotTier = normalizeShotTier(segment.shot_tier);
   const segCost = useCostStore((s) => s.getSegmentCost(segmentId));
 
   const ip = segment.image_prompt;
@@ -839,6 +915,11 @@ export function ShotDetail({
           seconds={segment.duration_seconds ?? 0}
           segmentId={segmentId}
           durationOptions={durationOptions}
+          onUpdatePrompt={onUpdatePrompt}
+        />
+        <ShotTierPill
+          tier={shotTier}
+          segmentId={segmentId}
           onUpdatePrompt={onUpdatePrompt}
         />
         <StatusBadge status={status} />

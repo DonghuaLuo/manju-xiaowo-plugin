@@ -44,7 +44,7 @@
 
 ```text
 图生视频：单分镜图 -> 单视频；适合最终生产，保留分镜草稿/最终版 + 视频草稿/最终版。
-宫格生视频：宫格镜头板 -> 切分镜头参考图 -> 批量视频；宫格本身不走低清草稿，直接使用项目图片规格。
+宫格生视频：宫格镜头板 -> 切分单格首帧 -> 批量视频；宫格本身不走低清草稿，直接使用项目图片规格，拆分单格不再单独高清化。
 参考生视频：资产参考图 + unit prompt -> 视频；跳过分镜图，使用 reference_video_draft/final 独立策略。
 ```
 
@@ -935,6 +935,12 @@ interface GenerationOptions {
 
 默认可以全部继承当前项目模型路线，只覆盖规格。
 
+当前实现状态：
+
+- 默认创建路径保持简单体验：未启用高级策略时，仍按创建向导里的图片 / 视频分辨率生成默认 `generation_profiles`。
+- 创建向导第二步已增加“生成质量策略”高级区，用户启用后可直接编辑母版、分镜草稿、分镜最终版、宫格、视频草稿、视频最终版、参考视频草稿、参考视频最终版的分辨率与视频音频策略。
+- 高级区未启用时不会覆盖用户原有创建习惯；高级区启用后才把编辑后的完整 `generation_profiles` 写入项目。
+
 ### 项目设置
 
 新增“生成质量策略”区块：
@@ -955,6 +961,12 @@ interface GenerationOptions {
 - 当前时长
 - 是否生成音频
 - 是否存在供应商能力警告
+
+当前实现状态：
+
+- 当前选中镜头的分镜 / 视频卡片会读取当前版本元数据，并展示质量、分辨率、时长、供应商模型、是否生成音频等徽标。
+- 视频卡片会展示供应商输入图是否经过优化 / 校验，以及当前视频是否基于最终分镜、草稿分镜、自定义分镜或宫格镜头板单格。
+- 这些状态来自版本元数据，不依赖前端猜测。
 
 ### 资产库页面
 
@@ -997,7 +1009,7 @@ profile = asset
 生成宫格镜头板 -> profile=grid -> 使用项目图片规格，默认 2K
 ```
 
-宫格切分出来的单格图只代表批量镜头板结果，不等同于 2K 单分镜最终图。重要镜头如需最终质量，应以后续“单格最终化为单分镜”的方式处理，且最终化必须使用“宫格单格图 + 角色/场景/道具参考图 + 原分镜提示词”，避免纯文本重生造成一致性漂移。
+宫格切分出来的单格图就是宫格生视频模式的视频首帧来源，不再要求额外“单格高清化”或“单格最终化为单分镜”。该模式的质量基准由宫格整图 profile 和项目图片规格保障；最终化 / 导出检查应把 `grid` 来源视为该模式下的最终可用来源，而不是把它误判为缺少单张最终分镜。
 
 ### 参考生视频
 
@@ -1008,7 +1020,9 @@ profile = asset
 参考视频最终版 -> quality=final -> reference_video_final
 ```
 
-如果已有满意草稿图，最终版应优先支持基于当前草稿图做图生图或高清化，而不是只用同一个 prompt 重新抽。
+当前 agent 视频工具在 `reference_video` 模式下已经支持单 unit / 多 unit 精确选择：`generate_video_scene.scene_id` 视为 `unit_id`，`generate_video_selected.scene_ids` 视为 `unit_id` 列表，不再自动退化成整集生成。草稿/最终版仍只改变 profile 路由和分辨率等生成参数，unit 时长继续跟随脚本里的实际 `duration_seconds`。
+
+参考生视频必须使用支持参考图输入的视频模型。若 route preview 或执行期发现模型 `max_reference_images=0`，应直接报错并提示切换模型；不能把参考图裁成 0 张后继续生成，否则会把 reference_video 静默退化成 text-to-video，破坏资产一致性。
 
 ### 视频卡片
 
@@ -1027,7 +1041,7 @@ profile = asset
 生成最终视频前建议检查：
 
 - 当前分镜图是否存在
-- 当前分镜图是否为最终版
+- 当前分镜图是否为最终版，或在宫格生视频模式下是否为 `grid` 来源
 - 当前分镜图的分辨率是否满足最终要求
 - 当前供应商是否支持最终视频参数
 
@@ -1040,8 +1054,8 @@ profile = asset
 ```text
 1. 扫描本集全部镜头
 2. 检查母资产是否存在
-3. 检查分镜是否已有最终版
-4. 对缺少最终分镜的镜头生成最终分镜
+3. 检查分镜是否已有最终版；宫格生视频模式下 `grid` 来源视为最终可用来源
+4. 对缺少最终分镜且非 `grid` 来源的镜头生成最终分镜
 5. 对缺少最终视频的镜头生成最终视频
 6. 输出最终化报告
 ```
@@ -1185,16 +1199,14 @@ route = await resolve_generation_route(
 }
 ```
 
-视频额外记录：
+视频额外记录字段：
 
-```json
-{
-  "duration_seconds": 6,
-  "generate_audio": false,
-  "service_tier": "default",
-  "seed": 123,
-  "source_storyboard_version": 3
-}
+```text
+duration_seconds: 实际镜头或 reference_video unit 时长，不因为 draft/final 固定成某个秒数
+generate_audio: 是否生成音频
+service_tier: 供应商支持的服务档位
+seed: 供应商支持时记录 seed
+source_storyboard_version: 视频来源分镜版本
 ```
 
 还建议在分镜数据里保存当前激活资产的简要 metadata，例如：
@@ -1272,6 +1284,8 @@ profile = video_draft
 - `service_tier`
 - `seed`
 - `source_version`
+
+`reference_video` 模式下，`generate_video_scene` 和 `generate_video_selected` 的 ID 参数映射到 `video_units[*].unit_id`，用于只生成指定参考视频 unit；`generate_video_episode` / `generate_video_all` 仍生成整集缺失 unit。reference_video 入队 payload 已携带 `quality` 和 unit 的实际 `duration_seconds`。
 
 ### 能力查询工具
 
@@ -1359,33 +1373,35 @@ custom model 配置
 
 ### 闭环审查表
 
-| 流程 | 闭环状态 | 必须满足的闭环条件 |
+| 流程 | 当前状态 | 闭环完成情况 |
 | --- | --- | --- |
-| 创建项目 | 方案闭环，代码待实现 | 创建时写入 `generation_profiles` 默认值；旧字段 `model_settings` 保留；创建后立即能在项目设置回显 |
-| 项目设置 | 方案闭环，代码待实现 | 能编辑母资产、分镜草稿、分镜最终、视频草稿、视频最终；保存后重新打开不丢失；模型切换后自动校验分辨率/时长 |
-| 角色/场景/道具生成 | 方案闭环，代码待实现 | 默认走 `profile=asset`；使用最终规格；生成后写入版本 metadata；当前激活图能被分镜引用 |
-| 分镜草稿 | 方案闭环，代码待实现 | 前端传 `quality=draft`；后端解析 `storyboard_draft`；版本记录草稿标记；可作为最终分镜的来源 |
-| 分镜最终版 | 仍需补齐来源闭环 | 需要记录 `source_version`；优先支持基于草稿图 I2I/高清化；生成后更新当前激活分镜 metadata |
-| 宫格镜头板 | 方案闭环，代码待实现 | 前端显示“生成宫格镜头板”；后端解析 `profile=grid`；不使用 `storyboard_draft=1K`；切分单格记录来源宫格 metadata |
-| 视频草稿 | 方案闭环，代码待实现 | 前端传 `quality=draft`；后端解析 `video_draft`；按供应商支持时长/分辨率校验；生成后记录来源分镜版本 |
-| 视频最终版 | 仍需补齐前置检查闭环 | 生成前检查分镜是否最终版；检查供应商是否支持最终分辨率/时长/音频；生成后标记 `quality=final` |
-| 参考视频草稿/最终版 | 当前部分闭环 | 前端应传 `quality=draft/final`；后端解析 `reference_video_draft/final`；版本 metadata 写入 `reference_videos`；参考图裁剪/压缩要记录原因 |
-| 智能体资产生成 | 当前不闭环 | `generate_assets` 必须默认 `quality=final`，并把质量档位写入 TaskSpec payload |
-| 智能体分镜生成 | 当前不闭环 | `generate_storyboards` 必须默认 `quality=draft`，并允许显式 final |
-| 智能体视频生成 | 当前不闭环 | `generate_video_*` 必须默认 `quality=draft`，并允许 final、duration、resolution、provider 覆盖；reference_video 批量入队也必须携带 quality |
-| 版本面板 | 当前不闭环 | 需要展示质量、分辨率、供应商、模型、时长、来源版本；否则用户无法判断是否仍是草稿 |
-| 最终化本集 | 方案闭环，代码待实现 | 扫描缺失/草稿项；批量补最终分镜和最终视频；输出报告；失败项可重试 |
-| 导出成片 | 方案闭环，代码待实现 | 导出前扫描 `generated_assets_meta` 和版本 metadata；发现草稿/低规格/来源不一致时提示 |
-| 旧项目兼容 | 方案闭环，代码待实现 | 没有 `generation_profiles` 时走旧 `model_settings`；首次打开可自动补默认 profile，但不能覆盖用户原配置 |
-| 自定义供应商 | 当前部分闭环 | endpoint 能力、模型配置、实际 backend 参数必须三者一致；不能只按标准列表展示选项 |
-| 真实图片类型检测 | 方案闭环，代码待实现 | 所有供应商输入前读取文件头判断 MIME；不能只按 `.png/.jpg` 后缀；日志记录真实 MIME 和原后缀 |
-| 供应商输入图片准备层 | 方案闭环，代码待实现 | `prepare_provider_image_input` 生成临时优化副本；原始母版不被覆盖；返回路径、MIME、原始大小、优化后大小、是否转码 |
-| 临时输入图生命周期 | 当前不闭环 | 需要定义临时目录、复用策略、任务结束清理、失败保留诊断策略；否则会堆积大文件或丢失排查证据 |
-| 视频 prompt 精简 | 方案闭环，代码待实现 | 从完整分镜描述生成 `video_motion_prompt`；只保留动作、镜头、情绪、环境运动、禁止项；保留原始完整 prompt 供回溯 |
-| 首帧/尾帧/多参考图选择 | 当前部分闭环 | 需要按镜头复杂度和供应商能力选择 start/end/reference；超过参考图上限时合成关键帧或截断并记录 |
-| 请求体大小控制 | 方案闭环，代码待实现 | 对 Base64 膨胀后大小做预估；供应商有硬限制时提前失败或降级压缩；任务错误要能解释“请求体过大” |
-| S/A/B 镜头档位 | 方案闭环，代码待实现 | 镜头档位能映射到模型、分辨率、参考图策略、重试预算；单镜头覆盖后能保存和回显 |
-| 成本与质量统计 | 当前不闭环 | 需要记录供应商、模型、时长、分辨率、输入图大小、失败类型、人工评分；否则无法闭环推荐模型 |
+| 创建项目 | 已完成 | 创建时写入默认 `generation_profiles`；旧字段 `model_settings` 保留；高级区启用后可编辑完整 profile；创建后能在项目设置回显 |
+| 项目设置 | 已完成 | 已能编辑并保存母资产、分镜、宫格、视频、参考视频 profile 和 S/A/B 档位策略；模型/分辨率/档位变化会触发后端 route preview 即时校验并展示错误、降级警告、历史推荐和质量统计 |
+| 角色/场景/道具生成 | 已完成 | 手动与智能体默认 `quality=final`；新生成版本写入 provider/model/resolution/quality metadata；旧项目走兼容读取，不在迁移时覆盖用户历史自定义 |
+| 分镜草稿 | 已完成 | 前端传 `quality=draft`；后端解析 `storyboard_draft`；版本记录草稿标记；可作为最终分镜来源 |
+| 分镜最终版 | 已完成 | 已有 `quality=final` 和 `source_version` 入口；最终版生成会优先把当前草稿分镜或指定版本作为 I2I 参考，并在新版本 metadata 记录来源分镜版本、文件和质量；S/A/B 策略可控制是否保留该来源 |
+| 宫格镜头板 | 已完成 | 已拆成独立 `grid` profile，不走低清草稿；切分单格会写入来源宫格版本、文件、grid id 和 cell index metadata；宫格生视频不要求单格再高清化，最终化/导出检查可把 grid 来源视为最终可用来源 |
+| 视频草稿 | 已完成 | 前端传 `quality=draft`；后端解析 `video_draft`；时长跟随实际镜头时长、项目设置或模型能力，不固定 6 秒；生成后记录来源分镜版本 |
+| 视频最终版 | 已完成 | 已支持 `quality=final` 和 `video_final` 路由；默认阻止最终视频基于草稿分镜生成，B 档等显式策略可放宽；供应商分辨率/时长/音频由 route resolver 校验和降级提示 |
+| 参考视频草稿/最终版 | 已完成 | 已支持 `reference_video_draft/final` profile、版本 metadata、单 unit / 多 unit 精确选择；草稿/最终版不固定时长，继续使用 unit 实际时长 |
+| 智能体资产生成 | 已完成 | `generate_assets` 默认 `quality=final`，并把质量档位写入 TaskSpec payload |
+| 智能体分镜生成 | 已完成 | `generate_storyboards` 默认 `quality=draft`，允许显式 `final` |
+| 智能体宫格生成 | 已完成 | `generate_grid` 不提供低清草稿，默认 `quality=final` / `profile=grid` |
+| 智能体视频生成 | 已完成 | `generate_video_*` 默认 `quality=draft`，允许 `final`；普通视频和 reference_video 都携带实际 `duration_seconds`；reference_video 单 unit / 多 unit 精确选择已补齐 |
+| 能力查询工具 | 已完成 | `get_video_capabilities` 返回 `agent_generation_defaults` 与 `quality_recommendations.video/reference_video.draft/final` |
+| 版本面板 / 卡片 | 已完成 | 当前卡片已展示质量、分辨率、供应商、模型、时长、输入图优化状态、来源分镜质量，并可记录人工总体评分和角色一致性/动作自然度等维度评分 |
+| 最终化本集 | 已完成 | 已新增本集最终化入口：扫描缺失/非最终分镜和视频；宫格生视频下 grid 来源视为最终可用来源；普通图生视频缺失最终分镜时批量提交最终分镜/最终视频任务，并让最终视频依赖刚提交的最终分镜；任务完成后可通过最终化报告接口汇总失败项、失败类型和重试建议 |
+| 导出成片 | 已完成 | 剪映导出前已拦截草稿视频、基于草稿分镜的视频，以及明确低于最终 profile 分辨率的视频；导出前问题统计和最终化报告共同提供可视化检查依据 |
+| 旧项目兼容 | 已完成 | 没有 `generation_profiles` 时会规范化默认 profile 并兼容旧 `model_settings`；迁移/读取采用保守合并，不覆盖用户历史自定义 |
+| 自定义供应商 | 已完成 | 后端能力解析已参与 profile 路由；项目设置 route preview 会按 endpoint registry、模型配置和实际 backend 能力共同校验，避免只看前端静态选项 |
+| 真实图片类型检测 | 已完成 | 供应商输入前读取文件头判断 MIME，不只依赖 `.png/.jpg` 后缀 |
+| 供应商输入图片准备层 | 已完成 | `prepare_provider_image_input` 生成临时优化副本；原始母版不被覆盖；版本 metadata 记录路径、MIME、大小和转码信息 |
+| 临时输入图生命周期 | 已完成 | 临时优化副本使用稳定 cache key；任务成功后清理并记录 `cleaned_up`，失败时保留临时输入图用于诊断；启动时会清理过期临时输入图 |
+| 视频 prompt 精简 | 已完成 | 执行层统一从结构化 `video_prompt` 提炼 motion prompt，减少无效 token，并保留原始信息供回溯 |
+| 首帧/尾帧/多参考图选择 | 已完成 | 已受供应商参考图能力和 S/A/B 参考图策略约束；超限时按能力/策略截断并记录原始数量、提交数量、丢弃数量和原因 |
+| 请求体大小控制 | 已完成 | 已对 Base64 膨胀大小做预估，并对请求体敏感供应商提前警告或失败；供应商输入图优化和参考图截断共同降低请求体风险 |
+| S/A/B 镜头档位 | 已完成 | 已有字段、WebUI 切换、agent patch、项目级默认策略、单镜头覆盖、模型/分辨率/参考图策略/重试预算绑定，并进入路由和 worker 重试逻辑 |
+| 成本与质量统计 | 已完成 | 已记录人工评分、失败类型、角色一致性/动作自然度等维度评分、供应商成功率；项目设置使用历史成功率推荐默认模型并展示质量统计 |
 
 ### 闭环关键点
 
@@ -1576,6 +1592,7 @@ image_provider_i2i
 
 10. **参考图截断必须可解释**
     如果因供应商上限截断参考图，任务结果需要记录“原始参考图数量、实际提交数量、截断原因”。不能静默丢图，否则用户会误以为模型没有服从参考。
+    对 `reference_video` 而言，截断后的提交数量不能为 0；不支持参考图的模型必须在项目设置 route preview 和执行期阻断。
 
 ## 适配验收清单
 
@@ -1662,7 +1679,7 @@ generate_video_* 默认 draft
 
 ### 第三阶段：前端单次生成
 
-- 创建项目增加生成质量策略默认值
+- 创建项目增加生成质量策略默认值（已完成：默认路径自动生成；高级区可在创建时编辑完整 profile）
 - 项目设置展示和编辑 draft/final profile
 - 资产默认生成母版
 - 分镜支持草稿/最终版
@@ -1670,7 +1687,7 @@ generate_video_* 默认 draft
 - 视频支持草稿/最终版
 - 参考生视频支持草稿/最终版
 - 版本面板显示质量、分辨率、供应商、模型
-- 分镜/视频卡片展示当前素材是否使用优化输入图、是否基于最终分镜。
+- 分镜/视频卡片展示当前素材是否使用优化输入图、是否基于最终分镜（已完成：从当前版本元数据展示徽标）
 
 ### 第四阶段：智能体工具
 
@@ -1680,27 +1697,27 @@ generate_video_* 默认 draft
 - `generate_video_*` 默认 draft
 - `generate_video_*` 在 reference_video 模式下也要把 quality 传入 unit 任务
 - 工具返回实际生成参数
-- 能力查询工具返回 draft/final 推荐参数
-- 智能体生成视频时默认使用精简后的视频 motion prompt。
+- 能力查询工具返回 draft/final 推荐参数（已完成：`get_video_capabilities` 返回 `agent_generation_defaults` 与 `quality_recommendations.video/reference_video.draft/final`）
+- 智能体生成视频时默认使用精简后的视频 motion prompt。（已完成：agent 入队透传结构化 `video_prompt`，执行层统一用 `_normalize_video_prompt` 转为 Action / Camera_Motion / Subject_Motion / Environment_Motion / Dialogue 等 motion prompt，并按供应商能力启用 compact policy）
 
 ### 第五阶段：镜头档位与质量闭环
 
-- 增加镜头档位：S / A / B。
-- 不同档位绑定不同图片模型、视频模型、分辨率、重试次数。
-- 给项目配置默认策略，允许单镜头覆盖。
-- 对首帧、首尾帧、多参考图分别记录成本和成功率。
-- 记录每次生成结果的人工评分。
-- 统计不同供应商在角色一致性、动作自然度、失败率上的表现。
-- 将历史成功率纳入默认模型推荐。
-- 对失败类型分类：审核失败、请求体过大、角色漂移、动作错误、下载失败、超时。
+- 增加镜头档位：S / A / B。（已完成：脚本模型支持 `shot_tier`，WebUI 分镜详情可切换 S/A/B，agent 字段编辑可写入 `shot_tier`）
+- 不同档位绑定不同图片模型、视频模型、分辨率、重试次数。（已完成：`shot_tier_profiles` 可保存 profile 覆盖、参考图策略、重试预算和最终分镜来源偏好）
+- 给项目配置默认策略，允许单镜头覆盖。（已完成：项目设置保存默认策略，脚本 item 的 `shot_tier` 作为单镜头覆盖进入任务 payload）
+- 对首帧、首尾帧、多参考图分别记录成本和成功率。（已完成：用量统计按 provider/model/类型记录成功率，版本 metadata 记录来源分镜和参考图提交策略）
+- 记录每次生成结果的人工评分。（已完成：分镜/视频卡片可保存总体评分与维度评分）
+- 统计不同供应商在角色一致性、动作自然度、失败率上的表现。（已完成：质量统计返回维度平均值；供应商推荐返回历史成功率、失败次数、耗时和成本）
+- 将历史成功率纳入默认模型推荐。（已完成：项目设置读取 `/usage/provider-recommendations` 并可一键应用推荐视频模型）
+- 对失败类型分类：审核失败、请求体过大、角色漂移、动作错误、下载失败、超时。（已完成：worker 和最终化报告按失败类型分类并给出重试建议）
 
 ### 第六阶段：最终化与导出检查
 
-- 新增“最终化本集”
-- 批量生成最终分镜
-- 批量生成最终视频
-- 导出前检查草稿混入
-- 输出最终化报告
+- 新增“最终化本集”（已完成：剪映导出表单中可一键提交当前集最终化）
+- 批量生成最终分镜（已完成：缺失 / 非最终分镜提交 `quality=final`，并透传 `shot_tier`；宫格生视频的 `grid` 来源不再要求单格最终化）
+- 批量生成最终视频（已完成：缺失 / 非最终 / 基于草稿分镜 / 明确低规格视频提交 `quality=final`，并透传 `shot_tier`）
+- 导出前检查草稿混入（已完成：拦截草稿视频、基于草稿分镜的视频、明确低规格视频）
+- 输出最终化报告（已完成：提交后返回已入队任务和 issue 统计；任务完成后可查询失败分类和重试建议报告）
 
 ## 不建议的做法
 

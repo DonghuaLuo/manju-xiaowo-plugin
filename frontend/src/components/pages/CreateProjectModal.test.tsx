@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Stub URL object APIs not available in jsdom
@@ -261,6 +261,34 @@ describe("CreateProjectModal", () => {
       })
     );
     expect(navigateMock).toHaveBeenCalledWith("/app/projects/demo-proj");
+  });
+
+  it("can customize generation profiles before creating a project", async () => {
+    render(<CreateProjectModal />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "demo" } });
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled()
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /生成质量策略/ }));
+    const videoFinalRow = screen.getByText("视频最终版").closest(".grid");
+    expect(videoFinalRow).not.toBeNull();
+    fireEvent.change(within(videoFinalRow as HTMLElement).getByLabelText("分辨率"), {
+      target: { value: "4K" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /创建项目/ })).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole("button", { name: /创建项目/ }));
+
+    await waitFor(() => expect(API.createProject).toHaveBeenCalled());
+    const payload = vi.mocked(API.createProject).mock.calls[0][0];
+    expect(payload.generation_profiles?.video_final?.resolution).toBe("4K");
+    expect(payload.generation_profiles?.video_draft?.resolution).toBe("720p");
+    expect(payload.generation_profiles?.storyboard_draft?.resolution).toBe("1K");
   });
 
   it("goes back from step 2 to step 1 preserving title", async () => {

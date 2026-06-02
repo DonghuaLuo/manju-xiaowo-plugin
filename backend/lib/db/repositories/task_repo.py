@@ -318,6 +318,51 @@ class TaskRepository(BaseRepository):
         await self.session.commit()
         return affected
 
+    async def requeue_failed_attempt(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        error_message: str,
+        failure: dict[str, Any] | None = None,
+    ) -> int:
+        """Move a running task back to queued for an automatic retry attempt."""
+
+        now = utc_now()
+        safe_payload = payload if isinstance(payload, dict) else {}
+        update_result = await self.session.execute(
+            update(Task)
+            .where(Task.task_id == task_id, Task.status == "running")
+            .values(
+                status="queued",
+                payload_json=_json_dumps(safe_payload),
+                error_message=error_message[:2000],
+                started_at=None,
+                updated_at=now,
+            )
+        )
+        affected = rowcount(update_result)
+        if affected == 0:
+            return 0
+
+        await self.session.flush()
+        res = await self.session.execute(select(Task).where(Task.task_id == task_id))
+        queued_task = res.scalar_one()
+        task_data = _task_to_dict(queued_task)
+        await self._append_event(
+            task_id=task_id,
+            project_name=queued_task.project_name,
+            event_type="retry",
+            status="queued",
+            data={
+                **task_data,
+                "retry_failure": failure or {},
+                "last_error_message": error_message,
+            },
+        )
+        await self.session.commit()
+        return affected
+
     async def _mark_failed_running(self, *, task_id: str, error_message: str) -> int:
         """单点：将 running task 标 failed；返回受影响行数。不 commit。"""
         now = utc_now()
@@ -693,6 +738,22 @@ class TaskRepository(BaseRepository):
         )
         if rowcount(update_result) == 0:
             raise ValueError(f"task not found: {task_id}")
+        await self.session.commit()
+
+    async def append_diagnostic_event(self, task_id: str, data: dict[str, Any]) -> None:
+        """Append a non-state-changing diagnostic event for a running task."""
+
+        result = await self.session.execute(select(Task.project_name, Task.status).where(Task.task_id == task_id))
+        row = result.first()
+        if row is None:
+            raise ValueError(f"task not found: {task_id}")
+        await self._append_event(
+            task_id=task_id,
+            project_name=row.project_name,
+            event_type="diagnostic",
+            status=row.status,
+            data=data,
+        )
         await self.session.commit()
 
     async def list_orphan_tasks_on_start(self) -> list[dict[str, Any]]:

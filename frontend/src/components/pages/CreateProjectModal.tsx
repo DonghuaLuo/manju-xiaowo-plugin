@@ -12,12 +12,13 @@ import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates"
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
-import { createDefaultGenerationProfiles } from "@/utils/generation-profiles";
+import { createDefaultGenerationProfiles, normalizeGenerationProfiles } from "@/utils/generation-profiles";
 import { WizardStep1Basics, type WizardStep1Value } from "./create-project/WizardStep1Basics";
 import { WizardStep2Models, type WizardStep2Data } from "./create-project/WizardStep2Models";
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
 import type { UploadFileInput } from "@/utils/desktop-file";
+import type { GenerationProfiles } from "@/types";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -164,6 +165,10 @@ export function CreateProjectModal() {
     videoResolution: null,
     imageResolution: null,
   });
+  const [useCustomGenerationProfiles, setUseCustomGenerationProfiles] = useState(false);
+  const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(() =>
+    createDefaultGenerationProfiles(),
+  );
 
   const [style, setStyle] = useState<WizardStep3Value>({
     mode: "template",
@@ -304,6 +309,13 @@ export function CreateProjectModal() {
         modelSettings[effectiveImageT2I] = { resolution: models.imageResolution };
       }
       const stylePrompt = style.stylePrompt.trim();
+      const defaultGenerationProfiles = createDefaultGenerationProfiles({
+        imageResolution: models.imageResolution,
+        videoResolution: models.videoResolution,
+      });
+      const savedGenerationProfiles = useCustomGenerationProfiles
+        ? normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles)
+        : defaultGenerationProfiles;
 
       const resp = await API.createProject({
         title: basics.title.trim(),
@@ -319,10 +331,7 @@ export function CreateProjectModal() {
         text_backend_script: models.textBackendScript || null,
         text_backend_overview: models.textBackendOverview || null,
         text_backend_style: models.textBackendStyle || null,
-        generation_profiles: createDefaultGenerationProfiles({
-          imageResolution: models.imageResolution,
-          videoResolution: models.videoResolution,
-        }),
+        generation_profiles: savedGenerationProfiles,
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
       });
 
@@ -469,6 +478,10 @@ export function CreateProjectModal() {
               onCancel={handleClose}
               data={step2Data}
               error={step2Error}
+              useCustomGenerationProfiles={useCustomGenerationProfiles}
+              onUseCustomGenerationProfilesChange={setUseCustomGenerationProfiles}
+              generationProfiles={generationProfiles}
+              onGenerationProfilesChange={setGenerationProfiles}
             />
           )}
           {step === 3 && (

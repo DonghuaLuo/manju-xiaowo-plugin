@@ -76,3 +76,19 @@ async def get_calls(
 async def get_projects_list(_user: CurrentUser):
     projects = await _tracker.get_projects_list()
     return {"projects": projects}
+
+
+@router.get("/usage/provider-recommendations")
+async def get_provider_recommendations(
+    _user: CurrentUser,
+    project_name: str | None = Query(None, description="项目名称（可选）"),
+    call_type: CallType | None = Query(None, description="调用类型 (image/video/text)"),
+    min_calls: int = Query(3, ge=1, le=100, description="纳入推荐所需最小历史调用数"),
+    limit: int = Query(10, ge=1, le=50, description="返回数量"),
+):
+    return await _tracker.get_provider_recommendations(
+        project_name=project_name,
+        call_type=call_type,
+        min_calls=min_calls,
+        limit=limit,
+    )

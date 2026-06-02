@@ -373,6 +373,31 @@ class MediaGenerator:
         # 提前到所有 ensure_current_tracked / add_version / VideoGenerationRequest 之前，
         # 让版本元数据与 provider 请求里的 duration_seconds 类型一致（都是 int），
         # 避免 versions.json 落字符串而 ApiCall 落 int 的类型漂移。
+        prepared_images: list[Any] = []
+
+        async def _append_provider_input_diagnostic(kind: str) -> None:
+            if task_id is None:
+                return
+            provider_input_images = version_metadata.get("provider_input_images")
+            provider_input_payload = version_metadata.get("provider_input_payload")
+            if not provider_input_images and not provider_input_payload:
+                return
+            try:
+                from lib.generation_queue import get_generation_queue
+
+                await get_generation_queue().append_task_diagnostic(
+                    task_id,
+                    {
+                        "diagnostic_type": kind,
+                        "resource_type": resource_type,
+                        "resource_id": resource_id,
+                        "provider_input_images": provider_input_images or {},
+                        "provider_input_payload": provider_input_payload or {},
+                    },
+                )
+            except Exception:
+                logger.debug("写入视频供应商输入图诊断事件失败 task_id=%s", task_id, exc_info=True)
+
         try:
             duration_int = int(float(duration_seconds)) if duration_seconds else 8
         except (ValueError, TypeError):
@@ -441,9 +466,9 @@ class MediaGenerator:
             # Three-level fallback based on backend video capabilities
             actual_end_image = None
             actual_reference_images = reference_images
+            caps = self._video_backend.video_capabilities
 
             if end_image and self._video_backend:
-                caps = self._video_backend.video_capabilities
                 if caps.last_frame:
                     actual_end_image = end_image  # first_last mode
                 elif caps.reference_images:
@@ -459,10 +484,43 @@ class MediaGenerator:
                         self._video_backend.name,
                     )
 
-            from lib.image_utils import PreparedProviderImage, prepare_provider_image_input
+            original_reference_images = list(actual_reference_images or [])
+            submitted_reference_images = original_reference_images
+            reference_policy_reason: str | None = None
+            max_reference_images = int(caps.max_reference_images or 0)
+            if original_reference_images and not caps.reference_images:
+                submitted_reference_images = []
+                reference_policy_reason = "provider_no_reference_images"
+            elif max_reference_images > 0 and len(original_reference_images) > max_reference_images:
+                submitted_reference_images = original_reference_images[:max_reference_images]
+                reference_policy_reason = "provider_max_reference_images"
+            actual_reference_images = submitted_reference_images or None
+            if original_reference_images or reference_policy_reason:
+                dropped_reference_images = original_reference_images[len(submitted_reference_images) :]
+                version_metadata.setdefault(
+                    "provider_reference_policy",
+                    {
+                        "provider": provider_name,
+                        "model": model_name,
+                        "supports_reference_images": bool(caps.reference_images),
+                        "max_reference_images": max_reference_images,
+                        "original_reference_image_count": len(original_reference_images),
+                        "submitted_reference_image_count": len(submitted_reference_images),
+                        "dropped_reference_image_count": len(dropped_reference_images),
+                        "reason": reference_policy_reason,
+                        "dropped_reference_images": [str(item) for item in dropped_reference_images],
+                    },
+                )
+            if resource_type == "reference_videos" and original_reference_images and not submitted_reference_images:
+                raise ValueError(
+                    f"参考生视频需要至少提交 1 张参考图，但当前视频模型 {provider_name}/{model_name} "
+                    "不支持参考图输入；请切换到支持 reference images 的模型后重试。"
+                )
+
+            from lib.image_utils import prepare_provider_image_input
 
             prepared_inputs: dict[str, Any] = {}
-            prepared_images: list[PreparedProviderImage] = []
+            prepared_images = []
             provider_temp_dir = Path(tempfile.gettempdir()) / "manju-provider-inputs" / self.project_name
 
             def _prepare_image_path(value: str | Path | None, purpose: str) -> Path | None:
@@ -522,6 +580,7 @@ class MediaGenerator:
                 }
                 version_metadata.setdefault("provider_input_images", prepared_inputs)
                 version_metadata.setdefault("provider_input_payload", input_payload)
+                await _append_provider_input_diagnostic("provider_input_prepared")
                 logger.info(
                     "视频供应商输入图已准备 provider=%s model=%s images=%d estimated_base64=%.1fMB",
                     provider_name,
@@ -585,6 +644,11 @@ class MediaGenerator:
                 generate_audio=result.generate_audio,
             )
         except Exception as e:
+            payload_meta = version_metadata.get("provider_input_payload")
+            if prepared_images and isinstance(payload_meta, dict):
+                payload_meta["cleaned_up"] = 0
+                payload_meta["retained_on_failure"] = True
+                await _append_provider_input_diagnostic("provider_input_retained_on_failure")
             # 记录调用失败
             logger.exception("生成失败 (%s)", "video")
             await self.usage_tracker.finish_call(

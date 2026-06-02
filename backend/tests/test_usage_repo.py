@@ -79,6 +79,28 @@ class TestUsageRepository:
         projects = await repo.get_projects_list()
         assert set(projects) == {"project_a", "project_b"}
 
+    async def test_get_provider_recommendations_orders_by_success_rate(self, db_session):
+        repo = UsageRepository(db_session)
+        good_ids = [
+            await repo.start_call(project_name="demo", call_type="video", model="good", provider="ark")
+            for _ in range(3)
+        ]
+        mixed_ids = [
+            await repo.start_call(project_name="demo", call_type="video", model="mixed", provider="openai")
+            for _ in range(3)
+        ]
+        for call_id in good_ids:
+            await repo.finish_call(call_id, status="success", cost_amount=0.0)
+        await repo.finish_call(mixed_ids[0], status="success", cost_amount=0.0)
+        await repo.finish_call(mixed_ids[1], status="failed")
+        await repo.finish_call(mixed_ids[2], status="failed")
+
+        result = await repo.get_provider_recommendations(project_name="demo", call_type="video", min_calls=3)
+
+        assert result["recommendations"][0]["provider"] == "ark"
+        assert result["recommendations"][0]["model"] == "good"
+        assert result["recommendations"][0]["success_rate"] == 1.0
+
     async def test_pagination(self, db_session):
         repo = UsageRepository(db_session)
         for i in range(5):

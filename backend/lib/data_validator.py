@@ -49,6 +49,7 @@ class DataValidator:
     EXTERNAL_URI_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
     ALLOWED_ROOT_ENTRIES = {
         "project.json",
+        "quality_metrics.json",
         "style_reference.png",
         "style_reference.jpg",
         "style_reference.jpeg",

@@ -173,13 +173,17 @@ def _build_reference_specs(
         # 都跳过并告警，与「没有 shots」一致，不让一个坏 unit 中断整批。
         # 注意 TaskSpecValidationError 是 ValueError 子类，捕 ValueError 同时覆盖两者。
         try:
+            extra_payload: dict[str, Any] = {"quality": quality}
+            duration = unit.get("duration_seconds")
+            if duration is not None:
+                extra_payload["duration_seconds"] = duration
             spec = TaskSpec.from_request(
                 task_type="reference_video",
                 media_type="video",
                 resource_id=unit_id,
                 prompt=assemble_shots_text(unit["shots"]),
                 script_file=script_filename,
-                extra_payload={"quality": quality},
+                extra_payload=extra_payload,
             )
         except ValueError as exc:
             log.append(f"⚠️  {unit_id} 入队校验未通过，跳过：{exc}")
@@ -187,6 +191,26 @@ def _build_reference_specs(
         specs.append(spec)
         order_map[unit_id] = idx
     return specs, order_map
+
+
+def _select_reference_units(
+    units: list[dict[str, Any]],
+    unit_ids: list[str] | None,
+    log: list[str],
+) -> list[dict[str, Any]]:
+    if unit_ids is None:
+        return units
+
+    requested = [str(uid) for uid in dict.fromkeys(unit_ids) if str(uid)]
+    units_by_id = {str(unit.get("unit_id") or ""): unit for unit in units}
+    selected: list[dict[str, Any]] = []
+    for unit_id in requested:
+        unit = units_by_id.get(unit_id)
+        if unit is None:
+            log.append(f"⚠️  video_unit '{unit_id}' 不存在，跳过")
+            continue
+        selected.append(unit)
+    return selected
 
 
 def _scan_completed_items(
@@ -279,13 +303,21 @@ async def _generate_reference_episode(
     resume: bool,
     log: list[str],
     quality: str = "draft",
+    unit_ids: list[str] | None = None,
 ) -> list[Path]:
     project_dir = ctx.project_path
     units = script.get("video_units") or []
     if not units:
         raise ValueError(f"第 {episode} 集 video_units 为空：{script_filename}")
+    units = _select_reference_units(units, unit_ids, log)
+    if not units:
+        raise ValueError("没有找到任何有效的 video_unit")
 
-    ckpt_path = _episode_checkpoint_path(project_dir, episode)
+    if unit_ids is None:
+        ckpt_path = _episode_checkpoint_path(project_dir, episode)
+    else:
+        unit_hash = hashlib.md5(",".join(sorted({str(uid) for uid in unit_ids})).encode("utf-8")).hexdigest()[:8]
+        ckpt_path = _selected_checkpoint_path(project_dir, f"ref_{unit_hash}")
     completed: list[str] = []
     started_at = datetime.now(UTC).isoformat()
     if resume:
@@ -302,7 +334,7 @@ async def _generate_reference_episode(
     for idx, unit in enumerate(units):
         unit_id = unit["unit_id"]
         candidate = output_dir / f"{unit_id}.mp4"
-        if candidate.exists():
+        if candidate.exists() and quality != "final":
             ordered_paths[idx] = candidate
             already_done.append(unit_id)
             if unit_id not in completed:
@@ -347,12 +379,13 @@ async def _run_reference_episode(
     resume: bool,
     log: list[str],
     quality: str = "draft",
+    unit_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run reference_video-mode generation and format the tool response.
 
-    All 4 video handlers fall through to whole-episode reference generation
-    when ``_is_reference_script`` returns True; this captures the shared tail
-    (resolve episode → call _generate_reference_episode → header + log).
+    All 4 video handlers share the same reference_video tail. Episode / all
+    pass ``unit_ids=None`` for whole-episode generation; scene / selected pass
+    unit ids so they do not accidentally regenerate the entire episode.
     """
     episode = ProjectManager.resolve_episode_from_script(script, script_filename)
     paths = await _generate_reference_episode(
@@ -363,8 +396,10 @@ async def _run_reference_episode(
         resume=resume,
         log=log,
         quality=quality,
+        unit_ids=unit_ids,
     )
-    header = f"第 {episode} 集参考视频生成完成，共 {len(paths)} 个 unit"
+    scope = "指定参考视频" if unit_ids is not None else "参考视频"
+    header = f"第 {episode} 集{scope}生成完成，共 {len(paths)} 个 unit"
     return tool_result_text("\n".join([header, *log]), label="视频生成日志")
 
 
@@ -469,7 +504,7 @@ def generate_video_episode_tool(ctx: ToolContext):
 def generate_video_scene_tool(ctx: ToolContext):
     @tool(
         "generate_video_scene",
-        "生成单个场景/片段的视频。reference_video 模式会忽略 scene_id 转为整集生成。",
+        "生成单个场景/片段的视频。reference_video 模式下 scene_id 视为 video_unit 的 unit_id。",
         {
             "type": "object",
             "properties": {
@@ -496,9 +531,7 @@ def generate_video_scene_tool(ctx: ToolContext):
             script = ctx.pm.load_script(ctx.project_name, script_filename)
 
             if _is_reference_script(script):
-                log: list[str] = [
-                    f"⚠️  reference_video 模式暂不支持单 unit 精确选择；scene_id={scene_id} 被忽略，转整集生成。"
-                ]
+                log: list[str] = []
                 return await _run_reference_episode(
                     ctx=ctx,
                     script=script,
@@ -506,6 +539,7 @@ def generate_video_scene_tool(ctx: ToolContext):
                     resume=False,
                     log=log,
                     quality=quality,
+                    unit_ids=[scene_id],
                 )
 
             items, id_field, _char_field, _scenes, _props = get_storyboard_items(script)
@@ -635,7 +669,7 @@ def generate_video_all_tool(ctx: ToolContext):
 def generate_video_selected_tool(ctx: ToolContext):
     @tool(
         "generate_video_selected",
-        "生成指定多个场景的视频（独立 checkpoint，按 scene_ids 哈希）。reference_video 模式会忽略 scene_ids 转整集生成。",
+        "生成指定多个场景的视频（独立 checkpoint，按 scene_ids 哈希）。reference_video 模式下 scene_ids 视为 video_unit 的 unit_id 列表。",
         {
             "type": "object",
             "properties": {
@@ -671,9 +705,6 @@ def generate_video_selected_tool(ctx: ToolContext):
             script = ctx.pm.load_script(ctx.project_name, script_filename)
 
             if _is_reference_script(script):
-                log.append(
-                    f"⚠️  reference_video 模式暂不支持多 unit 精确选择；scene_ids={','.join(scene_ids)} 被忽略，转整集生成。"
-                )
                 return await _run_reference_episode(
                     ctx=ctx,
                     script=script,
@@ -681,6 +712,7 @@ def generate_video_selected_tool(ctx: ToolContext):
                     resume=resume,
                     log=log,
                     quality=quality,
+                    unit_ids=scene_ids,
                 )
 
             items, id_field, _chars, _scenes, _props = get_storyboard_items(script)

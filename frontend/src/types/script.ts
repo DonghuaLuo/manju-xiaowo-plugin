@@ -56,6 +56,7 @@ export const CAMERA_MOTION_I18N_KEYS: Record<CameraMotion, string> = {
 };
 
 export type TransitionType = "cut" | "fade" | "dissolve";
+export type ShotTier = "S" | "A" | "B";
 export type DurationSeconds = number;
 export type AssetStatus = "pending" | "storyboard_ready" | "completed";
 export const DIALOGUE_SCREEN_POSITIONS = [
@@ -124,6 +125,7 @@ export interface NarrationSegment {
   image_prompt: ImagePrompt | string;
   video_prompt: VideoPrompt | string;
   transition_to_next: TransitionType;
+  shot_tier?: ShotTier;
   note?: string;
   generated_assets?: GeneratedAssets;
 }
@@ -138,6 +140,7 @@ export interface DramaScene {
   image_prompt: ImagePrompt | string;
   video_prompt: VideoPrompt | string;
   transition_to_next: TransitionType;
+  shot_tier?: ShotTier;
   note?: string;
   generated_assets?: GeneratedAssets;
 }

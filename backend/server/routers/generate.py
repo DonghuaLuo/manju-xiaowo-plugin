@@ -29,7 +29,8 @@ from lib.storyboard_sequence import (
     resolve_previous_storyboard_path,
 )
 from server.auth import CurrentUser
-from server.services.generation_route_resolver import compact_generation_payload
+from server.services.finalization import EpisodeFinalizationService, build_finalization_task_report
+from server.services.generation_route_resolver import compact_generation_payload, resolve_generation_route
 from server.services.generation_tasks import (
     _collect_reference_images,
     _normalize_storyboard_prompt,
@@ -193,6 +194,7 @@ class GenerateStoryboardRequest(BaseModel):
     prompt: str | dict
     script_file: str
     quality: Literal["draft", "final", "custom"] | None = None
+    shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
     image_provider_t2i: str | None = None
@@ -205,6 +207,7 @@ class GenerateVideoRequest(BaseModel):
     prompt: str | dict
     script_file: str
     quality: Literal["draft", "final", "custom"] | None = None
+    shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
     video_backend: str | None = None
@@ -249,8 +252,22 @@ class GeneratePropRequest(BaseModel):
     image_model: str | None = None
 
 
+class GenerationRoutePreviewItem(BaseModel):
+    label: str | None = None
+    task_kind: Literal["character", "scene", "prop", "storyboard", "grid", "video", "reference_video"]
+    quality: Literal["draft", "final", "custom"] | None = None
+    capability: Literal["t2i", "i2i"] | None = None
+    payload: dict[str, Any] | None = None
+
+
+class GenerationRoutePreviewRequest(BaseModel):
+    project_overrides: dict[str, Any] | None = None
+    routes: list[GenerationRoutePreviewItem]
+
+
 _IMAGE_GENERATION_FIELDS = (
     "quality",
+    "shot_tier",
     "resolution",
     "source_version",
     "image_provider_t2i",
@@ -261,6 +278,7 @@ _IMAGE_GENERATION_FIELDS = (
 
 _VIDEO_GENERATION_FIELDS = (
     "quality",
+    "shot_tier",
     "resolution",
     "source_version",
     "video_backend",
@@ -277,7 +295,112 @@ def _request_generation_payload(req: BaseModel, fields: tuple[str, ...]) -> dict
     return compact_generation_payload({field: getattr(req, field, None) for field in fields})
 
 
+_ROUTE_PREVIEW_PROJECT_FIELDS = frozenset(
+    {
+        "generation_profiles",
+        "shot_tier_profiles",
+        "video_backend",
+        "image_backend",
+        "image_provider_t2i",
+        "image_provider_i2i",
+        "video_generate_audio",
+        "default_duration",
+        "model_settings",
+    }
+)
+
+
+def _route_preview_project(project: dict[str, Any], overrides: dict[str, Any] | None) -> dict[str, Any]:
+    preview = dict(project)
+    if not isinstance(overrides, dict):
+        return preview
+    for key, value in overrides.items():
+        if key not in _ROUTE_PREVIEW_PROJECT_FIELDS:
+            continue
+        if value is None:
+            preview.pop(key, None)
+        else:
+            preview[key] = value
+    return preview
+
+
+def _route_to_preview_dict(route) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "task_kind": route.task_kind,
+        "media_type": route.media_type,
+        "quality": route.quality,
+        "profile_key": route.profile_key,
+        "provider_id": route.provider_id,
+        "model_id": route.model_id,
+        "resolution": route.resolution,
+        "duration_seconds": route.duration_seconds,
+        "generate_audio": route.generate_audio,
+        "service_tier": route.service_tier,
+        "seed": route.seed,
+        "supported_resolutions": route.supported_resolutions,
+        "supported_durations": route.supported_durations,
+        "duration_resolution_constraints": route.duration_resolution_constraints,
+        "shot_tier": route.shot_tier,
+        "shot_tier_strategy": route.shot_tier_strategy,
+        "warnings": route.warnings,
+        "metadata": route.metadata,
+    }
+
+
 # ==================== 外部生成辅助 ====================
+
+
+@router.post("/projects/{project_name}/generation/route-preview")
+async def preview_generation_routes(
+    project_name: str,
+    req: GenerationRoutePreviewRequest,
+    _user: CurrentUser,
+):
+    """Resolve generation routes against unsaved project settings for instant validation."""
+
+    try:
+        project = await asyncio.to_thread(get_project_manager().load_project, project_name)
+        preview_project = _route_preview_project(project, req.project_overrides)
+
+        from lib.config.resolver import ConfigResolver
+        from lib.db import async_session_factory
+
+        resolver = ConfigResolver(async_session_factory)
+        routes: list[dict[str, Any]] = []
+        for item in req.routes[:24]:
+            payload = dict(item.payload or {})
+            if item.quality is not None:
+                payload.setdefault("quality", item.quality)
+            try:
+                route = await resolve_generation_route(
+                    project=preview_project,
+                    payload=payload,
+                    task_kind=item.task_kind,
+                    quality=item.quality,
+                    capability=item.capability or "t2i",
+                    resolver=resolver,
+                    project_name=project_name,
+                )
+                routes.append({"label": item.label, **_route_to_preview_dict(route)})
+            except Exception as exc:
+                routes.append(
+                    {
+                        "ok": False,
+                        "label": item.label,
+                        "task_kind": item.task_kind,
+                        "quality": item.quality,
+                        "error": str(exc),
+                    }
+                )
+        return {"routes": routes}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("生成路由预览失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/projects/{project_name}/generate/external-package/{segment_id}")
@@ -554,6 +677,54 @@ async def generate_video(
         raise HTTPException(status_code=404, detail=str(e))
     except HTTPException:
         raise
+    except Exception as e:
+        logger.exception("请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_name}/finalize/episode/{episode}")
+async def finalize_episode(
+    project_name: str,
+    episode: int,
+    _user: CurrentUser,
+):
+    """提交本集最终化任务：补齐最终分镜和最终视频，返回即时报告。"""
+
+    try:
+        service = EpisodeFinalizationService(get_project_manager(), get_generation_queue())
+        return await service.finalize_episode(
+            project_name=project_name,
+            episode=episode,
+            user_id=_user.id,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("最终化本集失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_name}/finalize/report")
+async def get_finalization_report(
+    project_name: str,
+    _user: CurrentUser,
+    limit: int = 100,
+):
+    """Return recent finalize-sourced task outcomes with failure categories."""
+
+    try:
+        queue = get_generation_queue()
+        tasks = await queue.list_tasks(
+            project_name=project_name,
+            source="finalize",
+            page=1,
+            page_size=max(1, min(200, limit)),
+        )
+        return build_finalization_task_report(tasks.get("items") or [])
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception("请求处理失败")
         raise HTTPException(status_code=500, detail=str(e))

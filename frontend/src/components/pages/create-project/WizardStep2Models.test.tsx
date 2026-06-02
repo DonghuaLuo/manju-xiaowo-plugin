@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import "@/i18n";
 import { WizardStep2Models, type WizardStep2Data } from "./WizardStep2Models";
+import { createDefaultGenerationProfiles } from "@/utils/generation-profiles";
 
 const mockData = {
   options: {
@@ -55,12 +56,20 @@ const baseValue = {
   imageResolution: null,
 };
 
+const generationProfileProps = {
+  useCustomGenerationProfiles: false,
+  onUseCustomGenerationProfilesChange: vi.fn(),
+  generationProfiles: createDefaultGenerationProfiles(),
+  onGenerationProfilesChange: vi.fn(),
+};
+
 describe("WizardStep2Models", () => {
   it("shows loading state when data is null and no error", () => {
     render(
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={() => {}}
         onNext={() => {}}
         onCancel={() => {}}
@@ -76,6 +85,7 @@ describe("WizardStep2Models", () => {
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={() => {}}
         onNext={() => {}}
         onCancel={() => {}}
@@ -95,6 +105,7 @@ describe("WizardStep2Models", () => {
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={onBack}
         onNext={() => {}}
         onCancel={() => {}}
@@ -112,6 +123,7 @@ describe("WizardStep2Models", () => {
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={() => {}}
         onNext={onNext}
         onCancel={() => {}}
@@ -129,6 +141,7 @@ describe("WizardStep2Models", () => {
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={() => {}}
         onNext={() => {}}
         onCancel={onCancel}
@@ -145,6 +158,7 @@ describe("WizardStep2Models", () => {
       <WizardStep2Models
         value={baseValue}
         onChange={() => {}}
+        {...generationProfileProps}
         onBack={() => {}}
         onNext={() => {}}
         onCancel={() => {}}

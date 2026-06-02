@@ -17,7 +17,7 @@ const episodes: EpisodeMeta[] = [
   },
 ];
 
-function Harness() {
+function Harness({ onFinalizeEpisode = () => {} }: { onFinalizeEpisode?: (episode: number) => void }) {
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   return (
     <div>
@@ -31,6 +31,7 @@ function Harness() {
         anchorRef={anchorRef}
         episodes={episodes}
         onJianyingExport={() => {}}
+        onFinalizeEpisode={onFinalizeEpisode}
       />
     </div>
   );
@@ -88,5 +89,17 @@ describe("ExportScopeDialog", () => {
       expect(input).toHaveValue("D:\\picked-draft-root");
     });
     expect(localStorage.getItem(DRAFT_PATH_STORAGE_KEY)).toBe("D:\\picked-draft-root");
+  });
+
+  it("submits finalization for the selected episode from the Jianying form", async () => {
+    vi.spyOn(API, "detectJianyingDraftRoot").mockResolvedValue("");
+    const onFinalizeEpisode = vi.fn();
+    const user = userEvent.setup();
+    render(<Harness onFinalizeEpisode={onFinalizeEpisode} />);
+
+    await user.click(screen.getByRole("button", { name: /导出为剪映草稿/ }));
+    await user.click(screen.getByRole("button", { name: "最终化本集" }));
+
+    expect(onFinalizeEpisode).toHaveBeenCalledWith(1);
   });
 });

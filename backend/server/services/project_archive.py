@@ -175,6 +175,7 @@ class ProjectArchiveService:
             "characters",
             "scenes",
             "props",
+            "grids",
             "reference_videos",
         }
     )

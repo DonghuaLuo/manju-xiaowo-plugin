@@ -22,6 +22,7 @@ from lib.script_generator import ScriptGenerator
 from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from server.agent_runtime.sdk_tools._context import ToolContext, fetch_video_caps, tool_error, tool_result_text
+from server.services.generation_route_resolver import GenerationRoute, resolve_generation_route
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,51 @@ async def _resolve_video_capabilities(project_name: str) -> dict[str, Any]:
     return await resolver.video_capabilities(project_name)
 
 
+def _route_recommendation(route: GenerationRoute) -> dict[str, Any]:
+    return {
+        "task_kind": route.task_kind,
+        "quality": route.quality,
+        "profile_key": route.profile_key,
+        "provider_id": route.provider_id,
+        "model": route.model_id,
+        "resolution": route.resolution,
+        "duration_seconds": route.duration_seconds,
+        "generate_audio": route.generate_audio,
+        "service_tier": route.service_tier,
+        "seed": route.seed,
+        "supported_resolutions": route.supported_resolutions,
+        "supported_durations": route.supported_durations,
+        "duration_resolution_constraints": route.duration_resolution_constraints,
+        "warnings": route.warnings,
+    }
+
+
+async def _build_video_quality_recommendations(
+    *,
+    project_name: str,
+    project: dict[str, Any],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    resolver = ConfigResolver(async_session_factory)
+    recommendations: dict[str, dict[str, dict[str, Any]]] = {}
+    for task_kind in ("video", "reference_video"):
+        task_recommendations: dict[str, dict[str, Any]] = {}
+        for quality in ("draft", "final"):
+            try:
+                route = await resolve_generation_route(
+                    project=project,
+                    payload={},
+                    task_kind=task_kind,
+                    quality=quality,
+                    resolver=resolver,
+                    project_name=project_name,
+                )
+                task_recommendations[quality] = _route_recommendation(route)
+            except Exception as exc:  # noqa: BLE001 - 能力查询应尽量返回其它可用档位
+                task_recommendations[quality] = {"error": str(exc)}
+        recommendations[task_kind] = task_recommendations
+    return recommendations
+
+
 def get_video_capabilities_tool(ctx: ToolContext):
     @tool(
         "get_video_capabilities",
@@ -59,7 +105,20 @@ def get_video_capabilities_tool(ctx: ToolContext):
     )
     async def _handler(_args: dict[str, Any]) -> dict[str, Any]:
         try:
-            payload = await _resolve_video_capabilities(ctx.project_name)
+            project = ctx.pm.load_project(ctx.project_name)
+            resolver = ConfigResolver(async_session_factory)
+            payload = await resolver.video_capabilities_for_project(project)
+            payload["agent_generation_defaults"] = {
+                "assets": "final",
+                "storyboards": "draft",
+                "grid": "final",
+                "videos": "draft",
+                "reference_videos": "draft",
+            }
+            payload["quality_recommendations"] = await _build_video_quality_recommendations(
+                project_name=ctx.project_name,
+                project=project,
+            )
             return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}]}
         except FileNotFoundError as exc:
             return {

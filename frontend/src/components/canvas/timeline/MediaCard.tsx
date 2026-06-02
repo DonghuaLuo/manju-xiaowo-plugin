@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PluginSDK } from "xiaowo-sdk";
-import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Upload } from "lucide-react";
+import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Star, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { API } from "@/api";
+import { API, type VersionInfo, type VersionResourceType } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
@@ -17,6 +17,15 @@ import type { CostBreakdown, GenerationQuality } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
 
 type MediaKind = "storyboard" | "video";
+type ArrayItem<T> = T extends Array<infer Item> ? Item : T;
+type ProviderInputImageItem = NonNullable<
+  ArrayItem<NonNullable<VersionInfo["provider_input_images"]>[string]>
+>;
+type QualityRatingState = {
+  version: number;
+  rating: number | null;
+  dimensions: Record<string, number>;
+};
 
 interface MediaCardProps {
   kind: MediaKind;
@@ -50,6 +59,96 @@ interface MediaCardProps {
   onUploaded?: () => Promise<void> | void;
 }
 
+function qualityLabel(t: (key: string, options?: Record<string, unknown>) => string, quality?: VersionInfo["generation_quality"]): string | null {
+  if (quality === "draft") return t("episode_status_label_draft");
+  if (quality === "final") return t("media_generate_video_final");
+  if (quality === "custom") return "Custom";
+  return null;
+}
+
+function providerInputImageItems(info: VersionInfo | null): ProviderInputImageItem[] {
+  const inputImages = info?.provider_input_images;
+  if (!inputImages) return [];
+  return Object.values(inputImages).flatMap((item) => {
+    if (!item) return [];
+    return Array.isArray(item) ? item.filter(Boolean) : [item];
+  });
+}
+
+function providerInputStatusLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  info: VersionInfo | null,
+): string | null {
+  const items = providerInputImageItems(info);
+  if (items.length === 0) return null;
+  const optimized = items.some(
+    (item) =>
+      item.resized ||
+      item.transcoded ||
+      (
+        typeof item.source_bytes === "number" &&
+        typeof item.input_bytes === "number" &&
+        item.input_bytes < item.source_bytes
+      ),
+  );
+  return optimized
+    ? t("media_input_optimized", { defaultValue: "已优化输入图" })
+    : t("media_input_checked", { defaultValue: "输入图已校验" });
+}
+
+function sourceStoryboardLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  kind: MediaKind,
+  info: VersionInfo | null,
+): string | null {
+  if (kind !== "video") return null;
+  const quality = info?.source_storyboard_generation_quality;
+  if (quality === "final") {
+    return t("media_based_on_final_storyboard", { defaultValue: "基于最终分镜" });
+  }
+  if (quality === "draft") {
+    return t("media_based_on_draft_storyboard", { defaultValue: "基于草稿分镜" });
+  }
+  if (quality === "custom") {
+    return t("media_based_on_custom_storyboard", { defaultValue: "基于自定义分镜" });
+  }
+  if (quality === "grid") {
+    return t("media_based_on_grid_storyboard", { defaultValue: "基于宫格镜头板" });
+  }
+  return null;
+}
+
+function currentVersionBadges(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  kind: MediaKind,
+  info: VersionInfo | null,
+): string[] {
+  const route = info?.generation_route;
+  return [
+    qualityLabel(t, info?.generation_quality),
+    route?.resolution,
+    route?.duration_seconds != null ? `${route.duration_seconds}s` : null,
+    route?.provider && route.model ? `${route.provider}/${route.model}` : null,
+    route?.generate_audio === true ? t("generate_audio_label") : null,
+    providerInputStatusLabel(t, info),
+    sourceStoryboardLabel(t, kind, info),
+  ].filter((badge): badge is string => Boolean(badge));
+}
+
+function qualityDimensionsForKind(kind: MediaKind): Array<{ key: string; label: string }> {
+  return kind === "video"
+    ? [
+        { key: "character_consistency", label: "角色一致" },
+        { key: "motion_naturalness", label: "动作自然" },
+        { key: "prompt_faithfulness", label: "贴合提示" },
+      ]
+    : [
+        { key: "character_consistency", label: "角色一致" },
+        { key: "composition", label: "构图" },
+        { key: "prompt_faithfulness", label: "贴合提示" },
+      ];
+}
+
 export function MediaCard({
   kind,
   projectName,
@@ -72,6 +171,9 @@ export function MediaCard({
   const [videoLightboxOpen, setVideoLightboxOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [currentVersionInfo, setCurrentVersionInfo] = useState<VersionInfo | null>(null);
+  const [qualityRatingInfo, setQualityRatingInfo] = useState<QualityRatingState | null>(null);
+  const [ratingSaving, setRatingSaving] = useState(false);
 
   const assetFp = useProjectsStore((s) =>
     assetPath ? s.getAssetFingerprint(assetPath) : null,
@@ -107,9 +209,71 @@ export function MediaCard({
     kind === "storyboard"
       ? t("media_generate_storyboard_final", { defaultValue: "最终版" })
       : t("media_generate_video_final", { defaultValue: "最终版" });
-  const resourceType: "storyboards" | "videos" =
+  const resourceType: VersionResourceType =
     kind === "storyboard" ? "storyboards" : "videos";
   const previewTitle = `${segmentId} ${title}`;
+  const effectiveVersionInfo = assetPath ? currentVersionInfo : null;
+  const currentVersionNumber = effectiveVersionInfo?.version ?? null;
+  const effectiveQualityRating =
+    qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.rating : null;
+  const effectiveQualityDimensions =
+    qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.dimensions : {};
+  const metaBadges = currentVersionBadges(t, kind, effectiveVersionInfo);
+  const qualityDimensions = qualityDimensionsForKind(kind);
+
+  useEffect(() => {
+    if (!assetPath) {
+      return;
+    }
+    let cancelled = false;
+    API.getVersions(projectName, resourceType, segmentId)
+      .then((data) => {
+        if (cancelled) return;
+        const current =
+          data.versions.find((item) => item.is_current) ??
+          data.versions.find((item) => item.version === data.current_version) ??
+          data.versions.at(-1) ??
+          null;
+        setCurrentVersionInfo(current);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentVersionInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assetFp, assetPath, projectName, resourceType, segmentId]);
+
+  useEffect(() => {
+    if (!assetPath || currentVersionNumber == null) {
+      return;
+    }
+    let cancelled = false;
+    API.getQualityRatings(projectName, {
+      resourceType,
+      resourceId: segmentId,
+      version: currentVersionNumber,
+    })
+      .then((data) => {
+        if (cancelled) return;
+        const latest = data.ratings.at(-1);
+        const rating = typeof latest?.rating === "number" ? latest.rating : null;
+        const rawDimensions = latest?.dimensions;
+        const dimensions =
+          rawDimensions && typeof rawDimensions === "object" && !Array.isArray(rawDimensions)
+            ? Object.fromEntries(
+                Object.entries(rawDimensions).filter(([, value]) => typeof value === "number"),
+              ) as Record<string, number>
+            : {};
+        setQualityRatingInfo({ version: currentVersionNumber, rating, dimensions });
+      })
+      .catch(() => {
+        if (!cancelled) setQualityRatingInfo({ version: currentVersionNumber, rating: null, dimensions: {} });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assetPath, currentVersionNumber, projectName, resourceType, segmentId]);
 
   const openVideoLightbox = async () => {
     try {
@@ -176,6 +340,46 @@ export function MediaCard({
     } finally {
       setUploading(false);
     }
+  };
+
+  const saveQualityRating = async (rating: number, dimensions: Record<string, number>) => {
+    if (!effectiveVersionInfo || ratingSaving) return;
+    setRatingSaving(true);
+    try {
+      await API.upsertQualityRating(projectName, {
+        resource_type: resourceType,
+        resource_id: segmentId,
+        version: effectiveVersionInfo.version,
+        rating,
+        dimensions,
+        provider: effectiveVersionInfo.generation_route?.provider ?? null,
+        model: effectiveVersionInfo.generation_route?.model ?? null,
+        generation_quality: effectiveVersionInfo.generation_quality ?? null,
+        shot_tier: effectiveVersionInfo.shot_tier ?? effectiveVersionInfo.generation_route?.shot_tier ?? null,
+      });
+      setQualityRatingInfo({ version: effectiveVersionInfo.version, rating, dimensions });
+      useAppStore
+        .getState()
+        .pushToast(t("media_quality_rating_saved", { defaultValue: "质量评分已保存" }), "success");
+    } catch (err) {
+      useAppStore.getState().pushToast(errMsg(err), "error");
+    } finally {
+      setRatingSaving(false);
+    }
+  };
+
+  const handleQualityRating = async (rating: number) => {
+    await saveQualityRating(rating, effectiveQualityDimensions);
+  };
+
+  const handleDimensionRating = async (key: string, value: number | null) => {
+    const nextDimensions = { ...effectiveQualityDimensions };
+    if (value == null) {
+      delete nextDimensions[key];
+    } else {
+      nextDimensions[key] = value;
+    }
+    await saveQualityRating(effectiveQualityRating ?? value ?? 3, nextDimensions);
   };
 
   return (
@@ -297,6 +501,81 @@ export function MediaCard({
             <span className="text-[11.5px]">{t("media_not_generated")}</span>
           </div>
         </AspectFrame>
+      )}
+
+      {metaBadges.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {metaBadges.map((badge) => (
+            <span
+              key={badge}
+              className="max-w-full truncate rounded-full border px-2 py-0.5 text-[10px] font-medium"
+              title={badge}
+              style={{
+                borderColor: "var(--color-hairline-soft)",
+                background: "oklch(1 0 0 / 0.045)",
+                color: "var(--color-text-3)",
+              }}
+            >
+              {badge}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {assetPath && effectiveVersionInfo && (
+        <div className="mt-2 space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            {[1, 2, 3, 4, 5].map((rating) => {
+              const active = effectiveQualityRating != null && rating <= effectiveQualityRating;
+              return (
+                <button
+                  key={rating}
+                  type="button"
+                  onClick={() => void handleQualityRating(rating)}
+                  disabled={ratingSaving}
+                  className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-text-4 transition-colors hover:bg-[oklch(1_0_0_/_0.06)] disabled:cursor-wait disabled:opacity-60"
+                  aria-label={t("media_quality_rating_aria", {
+                    defaultValue: "设置质量评分 {{rating}} 星",
+                    rating,
+                  })}
+                  title={t("media_quality_rating_aria", {
+                    defaultValue: "设置质量评分 {{rating}} 星",
+                    rating,
+                  })}
+                >
+                  <Star
+                    className="h-3.5 w-3.5"
+                    fill={active ? "currentColor" : "none"}
+                    style={{ color: active ? "var(--color-accent-2)" : "var(--color-text-4)" }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {qualityDimensions.map((dimension) => (
+              <label key={dimension.key} className="min-w-0">
+                <span className="mb-0.5 block truncate text-[10px] text-text-4">
+                  {dimension.label}
+                </span>
+                <select
+                  value={effectiveQualityDimensions[dimension.key] ?? ""}
+                  onChange={(event) => {
+                    const raw = event.currentTarget.value;
+                    void handleDimensionRating(dimension.key, raw ? Number(raw) : null);
+                  }}
+                  disabled={ratingSaving}
+                  className="h-6 w-full rounded-md border border-hairline-soft bg-bg-grad-a/45 px-1.5 text-[10.5px] text-text-3 outline-none focus:border-accent focus:ring-1 focus:ring-accent/35 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <option value="">-</option>
+                  {[1, 2, 3, 4, 5].map((score) => (
+                    <option key={score} value={score}>{score}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Generate CTA */}

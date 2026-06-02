@@ -18,6 +18,7 @@ class _FakeQueue:
         self.released = False
         self.succeeded = []
         self.failed = []
+        self.retried = []
         self.cancelled = []
         self._lease_calls = 0
         self._succeeded_rows = succeeded_rows
@@ -46,6 +47,10 @@ class _FakeQueue:
 
     async def mark_task_failed(self, task_id, error):
         self.failed.append((task_id, error))
+        return self._failed_rows
+
+    async def requeue_task_for_retry(self, task_id, *, payload, error_message, failure=None):
+        self.retried.append((task_id, payload, error_message, failure))
         return self._failed_rows
 
     async def mark_task_cancelled(self, task_id, *, cancelled_by="user"):
@@ -333,6 +338,31 @@ class TestGenerationWorker:
         assert "模型：doubao-seedance-1-0-pro" in message
         assert "错误码：SetLimitExceeded" in message
         assert "请求 ID：02177967014802800000000000000000000ffffac15d1c830f90a" in message
+
+    @pytest.mark.asyncio
+    async def test_process_task_requeues_retryable_failure_with_retry_budget(self, monkeypatch):
+        queue = _FakeQueue()
+        worker = GenerationWorker(queue=queue)
+
+        async def _raise(_task):
+            raise TimeoutError("provider request timed out")
+
+        monkeypatch.setattr("server.services.generation_tasks.execute_generation_task", _raise)
+        await worker._process_task(
+            {
+                "task_id": "t-retry",
+                "task_type": "video",
+                "media_type": "video",
+                "payload": {"retry_budget": 2, "video_provider": "ark"},
+            }
+        )
+
+        assert queue.failed == []
+        assert queue.retried and queue.retried[0][0] == "t-retry"
+        retry_payload = queue.retried[0][1]
+        assert retry_payload["_retry"]["attempt"] == 2
+        assert retry_payload["_retry"]["max_attempts"] == 2
+        assert retry_payload["_retry"]["failure_type"] == "timeout"
 
     @pytest.mark.asyncio
     async def test_process_task_cancelled_error_marks_cancelled(self, monkeypatch):

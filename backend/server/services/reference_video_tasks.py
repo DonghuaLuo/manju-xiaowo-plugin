@@ -21,16 +21,16 @@ from lib.reference_video import assemble_shots_text, render_prompt_for_backend
 from lib.reference_video.errors import MissingReferenceError, RequestPayloadTooLargeError
 from lib.script_models import ReferenceResource
 from lib.thumbnail import extract_video_thumbnail
+from server.services.generation_route_resolver import (
+    coerce_video_duration_for_options,
+    coerce_video_resolution_for_options,
+    duration_options_for_resolution,
+)
 from server.services.generation_tasks import (
     _maybe_resolve_generation_route,
     assert_duration_supported,
     get_media_generator,
     get_project_manager,
-)
-from server.services.generation_route_resolver import (
-    coerce_video_duration_for_options,
-    coerce_video_resolution_for_options,
-    duration_options_for_resolution,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,27 @@ def _apply_provider_constraints(
             )
 
     return new_refs, new_duration, warnings
+
+
+def _ensure_reference_video_has_submitted_refs(
+    *,
+    original_refs: list[Path],
+    submitted_refs: list[Path],
+    provider: str,
+    model: str | None,
+    max_refs: int | None,
+) -> None:
+    if original_refs and not submitted_refs:
+        model_label = model or provider
+        if max_refs == 0:
+            raise ValueError(
+                f"参考生视频需要至少提交 1 张参考图，但当前视频模型 {model_label} 不支持参考图；"
+                "请切换到支持 reference images 的模型后重试。"
+            )
+        raise ValueError(
+            f"参考生视频需要至少提交 1 张参考图，但当前视频模型 {model_label} 的能力限制导致参考图为空；"
+            "请检查供应商模型能力配置后重试。"
+        )
 
 
 def _sync_generation_route_duration_metadata(
@@ -345,6 +366,13 @@ async def execute_reference_video_task(
         max_duration=effective_max_duration,
         references=source_refs,
         duration_seconds=base_duration,
+    )
+    _ensure_reference_video_has_submitted_refs(
+        original_refs=source_refs,
+        submitted_refs=constrained_refs,
+        provider=provider_name,
+        model=model_name,
+        max_refs=max_refs,
     )
     coerced_duration, duration_warning = coerce_video_duration_for_options(
         effective_duration,

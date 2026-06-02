@@ -1,12 +1,13 @@
 import contextlib
+import json
 from pathlib import Path
 
 import pytest
 
 from lib.video_backends.base import VideoCapability, VideoCapabilityError
 from server.services import generation_tasks
+from server.services.generation_route_resolver import GenerationRoute, default_generation_profiles
 from server.services.generation_tasks import assert_duration_supported
-from server.services.generation_route_resolver import default_generation_profiles
 
 
 class TestAssertDurationSupported:
@@ -404,6 +405,124 @@ class TestGenerationTasks:
             await generation_tasks.execute_generation_task(
                 {"task_type": "unknown", "project_name": "demo", "resource_id": "x", "payload": {}}
             )
+
+    async def test_final_storyboard_uses_current_draft_as_i2i_source(self, tmp_path, monkeypatch):
+        project_path = _prepare_files(tmp_path)
+        (project_path / "storyboards" / "scene_E1S02.png").write_bytes(b"current-draft")
+        version_rel = "versions/storyboards/E1S02_v1.png"
+        (project_path / "versions" / "storyboards").mkdir(parents=True, exist_ok=True)
+        (project_path / version_rel).write_bytes(b"version-draft")
+        (project_path / "versions" / "versions.json").write_text(
+            json.dumps(
+                {
+                    "storyboards": {
+                        "E1S02": {
+                            "current_version": 1,
+                            "versions": [
+                                {
+                                    "version": 1,
+                                    "file": version_rel,
+                                    "prompt": "draft",
+                                    "created_at": "2026-01-01T00:00:00Z",
+                                    "generation_quality": "draft",
+                                }
+                            ],
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        fake_pm = _FakePM(project_path)
+        fake_generator = _FakeGenerator()
+
+        async def fake_route(**kwargs):
+            assert kwargs["needs_i2i"] is True
+            return GenerationRoute(
+                task_kind="storyboard",
+                media_type="image",
+                quality="final",
+                profile_key="storyboard_final",
+                provider_id="openai",
+                model_id="gpt-image-2",
+                resolution="2K",
+                metadata={"generation_quality": "final"},
+            )
+
+        monkeypatch.setattr(generation_tasks, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(generation_tasks, "get_media_generator", _async_return(fake_generator))
+        monkeypatch.setattr(generation_tasks, "_maybe_resolve_generation_route", fake_route)
+
+        await generation_tasks.execute_storyboard_task(
+            "demo",
+            "E1S02",
+            {"script_file": "episode_1.json", "prompt": "final prompt", "quality": "final"},
+        )
+
+        image_call = fake_generator.image_calls[0]
+        first_ref = image_call["reference_images"][0]
+        assert first_ref["image"] == project_path / version_rel
+        assert first_ref["label"] == "当前草稿分镜（最终化参考）"
+        assert image_call["source_storyboard_version"] == 1
+        assert image_call["source_storyboard_file"] == version_rel
+        assert image_call["source_storyboard_generation_quality"] == "draft"
+        assert image_call["generation_quality"] == "final"
+
+    async def test_final_storyboard_reroutes_to_t2i_when_shot_tier_drops_only_source(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        project_path = _prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+        fake_pm.script["segments"][0]["shot_tier"] = "B"
+        fake_generator = _FakeGenerator()
+        route_needs_i2i: list[bool] = []
+        generator_kwargs: list[dict] = []
+
+        async def fake_route(**kwargs):
+            route_needs_i2i.append(kwargs["needs_i2i"])
+            return GenerationRoute(
+                task_kind="storyboard",
+                media_type="image",
+                quality="final",
+                profile_key="storyboard_final",
+                provider_id="openai",
+                model_id="gpt-image-2",
+                resolution="2K",
+                shot_tier="B",
+                shot_tier_strategy={
+                    "prefer_final_storyboard_source": False,
+                    "reference_image_policy": "lean",
+                },
+                effective_payload={
+                    "script_file": "episode_1.json",
+                    "prompt": "final prompt",
+                    "quality": "final",
+                    "shot_tier": "B",
+                },
+                metadata={"generation_quality": "final"},
+            )
+
+        async def fake_get_media_generator(*args, **kwargs):
+            generator_kwargs.append(kwargs)
+            return fake_generator
+
+        monkeypatch.setattr(generation_tasks, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(generation_tasks, "get_media_generator", fake_get_media_generator)
+        monkeypatch.setattr(generation_tasks, "_maybe_resolve_generation_route", fake_route)
+
+        await generation_tasks.execute_storyboard_task(
+            "demo",
+            "E1S01",
+            {"script_file": "episode_1.json", "prompt": "final prompt", "quality": "final"},
+        )
+
+        assert route_needs_i2i == [True, False]
+        assert generator_kwargs[0]["needs_i2i"] is False
+        assert fake_generator.image_calls[0]["reference_images"] is None
+        assert "source_storyboard_file" not in fake_generator.image_calls[0]
 
     async def test_execute_video_task_generates_thumbnail(self, monkeypatch, tmp_path):
         """视频生成后应自动提取首帧缩略图"""

@@ -108,9 +108,27 @@ def _create_project(
     _write_bytes(project_dir / "characters" / "refs" / "Hero.png", b"png")
     _write_bytes(project_dir / "props" / "Key.png", b"png")
     _write_bytes(project_dir / "storyboards" / "scene_E1S01.png", b"png")
+    _write_bytes(project_dir / "grids" / "grid_E1G01.png", b"png")
     _write_bytes(project_dir / "videos" / "scene_E1S01.mp4", b"mp4")
     _write_bytes(project_dir / "output" / "final.mp4", b"mp4")
     _write_bytes(project_dir / "versions" / "storyboards" / "E1S01_v1.png", b"png")
+    _write_json(
+        project_dir / "quality_metrics.json",
+        {
+            "schema_version": 1,
+            "ratings": [
+                {
+                    "resource_type": "videos",
+                    "resource_id": "E1S01",
+                    "version": 1,
+                    "rating": 5,
+                    "provider": "ark",
+                    "model": "seedance",
+                    "generation_quality": "final",
+                }
+            ],
+        },
+    )
     _write_json(
         project_dir / "scripts" / "episode_1.json",
         _build_episode_payload(video_uri=video_uri),
@@ -181,6 +199,7 @@ class TestProjectArchiveService:
             names = set(archive.namelist())
             assert f"demo/{ARCHIVE_MANIFEST_NAME}" in names
             assert "demo/project.json" in names
+            assert "demo/quality_metrics.json" in names
             assert "demo/source/chapter.txt" in names
             assert "demo/scripts/episode_1.json" in names
             assert "demo/drafts/episode_1/step1_segments.md" in names
@@ -189,6 +208,7 @@ class TestProjectArchiveService:
             assert "demo/characters/refs/Hero.png" in names
             assert "demo/props/Key.png" in names
             assert "demo/storyboards/scene_E1S01.png" in names
+            assert "demo/grids/grid_E1G01.png" in names
             assert "demo/videos/scene_E1S01.mp4" in names
             assert "demo/output/final.mp4" in names
             assert "demo/versions/storyboards/E1S01_v1.png" in names
@@ -266,8 +286,13 @@ class TestProjectArchiveService:
 
         assert result.project_name == "demo"
         assert result.conflict_resolution == "none"
-        assert (pm.get_project_path("demo") / "videos" / "scene_E1S01.mp4").exists()
-        assert (pm.get_project_path("demo") / "drafts" / "episode_2").is_dir()
+        imported_dir = pm.get_project_path("demo")
+        assert (imported_dir / "videos" / "scene_E1S01.mp4").exists()
+        assert (imported_dir / "grids" / "grid_E1G01.png").exists()
+        assert (imported_dir / "drafts" / "episode_2").is_dir()
+        quality_metrics = json.loads((imported_dir / "quality_metrics.json").read_text(encoding="utf-8"))
+        assert quality_metrics["ratings"][0]["generation_quality"] == "final"
+        assert quality_metrics["ratings"][0]["provider"] == "ark"
 
     def test_import_manual_zip_without_manifest(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
@@ -840,6 +865,8 @@ class TestExportScope:
         _write_bytes(project_dir / "versions" / "characters" / "Hero_v1.png", b"char-v1")
         _write_bytes(project_dir / "versions" / "scenes" / "Temple_v1.png", b"scene-v1")
         _write_bytes(project_dir / "versions" / "props" / "Key_v1.png", b"prop-v1")
+        _write_bytes(project_dir / "versions" / "grids" / "E1G01_v1.png", b"grid-v1")
+        _write_bytes(project_dir / "versions" / "grids" / "E1G01_v2.png", b"grid-v2")
 
         # 创建 versions/versions.json
         versions_data = {
@@ -862,6 +889,15 @@ class TestExportScope:
                     ],
                 }
             },
+            "grids": {
+                "E1G01": {
+                    "current_version": 2,
+                    "versions": [
+                        {"version": 1, "prompt": "gp1", "created_at": "2024-01-01"},
+                        {"version": 2, "prompt": "gp2", "created_at": "2024-01-02"},
+                    ],
+                }
+            },
         }
         _write_json(project_dir / "versions" / "versions.json", versions_data)
         return project_dir
@@ -881,6 +917,8 @@ class TestExportScope:
             assert "demo/versions/characters/Hero_v1.png" in names
             assert "demo/versions/scenes/Temple_v1.png" in names
             assert "demo/versions/props/Key_v1.png" in names
+            assert "demo/versions/grids/E1G01_v1.png" in names
+            assert "demo/versions/grids/E1G01_v2.png" in names
 
     def test_export_scope_current_skips_version_history_files(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
@@ -898,11 +936,15 @@ class TestExportScope:
             assert "demo/versions/characters/Hero_v1.png" not in names
             assert "demo/versions/scenes/Temple_v1.png" not in names
             assert "demo/versions/props/Key_v1.png" not in names
+            assert "demo/versions/grids/E1G01_v1.png" not in names
+            assert "demo/versions/grids/E1G01_v2.png" not in names
             # 主资源应保留
             assert "demo/storyboards/scene_E1S01.png" in names
+            assert "demo/grids/grid_E1G01.png" in names
             assert "demo/videos/scene_E1S01.mp4" in names
             # versions.json 应保留（裁剪后）
             assert "demo/versions/versions.json" in names
+            assert "demo/quality_metrics.json" in names
 
     def test_export_project_to_path_writes_requested_zip(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")
@@ -942,6 +984,31 @@ class TestExportScope:
             vid_versions = versions_content["videos"]["E1S01"]["versions"]
             assert len(vid_versions) == 1
             assert vid_versions[0]["version"] == 2
+            grid_versions = versions_content["grids"]["E1G01"]["versions"]
+            assert len(grid_versions) == 1
+            assert grid_versions[0]["version"] == 2
+
+    def test_import_current_scope_archive_preserves_current_assets(self, tmp_path):
+        pm = ProjectManager(tmp_path / "projects")
+        self._create_project_with_versions(pm)
+        service = ProjectArchiveService(pm)
+
+        archive_path, _ = service.export_project("demo", scope="current")
+        shutil.rmtree(pm.get_project_path("demo"))
+
+        result = service.import_project_archive(archive_path, uploaded_filename="demo-current.zip")
+
+        imported_dir = pm.get_project_path(result.project_name)
+        assert (imported_dir / "storyboards" / "scene_E1S01.png").exists()
+        assert (imported_dir / "videos" / "scene_E1S01.mp4").exists()
+        assert (imported_dir / "grids" / "grid_E1G01.png").exists()
+        assert (imported_dir / "quality_metrics.json").exists()
+        assert not (imported_dir / "versions" / "grids" / "E1G01_v1.png").exists()
+        assert not (imported_dir / "versions" / "grids" / "E1G01_v2.png").exists()
+        versions_content = json.loads((imported_dir / "versions" / "versions.json").read_text(encoding="utf-8"))
+        assert versions_content["grids"]["E1G01"]["versions"] == [
+            {"version": 2, "prompt": "gp2", "created_at": "2024-01-02"}
+        ]
 
     def test_export_scope_current_manifest_scope_field(self, tmp_path):
         pm = ProjectManager(tmp_path / "projects")

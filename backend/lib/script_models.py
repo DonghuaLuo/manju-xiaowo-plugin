@@ -46,6 +46,8 @@ TransitionType = Literal[
     "dissolve",
 ]
 
+ShotTier = Literal["S", "A", "B"]
+
 
 class Dialogue(BaseModel):
     """对话条目"""
@@ -141,6 +143,7 @@ class NarrationSegment(BaseModel):
     transition_to_next: SkipJsonSchema[TransitionType] = Field(default="cut", description="转场类型")
     # 以下字段对 LLM 隐藏（SkipJsonSchema）：note 是人工备注、generated_assets 是 post-LLM 运行时状态。
     # 仍保留在 Pydantic 模型里以便存储 / 校验，但不出现在 response_schema 中，避免 LLM 填污染数据。
+    shot_tier: SkipJsonSchema[ShotTier] = Field(default="A", description="镜头质量档位：S/A/B")
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
@@ -212,6 +215,7 @@ class DramaScene(BaseModel):
     # 见 NarrationSegment.transition_to_next 说明
     transition_to_next: SkipJsonSchema[TransitionType] = Field(default="cut", description="转场类型")
     # 见 NarrationSegment 同名字段说明。
+    shot_tier: SkipJsonSchema[ShotTier] = Field(default="A", description="镜头质量档位：S/A/B")
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"

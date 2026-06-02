@@ -152,6 +152,23 @@ class UsageTracker:
                 end_date=end_date,
             )
 
+    async def get_provider_recommendations(
+        self,
+        project_name: str | None = None,
+        call_type: CallType | None = None,
+        min_calls: int = 3,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+
+        async with self._session_factory() as session:
+            repo = UsageRepository(session)
+            return await repo.get_provider_recommendations(
+                project_name=project_name,
+                call_type=call_type,
+                min_calls=min_calls,
+                limit=limit,
+            )
+
     async def get_calls(
         self,
         project_name: str | None = None,

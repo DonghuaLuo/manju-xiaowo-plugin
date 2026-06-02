@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from hashlib import sha1
 from io import BytesIO
@@ -248,6 +249,32 @@ def prepare_provider_image_input(
         if isinstance(e, FileNotFoundError):
             raise
         raise ValueError("Invalid image") from e
+
+
+def cleanup_stale_provider_inputs(*, max_age_hours: float = 48, temp_root: Path | None = None) -> dict[str, int]:
+    """Delete stale provider input temp files retained for failed-task diagnostics."""
+
+    root = temp_root or Path(tempfile.gettempdir()) / "manju-provider-inputs"
+    if not root.exists():
+        return {"files_deleted": 0, "dirs_deleted": 0}
+
+    cutoff = time.time() - max(1.0, float(max_age_hours)) * 3600
+    files_deleted = 0
+    dirs_deleted = 0
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                files_deleted += 1
+            elif path.is_dir() and path != root:
+                try:
+                    path.rmdir()
+                    dirs_deleted += 1
+                except OSError:
+                    pass
+        except OSError:
+            continue
+    return {"files_deleted": files_deleted, "dirs_deleted": dirs_deleted}
 
 
 def convert_image_bytes_to_png(content: bytes) -> bytes:

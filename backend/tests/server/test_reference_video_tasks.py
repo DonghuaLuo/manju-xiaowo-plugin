@@ -11,6 +11,7 @@ from lib.reference_video.errors import MissingReferenceError, RequestPayloadTooL
 from server.services.reference_video_tasks import (
     _apply_provider_constraints,
     _compress_references_to_tempfiles,
+    _ensure_reference_video_has_submitted_refs,
     _render_unit_prompt,
     _resolve_unit_references,
 )
@@ -203,6 +204,29 @@ def test_apply_provider_constraints_sora_single_ref():
     )
     assert len(new_refs) == 1
     assert any("ref_sora_single_ref" in w["key"] for w in warnings)
+
+
+def test_reference_video_rejects_model_that_drops_all_refs():
+    refs = [Path("/tmp/ref0.png")]
+    new_refs, _, warnings = _apply_provider_constraints(
+        provider="vidu",
+        model="viduq3-pro",
+        max_refs=0,
+        max_duration=16,
+        references=refs,
+        duration_seconds=8,
+    )
+
+    assert new_refs == []
+    assert any(w["key"] == "ref_too_many_images" for w in warnings)
+    with pytest.raises(ValueError, match="不支持参考图"):
+        _ensure_reference_video_has_submitted_refs(
+            original_refs=refs,
+            submitted_refs=new_refs,
+            provider="vidu",
+            model="viduq3-pro",
+            max_refs=0,
+        )
 
 
 def test_apply_provider_constraints_ark_keeps_nine():
