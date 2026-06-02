@@ -603,6 +603,8 @@ export default {
   endpoint_v2_video_generations_display: "V2 Video Generations",
   endpoint_ark_seedance_display: "Volcengine Ark (Seedance)",
   endpoint_vidu_video_display: "Vidu Video",
+  endpoint_dashscope_image_display: "Alibaba Model Studio（画像）",
+  endpoint_dashscope_async_video_display: "Alibaba Model Studio（非同期動画）",
   endpoint_catalog_loading: "エンドポイントカタログを読み込み中…",
   image_capability_t2i: "テキストから画像",
   image_capability_i2i: "画像から画像",

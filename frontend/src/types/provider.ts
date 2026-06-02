@@ -38,6 +38,7 @@ export interface ProviderConfigDetail {
   status: "ready" | "unconfigured" | "error";
   media_types?: string[];
   fields: ProviderField[];
+  supports_base_url: boolean;
 }
 
 export interface ProviderTestResult {

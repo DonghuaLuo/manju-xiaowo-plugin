@@ -19,16 +19,29 @@
 
 “需要用户决定”只保留给真正的产品路线、成本策略、供应商启用顺序、重大数据迁移、外部依赖/凭证模型变化、或必须放弃 manju 既有更好体验的选择题。对于能通过工程适配、测试验证或后续真实供应商验证解决的问题，默认给出采纳方案，并把验证事项写成实施注意或后续验证，而不是阻塞采纳。
 
+## 测试文件处理策略
+
+`backend/tests`、`frontend/**/*.test.*` 等测试文件默认视为同步验证资产，而不是正式交付资产。同步 ArcReel 更新时，可以按必要性把上游测试临时同步或改造成 manju 测试，用来验证正式代码文件是否完整适配；但如果测试目录被 `.gitignore` 排除，不应把未提交测试视为正式同步遗漏。
+
+正式同步审查优先看生产代码、配置、依赖锁定、i18n、前端类型和同步文档。测试文件只在以下场景纳入本地验证：
+
+- 上游新增供应商、后端协议、endpoint、定价或能力解析，需要用测试证明 manju 改造后的正式代码行为一致。
+- manju 已有本地增强可能被上游更新影响，需要用测试确认没有回退。
+- 上游测试能覆盖真实 bug 或高风险边界，且适配成本小。
+
+除非用户明确要求提交测试，否则测试可保留为本地验证文件，不进入正式提交。审查“是否遗漏”时，应先确认正式代码是否缺语义；测试缺失只记录为验证覆盖缺口，不直接判定为功能同步遗漏。
+
 ## 本次对齐记录
 
 - 本次同步来源：`E:\rust_python\ArcReel`
-- 本次 pull 记录：`2026-05-31` 复审本地 ArcReel HEAD，`E:\rust_python\ArcReel` 当前为 `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`
-- 本次检查范围：`35493a15666aa614a25ede39327a2a2a49f3faee..cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`
-- 本次已评估到 ArcReel commit：`cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`（短 hash：`cbf7e8f`）
+- 本次 pull 记录：`2026-06-02` 复审本地 ArcReel HEAD，`E:\rust_python\ArcReel` 当前为 `56f88359323e51680eddf2a94e1d88756e2e5da0`
+- 本次检查范围：`cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d..56f88359323e51680eddf2a94e1d88756e2e5da0`
+- 本次已评估到 ArcReel commit：`56f88359323e51680eddf2a94e1d88756e2e5da0`（短 hash：`56f8835`）
 - `2026-05-29` 评估项对应功能已完成同步，旧评估文档已删除；后续默认以 `d0fcf676fc4283a5a7a2ec1458d73e37a143964f` 作为已完成同步基线，只评估 ArcReel 在此之后新增的更新。
 - `2026-05-30` 已评估并同步到 ArcReel `1c71c18e9581544398645d080bf622b5c9ba4ca3`：本轮评估项 A1-A5 已完成同步；K1 仅作知识采纳；X1 明确不采纳。对应旧执行清单已删除，不再作为后续待办或审查来源。后续继续评估可把 `1c71c18e9581544398645d080bf622b5c9ba4ca3` 作为已评估且已同步边界。
 - `2026-05-31` 已评估并同步到 ArcReel `35493a15666aa614a25ede39327a2a2a49f3faee`：采纳 `c40608c` Base URL 占位符修复、`b7efac2` 声明式 pricing 重构、`35493a1` 自定义视频 endpoint 扩展与 content-first 推断；同步时保留 manju 的桌面插件边界、本地多语言、Vidu/Ark 本地增强和 retired model 规则。后续继续评估可把 `35493a15666aa614a25ede39327a2a2a49f3faee` 作为已评估且已同步边界。
 - `2026-05-31` 已评估并同步到 ArcReel `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d`：采纳 `a377d0d` 中转视频后端按 status_code 闸门重试、`cbf7e8f` 参考视频能力纯函数解析；同步时保留 manju 的 resume-expired 终态转换、Ark Seedance 1.x 本地能力细分和桌面插件自定义供应商边界。后续继续评估可把 `cbf7e8fbf4af666bed24aba2661e4bfc9ad82f8d` 作为已评估且已同步边界。
+- `2026-06-02` 已评估并同步到 ArcReel `56f88359323e51680eddf2a94e1d88756e2e5da0`：采纳 `2c230d0` 阿里百炼 DashScope 预设供应商，按 manju 桌面插件结构接入文本、图像、异步视频后端、自定义 endpoint 推断、供应商配置、Base URL 能力、i18n、定价与测试验证；复审补齐文本 Instructor fallback 真实 provider 记账、图片参考图不可读错误文案；采纳 `56f8835` UI 依赖升版；`docs/dashscope-docs` 仅作 ArcReel 参考资料，不作为 manju 正式运行同步项；`7825490` 仅更新 ArcReel `uv.lock`，manju 无对应依赖变更，不同步。后续继续评估可把 `56f88359323e51680eddf2a94e1d88756e2e5da0` 作为已评估且已同步边界。
 
 ## 本地审查待处理问题
 

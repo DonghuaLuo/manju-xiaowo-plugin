@@ -603,6 +603,8 @@ export default {
   endpoint_v2_video_generations_display: "V2 Video Generations",
   endpoint_ark_seedance_display: "火山引擎方舟 (Seedance)",
   endpoint_vidu_video_display: "Vidu Video",
+  endpoint_dashscope_image_display: "阿里百炼（图像）",
+  endpoint_dashscope_async_video_display: "阿里百炼（异步视频）",
   endpoint_catalog_loading: "加载端点目录…",
   image_capability_t2i: "文生图",
   image_capability_i2i: "图生图",

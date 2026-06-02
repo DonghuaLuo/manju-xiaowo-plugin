@@ -12,3 +12,4 @@ backend/compile/
 *.log
 /MIGRATION_CONSTRAINTS.md
 /backend/logs/
+/backend/tests/

@@ -17,12 +17,14 @@ from urllib.parse import urlsplit
 from lib.config.url_utils import ensure_google_base_url, ensure_openai_base_url
 from lib.custom_provider.backends import CustomImageBackend, CustomTextBackend, CustomVideoBackend
 from lib.image_backends.base import ImageCapability
+from lib.image_backends.dashscope import DashScopeImageBackend
 from lib.image_backends.gemini import GeminiImageBackend
 from lib.image_backends.openai import OpenAIImageBackend
 from lib.text_backends.gemini import GeminiTextBackend
 from lib.text_backends.openai import OpenAITextBackend
 from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.base import VideoCapabilities
+from lib.video_backends.dashscope import DashScopeVideoBackend
 from lib.video_backends.newapi import NewAPIVideoBackend
 from lib.video_backends.openai import OpenAIVideoBackend
 from lib.video_backends.v2_video_generations import V2VideoGenerationsBackend
@@ -149,6 +151,17 @@ def _build_vidu_video(provider, model_id: str) -> CustomVideoBackend:
     return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 
 
+def _build_dashscope_image(provider, model_id: str) -> CustomImageBackend:
+    # backend 内部由 host 派生 /api/v1（容忍带/不带后缀），此处传原始 base_url 即可，不重复归一化
+    delegate = DashScopeImageBackend(api_key=provider.api_key, base_url=provider.base_url, model=model_id)
+    return CustomImageBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
+def _build_dashscope_async_video(provider, model_id: str) -> CustomVideoBackend:
+    delegate = DashScopeVideoBackend(api_key=provider.api_key, base_url=provider.base_url, model=model_id)
+    return CustomVideoBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
 # ── ENDPOINT_REGISTRY 注册表 ───────────────────────────────────────
 
 
@@ -262,6 +275,27 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         build_backend=_build_vidu_video,
         video_caps_for_model=ViduVideoBackend.video_capabilities_for_model,
     ),
+    "dashscope-image": EndpointSpec(
+        key="dashscope-image",
+        media_type="image",
+        family="dashscope",
+        display_name_key="endpoint_dashscope_image_display",
+        request_method="POST",
+        request_path_template="/api/v1/services/aigc/multimodal-generation/generation",
+        image_capabilities=frozenset({ImageCapability.TEXT_TO_IMAGE, ImageCapability.IMAGE_TO_IMAGE}),
+        build_backend=_build_dashscope_image,
+    ),
+    "dashscope-async-video": EndpointSpec(
+        key="dashscope-async-video",
+        media_type="video",
+        family="dashscope",
+        display_name_key="endpoint_dashscope_async_video_display",
+        request_method="POST",
+        request_path_template="/api/v1/services/aigc/video-generation/video-synthesis",
+        build_backend=_build_dashscope_async_video,
+        # 多 model（happyhorse-r2v=9 / wan2.7-r2v=5）容量不同，按 model 读 backend caps（不构造 client）。
+        video_caps_for_model=DashScopeVideoBackend.video_capabilities_for_model,
+    ),
 }
 
 
@@ -347,8 +381,15 @@ _VIDEO_PATTERN = re.compile(
 def infer_endpoint(model_id: str, discovery_format: str) -> str:
     """根据模型 id 与 discovery_format 推默认 endpoint（content-first）。"""
     lowered = model_id.lower()
-    is_video = bool(_VIDEO_PATTERN.search(model_id))
     is_image = bool(_IMAGE_PATTERN.search(model_id))
+
+    # 阿里百炼视频先于通用 is_video 拦截到原生异步端点；wan2.x-image 显式排除。
+    if "happyhorse" in lowered:
+        return "dashscope-async-video"
+    if "wan2." in lowered and not is_image:
+        return "dashscope-async-video"
+
+    is_video = bool(_VIDEO_PATTERN.search(model_id)) and not ("wan2." in lowered and is_image)
 
     if "imagen" in lowered:
         return "gemini-image"
