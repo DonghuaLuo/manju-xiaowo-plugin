@@ -57,8 +57,8 @@ const baseValue = {
 };
 
 const generationProfileProps = {
-  useCustomGenerationProfiles: false,
-  onUseCustomGenerationProfilesChange: vi.fn(),
+  generationProfilesExpanded: false,
+  onGenerationProfilesExpandedChange: vi.fn(),
   generationProfiles: createDefaultGenerationProfiles(),
   onGenerationProfilesChange: vi.fn(),
 };

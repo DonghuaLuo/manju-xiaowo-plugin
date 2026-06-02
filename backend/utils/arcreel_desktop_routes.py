@@ -17,8 +17,8 @@ import base64
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, get_args, get_origin, get_type_hints
+from types import SimpleNamespace, UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
 from urllib.parse import unquote
 
 from fastapi.encoders import jsonable_encoder
@@ -97,6 +97,7 @@ _ROUTE_MODULES: tuple[tuple[str, str], ...] = (
     ("server.routers.cost_estimation", ""),
     ("server.routers.grids", ""),
     ("server.routers.reference_videos", ""),
+    ("server.routers.quality", ""),
     ("server.routers.assets", ""),
 )
 
@@ -282,6 +283,17 @@ def _coerce_scalar(value: Any, annotation: Any) -> Any:
         return None
     annotation = _unwrap_annotated(annotation)
     origin = get_origin(annotation)
+    if origin in {Union, UnionType}:
+        args = get_args(annotation)
+        concrete_args = [arg for arg in args if arg is not type(None)]
+        if len(concrete_args) == 1:
+            return _coerce_scalar(value, concrete_args[0])
+        for candidate in concrete_args:
+            try:
+                return _coerce_scalar(value, candidate)
+            except (TypeError, ValueError):
+                continue
+        return value
     if origin in {list, tuple, set}:
         inner = get_args(annotation)[0] if get_args(annotation) else str
         values = value if isinstance(value, list) else [value]

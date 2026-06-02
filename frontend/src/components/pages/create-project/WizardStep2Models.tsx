@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { ModelConfigSection, type ModelConfigValue } from "@/components/shared/ModelConfigSection";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, CARD_STYLE, GHOST_BTN_LG_CLS } from "@/components/ui/darkroom-tokens";
 import {
   IMAGE_PROFILE_RESOLUTIONS,
@@ -38,8 +39,8 @@ export interface WizardStep2Data {
 export interface WizardStep2ModelsProps {
   value: ModelConfigValue;
   onChange: (next: ModelConfigValue) => void;
-  useCustomGenerationProfiles: boolean;
-  onUseCustomGenerationProfilesChange: (next: boolean) => void;
+  generationProfilesExpanded: boolean;
+  onGenerationProfilesExpandedChange: (next: boolean) => void;
   generationProfiles: GenerationProfiles;
   onGenerationProfilesChange: (next: GenerationProfiles) => void;
   onBack: () => void;
@@ -52,8 +53,8 @@ export interface WizardStep2ModelsProps {
 export function WizardStep2Models({
   value,
   onChange,
-  useCustomGenerationProfiles,
-  onUseCustomGenerationProfilesChange,
+  generationProfilesExpanded,
+  onGenerationProfilesExpandedChange,
   generationProfiles,
   onGenerationProfilesChange,
   onBack,
@@ -109,11 +110,6 @@ export function WizardStep2Models({
     );
   };
 
-  const handleCustomProfilesToggle = (checked: boolean) => {
-    onUseCustomGenerationProfilesChange(checked);
-    if (checked) onGenerationProfilesChange(defaultGenerationProfiles);
-  };
-
   return (
     <div className="space-y-5">
       {loading && (
@@ -147,8 +143,8 @@ export function WizardStep2Models({
             globalDefaults={data.globalDefaults}
           />
           <GenerationProfilesEditor
-            enabled={useCustomGenerationProfiles}
-            onEnabledChange={handleCustomProfilesToggle}
+            expanded={generationProfilesExpanded}
+            onExpandedChange={onGenerationProfilesExpandedChange}
             profiles={normalizedGenerationProfiles}
             onUpdateImage={updateImageProfile}
             onUpdateVideo={updateVideoProfile}
@@ -200,14 +196,14 @@ const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
 
 function GenerationProfilesEditor({
-  enabled,
-  onEnabledChange,
+  expanded,
+  onExpandedChange,
   profiles,
   onUpdateImage,
   onUpdateVideo,
 }: {
-  enabled: boolean;
-  onEnabledChange: (next: boolean) => void;
+  expanded: boolean;
+  onExpandedChange: (next: boolean) => void;
   profiles: GenerationProfiles;
   onUpdateImage: (key: ImageProfileKey, patch: Partial<ImageGenerationProfile>) => void;
   onUpdateVideo: (key: VideoProfileKey, patch: Partial<VideoGenerationProfile>) => void;
@@ -215,15 +211,21 @@ function GenerationProfilesEditor({
   const { t } = useTranslation(["dashboard", "templates"]);
   return (
     <section className="rounded-[10px] border border-hairline p-4" style={CARD_STYLE}>
-      <div className="flex items-start gap-3">
-        <input
-          id="create-project-generation-profiles-enabled"
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => onEnabledChange(event.currentTarget.checked)}
-          className="mt-0.5 h-4 w-4 rounded border-hairline-soft bg-bg-grad-a accent-[var(--color-accent)]"
-        />
-        <label htmlFor="create-project-generation-profiles-enabled" className="min-w-0 cursor-pointer">
+      <button
+        id="create-project-generation-profiles-toggle"
+        type="button"
+        aria-expanded={expanded}
+        aria-controls="create-project-generation-profiles-panel"
+        onClick={() => onExpandedChange(!expanded)}
+        className="flex w-full items-start gap-3 rounded-[8px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+      >
+        <span
+          className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] border border-hairline-soft bg-bg-grad-a/55 text-accent-2"
+          aria-hidden
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </span>
+        <span className="min-w-0 flex-1">
           <span className="block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-accent-2">
             Quality Strategy
           </span>
@@ -233,11 +235,14 @@ function GenerationProfilesEditor({
           <span className="mt-1 block text-[12.5px] leading-[1.55] text-text-3">
             {t("dashboard:generation_profiles_section_desc")}
           </span>
-        </label>
-      </div>
+        </span>
+        <span className="mt-0.5 rounded-[7px] border border-hairline-soft px-2 py-1 text-[11px] text-text-3">
+          {t("dashboard:advanced_settings", { defaultValue: "高级设置" })}
+        </span>
+      </button>
 
-      {enabled && (
-        <div className="mt-4 space-y-4 border-t border-hairline-soft pt-4">
+      {expanded && (
+        <div id="create-project-generation-profiles-panel" className="mt-4 space-y-4 border-t border-hairline-soft pt-4">
           {([
             ["asset", t("dashboard:generation_profile_asset")],
             ["storyboard_draft", t("dashboard:generation_profile_storyboard_draft")],
@@ -255,19 +260,17 @@ function GenerationProfilesEditor({
                 <span className="mb-1.5 block text-[11px] text-text-3">
                   {t("templates:resolution_label")}
                 </span>
-                <select
+                <SelectMenu
                   value={profiles[key]?.resolution ?? ""}
-                  onChange={(event) =>
-                    onUpdateImage(key, { resolution: event.currentTarget.value || null })
-                  }
+                  options={IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
+                    value: resolution,
+                    label: resolution,
+                  }))}
+                  onChange={(next) => onUpdateImage(key, { resolution: next || null })}
+                  ariaLabel={t("templates:resolution_label")}
+                  panelLabel={t("templates:resolution_label")}
                   className={PROFILE_INPUT_CLS}
-                >
-                  {IMAGE_PROFILE_RESOLUTIONS.map((resolution) => (
-                    <option key={resolution} value={resolution}>
-                      {resolution}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
             </div>
           ))}
@@ -297,38 +300,38 @@ function GenerationProfilesEditor({
                   <span className="mb-1.5 block text-[11px] text-text-3">
                     {t("templates:resolution_label")}
                   </span>
-                  <select
+                  <SelectMenu
                     value={profile?.resolution ?? ""}
-                    onChange={(event) =>
-                      onUpdateVideo(key, { resolution: event.currentTarget.value || null })
-                    }
+                    options={VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
+                      value: resolution,
+                      label: resolution,
+                    }))}
+                    onChange={(next) => onUpdateVideo(key, { resolution: next || null })}
+                    ariaLabel={t("templates:resolution_label")}
+                    panelLabel={t("templates:resolution_label")}
                     className={PROFILE_INPUT_CLS}
-                  >
-                    {VIDEO_PROFILE_RESOLUTIONS.map((resolution) => (
-                      <option key={resolution} value={resolution}>
-                        {resolution}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </label>
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] text-text-3">
                     {t("dashboard:generate_audio_label")}
                   </span>
-                  <select
+                  <SelectMenu
                     value={audioValue}
-                    onChange={(event) => {
-                      const next = event.currentTarget.value;
+                    options={[
+                      { value: "project", label: t("dashboard:follow_global_default") },
+                      { value: "true", label: t("dashboard:enabled_label") },
+                      { value: "false", label: t("dashboard:disabled_label") },
+                    ]}
+                    onChange={(next) => {
                       onUpdateVideo(key, {
                         generate_audio: next === "project" ? null : next === "true",
                       });
                     }}
+                    ariaLabel={t("dashboard:generate_audio_label")}
+                    panelLabel={t("dashboard:generate_audio_label")}
                     className={PROFILE_INPUT_CLS}
-                  >
-                    <option value="project">{t("dashboard:follow_global_default")}</option>
-                    <option value="true">{t("dashboard:enabled_label")}</option>
-                    <option value="false">{t("dashboard:disabled_label")}</option>
-                  </select>
+                  />
                 </label>
               </div>
             );

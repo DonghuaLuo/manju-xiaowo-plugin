@@ -16,6 +16,7 @@ import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { getProviderModels, getCustomProviderModels } from "@/utils/provider-models";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import type {
   CustomProviderInfo,
@@ -534,7 +535,6 @@ export function ProjectSettingsPage() {
     textOverview !== initialRef.current.textOverview ||
     textStyle !== initialRef.current.textStyle ||
     aspectRatio !== initialRef.current.aspectRatio ||
-    generationMode !== initialRef.current.generationMode ||
     defaultDuration !== initialRef.current.defaultDuration ||
     episodeTargetUnits !== initialRef.current.episodeTargetUnits ||
     sourceLanguage !== initialRef.current.sourceLanguage ||
@@ -864,7 +864,6 @@ export function ProjectSettingsPage() {
         text_backend_overview: textOverview || null,
         text_backend_style: textStyle || null,
         aspect_ratio: aspectRatio || undefined,
-        generation_mode: generationMode,
         default_duration: defaultDuration,
         episode_target_units: normalizedEpisodeTargetUnits,
         source_language: sourceLanguage,
@@ -1187,76 +1186,90 @@ export function ProjectSettingsPage() {
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
                               </span>
-                              <select
+                              <SelectMenu
                                 value={tierProfile.reference_image_policy ?? "balanced"}
-                                onChange={(event) =>
+                                options={REFERENCE_IMAGE_POLICIES.map((policy) => ({
+                                  value: policy,
+                                  label: policy,
+                                }))}
+                                onChange={(next) =>
                                   updateShotTierProfile(tier, {
-                                    reference_image_policy: event.currentTarget.value,
+                                    reference_image_policy: next,
                                   })
                                 }
+                                ariaLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
+                                panelLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
                                 className={PROFILE_INPUT_CLS}
-                              >
-                                {REFERENCE_IMAGE_POLICIES.map((policy) => (
-                                  <option key={policy} value={policy}>{policy}</option>
-                                ))}
-                              </select>
+                              />
                             </label>
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("generation_profile_storyboard_final")}
                               </span>
-                              <select
+                              <SelectMenu
                                 value={storyboardOverride.resolution ?? ""}
-                                onChange={(event) =>
+                                options={[
+                                  { value: "", label: t("follow_global_default") },
+                                  ...IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
+                                    value: resolution,
+                                    label: resolution,
+                                  })),
+                                ]}
+                                onChange={(next) =>
                                   updateShotTierOverride(tier, "storyboard_final", {
-                                    resolution: event.currentTarget.value || null,
+                                    resolution: next || null,
                                   })
                                 }
+                                ariaLabel={t("generation_profile_storyboard_final")}
+                                panelLabel={t("generation_profile_storyboard_final")}
                                 className={PROFILE_INPUT_CLS}
-                              >
-                                <option value="">{t("follow_global_default")}</option>
-                                {IMAGE_PROFILE_RESOLUTIONS.map((resolution) => (
-                                  <option key={resolution} value={resolution}>{resolution}</option>
-                                ))}
-                              </select>
+                              />
                             </label>
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("generation_profile_video_final")}
                               </span>
-                              <select
+                              <SelectMenu
                                 value={videoOverride.resolution ?? ""}
-                                onChange={(event) =>
+                                options={[
+                                  { value: "", label: t("follow_global_default") },
+                                  ...VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
+                                    value: resolution,
+                                    label: resolution,
+                                  })),
+                                ]}
+                                onChange={(next) =>
                                   updateShotTierOverride(tier, "video_final", {
-                                    resolution: event.currentTarget.value || null,
+                                    resolution: next || null,
                                   })
                                 }
+                                ariaLabel={t("generation_profile_video_final")}
+                                panelLabel={t("generation_profile_video_final")}
                                 className={PROFILE_INPUT_CLS}
-                              >
-                                <option value="">{t("follow_global_default")}</option>
-                                {VIDEO_PROFILE_RESOLUTIONS.map((resolution) => (
-                                  <option key={resolution} value={resolution}>{resolution}</option>
-                                ))}
-                              </select>
+                              />
                             </label>
                             <label className="block sm:col-span-2">
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("video_backend_label", { defaultValue: "视频供应商" })}
                               </span>
-                              <select
+                              <SelectMenu
                                 value={videoOverride.video_backend ?? ""}
-                                onChange={(event) =>
+                                options={[
+                                  { value: "", label: t("follow_global_default") },
+                                  ...options.video_backends.map((backend) => ({
+                                    value: backend,
+                                    label: backend,
+                                  })),
+                                ]}
+                                onChange={(next) =>
                                   updateShotTierOverride(tier, "video_final", {
-                                    video_backend: event.currentTarget.value || null,
+                                    video_backend: next || null,
                                   })
                                 }
+                                ariaLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
+                                panelLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
                                 className={PROFILE_INPUT_CLS}
-                              >
-                                <option value="">{t("follow_global_default")}</option>
-                                {options.video_backends.map((backend) => (
-                                  <option key={backend} value={backend}>{backend}</option>
-                                ))}
-                              </select>
+                              />
                             </label>
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">
@@ -1309,19 +1322,19 @@ export function ProjectSettingsPage() {
                         <span className="mb-1.5 block text-[11px] text-text-3">
                           {t("resolution_label")}
                         </span>
-                        <select
+                        <SelectMenu
                           value={normalizedGenerationProfiles[key]?.resolution ?? ""}
-                          onChange={(event) =>
-                            updateImageProfile(key, { resolution: event.currentTarget.value || null })
+                          options={IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
+                            value: resolution,
+                            label: resolution,
+                          }))}
+                          onChange={(next) =>
+                            updateImageProfile(key, { resolution: next || null })
                           }
+                          ariaLabel={t("resolution_label")}
+                          panelLabel={t("resolution_label")}
                           className={PROFILE_INPUT_CLS}
-                        >
-                          {IMAGE_PROFILE_RESOLUTIONS.map((resolution) => (
-                            <option key={resolution} value={resolution}>
-                              {resolution}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </label>
                     </div>
                   ))}
@@ -1351,39 +1364,41 @@ export function ProjectSettingsPage() {
                           <span className="mb-1.5 block text-[11px] text-text-3">
                             {t("resolution_label")}
                           </span>
-                          <select
+                          <SelectMenu
                             value={profile?.resolution ?? ""}
-                            onChange={(event) =>
-                              updateVideoProfile(key, { resolution: event.currentTarget.value || null })
+                            options={VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
+                              value: resolution,
+                              label: resolution,
+                            }))}
+                            onChange={(next) =>
+                              updateVideoProfile(key, { resolution: next || null })
                             }
+                            ariaLabel={t("resolution_label")}
+                            panelLabel={t("resolution_label")}
                             className={PROFILE_INPUT_CLS}
-                          >
-                            {VIDEO_PROFILE_RESOLUTIONS.map((resolution) => (
-                              <option key={resolution} value={resolution}>
-                                {resolution}
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </label>
                         <label className="block">
                           <span className="mb-1.5 block text-[11px] text-text-3">
                             {t("generate_audio_label")}
                           </span>
-                          <select
+                          <SelectMenu
                             value={audioValue}
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
+                            options={[
+                              { value: "project", label: t("follow_global_default") },
+                              { value: "true", label: t("enabled_label") },
+                              { value: "false", label: t("disabled_label") },
+                            ]}
+                            onChange={(value) => {
                               updateVideoProfile(key, {
                                 generate_audio:
                                   value === "project" ? null : value === "true",
                               });
                             }}
+                            ariaLabel={t("generate_audio_label")}
+                            panelLabel={t("generate_audio_label")}
                             className={PROFILE_INPUT_CLS}
-                          >
-                            <option value="project">{t("follow_global_default")}</option>
-                            <option value="true">{t("enabled_label")}</option>
-                            <option value="false">{t("disabled_label")}</option>
-                          </select>
+                          />
                         </label>
                       </div>
                     );
@@ -1487,7 +1502,13 @@ export function ProjectSettingsPage() {
                   <GenerationModeSelector
                     value={generationMode}
                     onChange={setGenerationMode}
+                    readOnly
                   />
+                  <p className="mt-2 text-[11.5px] leading-[1.45] text-text-4">
+                    {t("generation_mode_locked_hint", {
+                      defaultValue: "已创建项目的生成模式固定，无法在项目设置中修改。",
+                    })}
+                  </p>
                 </fieldset>
               </SectionCard>
 

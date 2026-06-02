@@ -409,7 +409,7 @@ describe("StudioCanvasRouter", () => {
         "SEG-1",
         "image prompt",
         "episode_1.json",
-        { quality: "draft" },
+        { quality: "draft", shot_tier: "A" },
       );
       expect(useAppStore.getState().toast?.text).toContain("生成分镜失败");
     });
@@ -422,7 +422,7 @@ describe("StudioCanvasRouter", () => {
         "video prompt",
         "episode_1.json",
         4,
-        { quality: "draft" },
+        { quality: "draft", shot_tier: "A" },
       );
       expect(useAppStore.getState().toast?.text).toContain("生成视频失败");
     });
@@ -459,7 +459,7 @@ describe("StudioCanvasRouter", () => {
         "video prompt",
         "episode_1.json",
         undefined,
-        { quality: "draft" },
+        { quality: "draft", shot_tier: "A" },
       );
     });
   });

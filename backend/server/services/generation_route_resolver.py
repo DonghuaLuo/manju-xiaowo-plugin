@@ -16,6 +16,7 @@ ShotTier = Literal["S", "A", "B"]
 
 
 PROFILED_TASK_KINDS = frozenset({"character", "scene", "prop", "storyboard", "grid", "video", "reference_video"})
+SHOT_TIER_TASK_KINDS = frozenset({"storyboard", "video", "reference_video"})
 ROUTE_TRIGGER_KEYS = frozenset(
     {
         "quality",
@@ -122,14 +123,14 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
     return {
         "S": {
             "label": "hero",
-            "retry_budget": 3,
+            "retry_budget": 1,
             "reference_image_policy": "full_context",
             "prefer_final_storyboard_source": True,
             "profiles": {},
         },
         "A": {
             "label": "standard",
-            "retry_budget": 2,
+            "retry_budget": 1,
             "reference_image_policy": "balanced",
             "prefer_final_storyboard_source": True,
             "profiles": {},
@@ -191,6 +192,14 @@ def default_quality_for_task(task_kind: str) -> GenerationQuality:
     if task_kind in {"storyboard", "video", "reference_video"}:
         return "draft"
     return "final"
+
+
+def default_shot_tier_for_task(task_kind: str) -> ShotTier | None:
+    """Default shot tier for shot-level generation tasks."""
+
+    if task_kind in SHOT_TIER_TASK_KINDS:
+        return "A"
+    return None
 
 
 def profile_key_for(task_kind: str, quality: GenerationQuality | None) -> str | None:
@@ -546,6 +555,8 @@ async def resolve_generation_route(
         normalized_quality = default_quality_for_task(task_kind)
     normalized_quality = normalize_task_quality(task_kind, normalized_quality)
     shot_tier = normalize_shot_tier(payload.get("shot_tier") if isinstance(payload, dict) else None)
+    if shot_tier is None:
+        shot_tier = default_shot_tier_for_task(task_kind)
     shot_tier_strategy = _shot_tier_strategy(project, shot_tier)
     profile_key, profile = _profile_for(project, task_kind, normalized_quality, shot_tier)
     effective_payload = _merge_payload(profile, payload)

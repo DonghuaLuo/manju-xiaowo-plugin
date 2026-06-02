@@ -123,14 +123,14 @@ export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfil
   return {
     S: {
       label: "hero",
-      retry_budget: 3,
+      retry_budget: 1,
       reference_image_policy: "full_context",
       prefer_final_storyboard_source: true,
       profiles: {},
     },
     A: {
       label: "standard",
-      retry_budget: 2,
+      retry_budget: 1,
       reference_image_policy: "balanced",
       prefer_final_storyboard_source: true,
       profiles: {},

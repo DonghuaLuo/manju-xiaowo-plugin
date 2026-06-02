@@ -158,6 +158,25 @@ async def test_shot_tier_applies_project_profile_override_and_metadata():
 
 
 @pytest.mark.asyncio
+async def test_shot_level_tasks_default_to_a_tier_when_missing():
+    project = {"generation_profiles": default_generation_profiles()}
+
+    route = await resolve_generation_route(
+        project=project,
+        payload={"quality": "draft", "prompt": "p"},
+        task_kind="storyboard",
+        capability="t2i",
+        resolver=_FakeResolver(),  # type: ignore[arg-type]
+        project_name="demo",
+    )
+
+    assert route.shot_tier == "A"
+    assert route.shot_tier_strategy["retry_budget"] == 1
+    assert route.metadata["shot_tier"] == "A"
+    assert route.metadata["generation_route"]["shot_tier"] == "A"
+
+
+@pytest.mark.asyncio
 async def test_video_draft_duration_follows_project_or_payload_duration():
     project = {"generation_profiles": default_generation_profiles(), "default_duration": 6}
     resolver = _FakeResolver()

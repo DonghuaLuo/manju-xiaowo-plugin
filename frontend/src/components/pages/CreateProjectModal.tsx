@@ -165,10 +165,9 @@ export function CreateProjectModal() {
     videoResolution: null,
     imageResolution: null,
   });
-  const [useCustomGenerationProfiles, setUseCustomGenerationProfiles] = useState(false);
-  const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(() =>
-    createDefaultGenerationProfiles(),
-  );
+  const [generationProfilesExpanded, setGenerationProfilesExpanded] = useState(false);
+  const [generationProfilesCustomized, setGenerationProfilesCustomized] = useState(false);
+  const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>({});
 
   const [style, setStyle] = useState<WizardStep3Value>({
     mode: "template",
@@ -313,7 +312,7 @@ export function CreateProjectModal() {
         imageResolution: models.imageResolution,
         videoResolution: models.videoResolution,
       });
-      const savedGenerationProfiles = useCustomGenerationProfiles
+      const savedGenerationProfiles = generationProfilesCustomized
         ? normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles)
         : defaultGenerationProfiles;
 
@@ -375,6 +374,11 @@ export function CreateProjectModal() {
     } finally {
       setAnalyzingStyle(false);
     }
+  };
+
+  const handleGenerationProfilesChange = (next: GenerationProfiles) => {
+    setGenerationProfilesCustomized(true);
+    setGenerationProfiles(next);
   };
 
   const stepKicker = `Reel ${step.toString().padStart(2, "0")} / 03`;
@@ -478,10 +482,10 @@ export function CreateProjectModal() {
               onCancel={handleClose}
               data={step2Data}
               error={step2Error}
-              useCustomGenerationProfiles={useCustomGenerationProfiles}
-              onUseCustomGenerationProfilesChange={setUseCustomGenerationProfiles}
+              generationProfilesExpanded={generationProfilesExpanded}
+              onGenerationProfilesExpandedChange={setGenerationProfilesExpanded}
               generationProfiles={generationProfiles}
-              onGenerationProfilesChange={setGenerationProfiles}
+              onGenerationProfilesChange={handleGenerationProfilesChange}
             />
           )}
           {step === 3 && (

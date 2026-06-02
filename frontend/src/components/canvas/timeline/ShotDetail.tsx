@@ -31,6 +31,7 @@ import { NotesDrawer } from "./NotesDrawer";
 import { ReferencesSection } from "./ReferencesSection";
 import { StatusBadge, statusFromAssets } from "./StatusBadge";
 import { Popover } from "@/components/ui/Popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { useCostStore } from "@/stores/cost-store";
 import {
   isStructuredImagePrompt,
@@ -96,28 +97,46 @@ interface DurationPillProps {
 
 const SHOT_TIERS: ShotTier[] = ["S", "A", "B"];
 
+function isShotTier(value: unknown): value is ShotTier {
+  return value === "S" || value === "A" || value === "B";
+}
+
 function normalizeShotTier(value: unknown): ShotTier {
-  return value === "S" || value === "B" ? value : "A";
+  return isShotTier(value) ? value : "A";
 }
 
 function ShotTierPill({
   tier,
+  explicit,
   segmentId,
   onUpdatePrompt,
 }: {
   tier: ShotTier;
+  explicit: boolean;
   segmentId: string;
   onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
 }) {
   const { t } = useTranslation("dashboard");
   const editable = !!onUpdatePrompt;
   const label = t("shot_tier_label", { defaultValue: "镜头档位" });
+  const tierHints: Record<ShotTier, string> = {
+    S: t("shot_tier_hint_s", {
+      defaultValue: "S 重点镜头：用于关键画面、主角特写或重要剧情点。",
+    }),
+    A: t("shot_tier_hint_a", {
+      defaultValue: "A 标准镜头：默认档位，适合大多数普通分镜。",
+    }),
+    B: t("shot_tier_hint_b", {
+      defaultValue: "B 辅助镜头：适合过渡、环境补充或次要镜头。",
+    }),
+  };
 
   if (!editable) {
     return (
       <span
         className="num inline-flex items-center rounded-md px-2 py-[3px] text-[11.5px] font-semibold"
-        title={label}
+        title={`${label} · ${tierHints[tier]}`}
+        aria-label={`${label} · ${tierHints[tier]}`}
         style={{
           background: "oklch(0.22 0.011 265 / 0.6)",
           border: "1px solid var(--color-hairline-soft)",
@@ -141,27 +160,32 @@ function ShotTierPill({
     >
       {SHOT_TIERS.map((candidate) => {
         const active = candidate === tier;
+        const hint = `${label} · ${tierHints[candidate]}`;
         return (
-          <button
-            key={candidate}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            title={label}
-            onClick={() => {
-              if (!active) void onUpdatePrompt?.(segmentId, "shot_tier", candidate);
-            }}
-            className="num rounded px-1.5 py-0.5 text-[11px] font-bold transition-colors focus-ring"
-            style={{
-              minWidth: 22,
-              color: active ? "oklch(0.14 0 0)" : "var(--color-text-3)",
-              background: active
-                ? "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))"
-                : "transparent",
-            }}
-          >
-            {candidate}
-          </button>
+          <Tooltip key={candidate}>
+            <TooltipTrigger>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={active}
+                aria-label={hint}
+                onClick={() => {
+                  if (!active || !explicit) void onUpdatePrompt?.(segmentId, "shot_tier", candidate);
+                }}
+                className="num rounded px-1.5 py-0.5 text-[11px] font-bold transition-colors focus-ring"
+                style={{
+                  minWidth: 22,
+                  color: active ? "oklch(0.14 0 0)" : "var(--color-text-3)",
+                  background: active
+                    ? "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))"
+                    : "transparent",
+                }}
+              >
+                {candidate}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{tierHints[candidate]}</TooltipContent>
+          </Tooltip>
         );
       })}
     </div>
@@ -374,6 +398,7 @@ export function ShotDetail({
   const { t } = useTranslation("dashboard");
   const status = statusFromAssets(segment.generated_assets?.status);
   const novelText = getNovelText(segment, contentMode);
+  const shotTierExplicit = isShotTier(segment.shot_tier);
   const shotTier = normalizeShotTier(segment.shot_tier);
   const segCost = useCostStore((s) => s.getSegmentCost(segmentId));
 
@@ -919,6 +944,7 @@ export function ShotDetail({
         />
         <ShotTierPill
           tier={shotTier}
+          explicit={shotTierExplicit}
           segmentId={segmentId}
           onUpdatePrompt={onUpdatePrompt}
         />

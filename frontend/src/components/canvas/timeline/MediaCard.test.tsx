@@ -160,4 +160,62 @@ describe("MediaCard", () => {
 
     expect(await screen.findByText("基于宫格镜头板")).toBeInTheDocument();
   });
+
+  it("requires an overall rating before saving dimension ratings", async () => {
+    vi.spyOn(API, "getVersions").mockResolvedValueOnce({
+      resource_type: "storyboards",
+      resource_id: "SEG-1",
+      current_version: 2,
+      versions: [
+        {
+          version: 2,
+          filename: "storyboard_SEG-1.png",
+          created_at: "2026-01-01T00:00:00Z",
+          file_size: 1024,
+          is_current: true,
+        },
+      ],
+    });
+    const upsertRating = vi
+      .spyOn(API, "upsertQualityRating")
+      .mockResolvedValue({ rating: {} });
+
+    render(
+      <MediaCard
+        kind="storyboard"
+        projectName="demo"
+        segmentId="SEG-1"
+        assetPath="storyboards/storyboard_SEG-1.png"
+        aspectRatio="16:9"
+        hideGenerateButton
+      />,
+    );
+
+    const dimensionSelect = await screen.findByRole("combobox", { name: "角色一致" });
+    expect(dimensionSelect).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "设置质量评分 4 星" }));
+    await waitFor(() =>
+      expect(upsertRating).toHaveBeenCalledWith(
+        "demo",
+        expect.objectContaining({ rating: 4, dimensions: {} }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "角色一致" })).not.toBeDisabled(),
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "角色一致" }));
+    fireEvent.click(await screen.findByRole("option", { name: "5" }));
+
+    await waitFor(() =>
+      expect(upsertRating).toHaveBeenLastCalledWith(
+        "demo",
+        expect.objectContaining({
+          rating: 4,
+          dimensions: { character_consistency: 5 },
+        }),
+      ),
+    );
+  });
 });

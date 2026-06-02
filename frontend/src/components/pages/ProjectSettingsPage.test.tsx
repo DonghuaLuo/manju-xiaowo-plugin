@@ -310,7 +310,7 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
-  it("switches generation_mode to reference_video and marks the save button enabled", async () => {
+  it("locks generation_mode for existing projects and omits it from save payloads", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo",
@@ -328,18 +328,25 @@ describe("ProjectSettingsPage – style picker", () => {
 
     renderAt("/app/projects/demo/settings");
 
-    // Wait for the generation mode selector to appear (3 radios total)
     const referenceVideoRadio = await screen.findByRole("radio", { name: /参考生视频|Reference-to-Video/i });
+    const storyboardRadio = screen.getByRole("radio", { name: /图生视频|Image-to-Video/i });
     expect(referenceVideoRadio).not.toBeChecked();
+    expect(referenceVideoRadio).toBeDisabled();
+    expect(storyboardRadio).toBeChecked();
+    expect(storyboardRadio).toBeDisabled();
 
     fireEvent.click(referenceVideoRadio);
+    expect(referenceVideoRadio).not.toBeChecked();
+    expect(storyboardRadio).toBeChecked();
 
-    // After switching to reference_video the radio should be checked (dirty state)
-    expect(referenceVideoRadio).toBeChecked();
-
-    // The main save button should be enabled (it is never disabled except while saving)
     const saveBtn = screen.getByRole("button", { name: /^(保存|Save)$/i });
-    expect(saveBtn).not.toBeDisabled();
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(API.updateProject).toHaveBeenCalled();
+    });
+    const payload = vi.mocked(API.updateProject).mock.calls.at(-1)?.[1] ?? {};
+    expect(payload).not.toHaveProperty("generation_mode");
   });
 });
 
@@ -449,7 +456,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     renderAt("/app/projects/demo/settings");
 
     // 等待 ResolutionPicker 出现并验证已加载的初始值
-    // select 模式的 ResolutionPicker 渲染为 <select>，当前值会是对应 option selected
+    // select 模式的 ResolutionPicker 渲染为自定义 combobox，当前值会写在 trigger value 上
     await waitFor(() => {
       const selects = screen.getAllByRole("combobox");
       // 找到视频分辨率 select（aria-label 为 "分辨率"）
@@ -458,7 +465,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
       );
       expect(resSelects.length).toBeGreaterThan(0);
       // 验证已加载的值
-      const values = resSelects.map((el) => (el as HTMLSelectElement).value);
+      const values = resSelects.map((el) => (el as HTMLButtonElement).value);
       expect(values).toContain("1080p");
       expect(values).toContain("720p");
     });

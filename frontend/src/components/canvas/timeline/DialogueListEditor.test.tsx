@@ -54,9 +54,8 @@ describe("DialogueListEditor", () => {
       { speaker: "小月", line: "我们走吧", emotion: "紧张，压低声音" },
     ]);
 
-    fireEvent.change(screen.getByLabelText("画面位置"), {
-      target: { value: "left" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "画面位置" }));
+    fireEvent.click(screen.getByRole("option", { name: "左侧" }));
     expect(onChange).toHaveBeenLastCalledWith([
       { speaker: "小月", line: "我们走吧", screen_position: "left" },
     ]);

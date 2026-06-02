@@ -71,6 +71,8 @@ async def _retry_budget_for_task(task: dict[str, Any]) -> int:
         return _coerce_positive_int(payload.get("retry_budget"), 1)
 
     shot_tier = payload.get("shot_tier") if isinstance(payload, dict) else None
+    if shot_tier not in {"S", "A", "B"} and task.get("task_type") in {"storyboard", "video", "reference_video"}:
+        shot_tier = "A"
     if shot_tier not in {"S", "A", "B"}:
         return 1
 

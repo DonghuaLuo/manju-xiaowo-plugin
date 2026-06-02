@@ -1014,6 +1014,9 @@ class API {
     if ("content_mode" in updates) {
       throw new Error("项目创建后不支持修改 content_mode");
     }
+    if ("generation_mode" in updates) {
+      throw new Error("项目创建后不支持修改 generation_mode");
+    }
     return this.request(`/projects/${encodeURIComponent(name)}`, {
       method: "PATCH",
       body: JSON.stringify(updates),

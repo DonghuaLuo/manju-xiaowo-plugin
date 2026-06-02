@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { API } from "@/api";
 import { CARD_STYLE } from "@/components/ui/darkroom-tokens";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { formatCostOrZero } from "@/utils/cost-format";
 import type { UsageStat } from "@/types";
 
@@ -173,19 +174,17 @@ export function UsageStatsSection() {
           );
         })}
         {providers.length > 0 && (
-          <select
+          <SelectMenu
             value={providerFilter}
-            onChange={(e) => setProviderFilter(e.target.value)}
-            aria-label={t("filter_by_provider")}
-            className="rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-3 py-1.5 text-[12px] text-text-2 transition-colors hover:border-hairline focus:border-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <option value="">{t("all_providers")}</option>
-            {providers.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: t("all_providers") },
+              ...providers.map((p) => ({ value: p, label: p })),
+            ]}
+            onChange={setProviderFilter}
+            ariaLabel={t("filter_by_provider")}
+            panelLabel={t("filter_by_provider")}
+            triggerSize="compact"
+          />
         )}
       </div>
 

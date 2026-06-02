@@ -159,6 +159,29 @@ class TestVersionsRouter:
             assert restore_resp.json()["current_version"] == 1
             assert any(item[0] == "character" for item in fake_pm.updated)
 
+    def test_get_versions_backfills_existing_current_storyboard(self, monkeypatch, tmp_path):
+        fake_pm = _FakePM()
+        fake_pm.get_project_path = lambda _name: tmp_path
+        current_file = tmp_path / "storyboards" / "scene_E1S02.png"
+        current_file.parent.mkdir(parents=True)
+        current_file.write_bytes(b"legacy-current")
+
+        monkeypatch.setattr(versions, "get_project_manager", lambda: fake_pm)
+        monkeypatch.setattr(versions, "get_version_manager", lambda _name: VersionManager(tmp_path))
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUserInfo(id="default", sub="testuser", role="admin")
+        app.include_router(versions.router, prefix="/api/v1")
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/projects/demo/versions/storyboards/E1S02")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_version"] == 1
+        assert data["versions"][0]["version_origin"] == "current_asset_backfill"
+        version_file = tmp_path / data["versions"][0]["file"]
+        assert version_file.read_bytes() == b"legacy-current"
+
     def test_get_and_restore_scenes(self, monkeypatch):
         client, fake_pm = _client(monkeypatch)
         with client:

@@ -8,6 +8,8 @@ import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { ImageFlipReveal } from "@/components/ui/ImageFlipReveal";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
+import { SelectMenu } from "@/components/ui/SelectMenu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { VideoLightbox } from "@/components/ui/VideoLightbox";
 import { formatCost } from "@/utils/cost-format";
 import { errMsg } from "@/utils/async";
@@ -220,6 +222,12 @@ export function MediaCard({
     qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.dimensions : {};
   const metaBadges = currentVersionBadges(t, kind, effectiveVersionInfo);
   const qualityDimensions = qualityDimensionsForKind(kind);
+  const dimensionHint = t("media_quality_dimension_hint", {
+    defaultValue: "可选细项，不选不参与维度统计。",
+  });
+  const dimensionNeedsRatingHint = t("media_quality_dimension_needs_rating", {
+    defaultValue: "请先设置总星级，再评价细项。",
+  });
 
   useEffect(() => {
     if (!assetPath) {
@@ -373,13 +381,17 @@ export function MediaCard({
   };
 
   const handleDimensionRating = async (key: string, value: number | null) => {
+    if (effectiveQualityRating == null) {
+      useAppStore.getState().pushToast(dimensionNeedsRatingHint, "info");
+      return;
+    }
     const nextDimensions = { ...effectiveQualityDimensions };
     if (value == null) {
       delete nextDimensions[key];
     } else {
       nextDimensions[key] = value;
     }
-    await saveQualityRating(effectiveQualityRating ?? value ?? 3, nextDimensions);
+    await saveQualityRating(effectiveQualityRating, nextDimensions);
   };
 
   return (
@@ -553,27 +565,41 @@ export function MediaCard({
             })}
           </div>
           <div className="grid grid-cols-3 gap-1.5">
-            {qualityDimensions.map((dimension) => (
-              <label key={dimension.key} className="min-w-0">
-                <span className="mb-0.5 block truncate text-[10px] text-text-4">
-                  {dimension.label}
-                </span>
-                <select
-                  value={effectiveQualityDimensions[dimension.key] ?? ""}
-                  onChange={(event) => {
-                    const raw = event.currentTarget.value;
-                    void handleDimensionRating(dimension.key, raw ? Number(raw) : null);
-                  }}
-                  disabled={ratingSaving}
-                  className="h-6 w-full rounded-md border border-hairline-soft bg-bg-grad-a/45 px-1.5 text-[10.5px] text-text-3 outline-none focus:border-accent focus:ring-1 focus:ring-accent/35 disabled:cursor-wait disabled:opacity-60"
-                >
-                  <option value="">-</option>
-                  {[1, 2, 3, 4, 5].map((score) => (
-                    <option key={score} value={score}>{score}</option>
-                  ))}
-                </select>
-              </label>
-            ))}
+            {qualityDimensions.map((dimension) => {
+              const dimensionDisabled = ratingSaving || effectiveQualityRating == null;
+              return (
+                <label key={dimension.key} className="min-w-0">
+                  <span className="mb-0.5 block truncate text-[10px] text-text-4">
+                    {dimension.label}
+                  </span>
+                  <Tooltip>
+                    <TooltipTrigger className="w-full">
+                      <SelectMenu
+                        value={String(effectiveQualityDimensions[dimension.key] ?? "")}
+                        options={[
+                          { value: "", label: "-" },
+                          ...[1, 2, 3, 4, 5].map((score) => ({
+                            value: String(score),
+                            label: String(score),
+                          })),
+                        ]}
+                        onChange={(raw) => {
+                          void handleDimensionRating(dimension.key, raw ? Number(raw) : null);
+                        }}
+                        disabled={dimensionDisabled}
+                        ariaLabel={dimension.label}
+                        triggerSize="micro"
+                        minPanelWidth={64}
+                        className="h-6 w-full px-1.5 py-0 text-[10.5px]"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {effectiveQualityRating == null ? dimensionNeedsRatingHint : dimensionHint}
+                    </TooltipContent>
+                  </Tooltip>
+                </label>
+              );
+            })}
           </div>
         </div>
       )}

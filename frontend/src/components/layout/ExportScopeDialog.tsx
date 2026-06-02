@@ -12,6 +12,7 @@ import {
 import { PluginSDK } from "xiaowo-sdk";
 import { GlassPopover } from "@/components/ui/GlassPopover";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { API } from "@/api";
 import { useTranslation } from "react-i18next";
 import type { RefObject, ReactNode } from "react";
@@ -247,26 +248,20 @@ export function ExportScopeDialog({
                 htmlFor="jianying-episode-select"
                 label={t("dashboard:select_episode")}
               >
-                <select
+                <SelectMenu
                   id="jianying-episode-select"
-                  value={selectedEpisode}
-                  onChange={(e) => setSelectedEpisode(Number(e.target.value))}
-                  className="focus-ring w-full rounded-md px-2.5 py-1.5 text-[13px] outline-none"
-                  style={{
-                    background: "oklch(0.16 0.010 265 / 0.6)",
-                    border: "1px solid var(--color-hairline)",
-                    color: "var(--color-text)",
-                  }}
-                >
-                  {episodes.map((ep) => (
-                    <option key={ep.episode} value={ep.episode}>
-                      {t("dashboard:episode_with_title", {
-                        episode: ep.episode,
-                        title: ep.title,
-                      })}
-                    </option>
-                  ))}
-                </select>
+                  value={String(selectedEpisode)}
+                  options={episodes.map((ep) => ({
+                    value: String(ep.episode),
+                    label: t("dashboard:episode_with_title", {
+                      episode: ep.episode,
+                      title: ep.title,
+                    }),
+                  }))}
+                  onChange={(next) => setSelectedEpisode(Number(next))}
+                  ariaLabel={t("dashboard:select_episode")}
+                  panelLabel={t("dashboard:select_episode")}
+                />
               </FormField>
             )}
 
@@ -274,20 +269,17 @@ export function ExportScopeDialog({
               htmlFor="jianying-version-select"
               label={t("dashboard:jianying_version")}
             >
-              <select
+              <SelectMenu
                 id="jianying-version-select"
                 value={jianyingVersion}
-                onChange={(e) => setJianyingVersion(e.target.value)}
-                className="focus-ring w-full rounded-md px-2.5 py-1.5 text-[13px] outline-none"
-                style={{
-                  background: "oklch(0.16 0.010 265 / 0.6)",
-                  border: "1px solid var(--color-hairline)",
-                  color: "var(--color-text)",
-                }}
-              >
-                <option value="6">{t("dashboard:jianying_v6_plus")}</option>
-                <option value="5">{t("dashboard:jianying_v5_x")}</option>
-              </select>
+                options={[
+                  { value: "6", label: t("dashboard:jianying_v6_plus") },
+                  { value: "5", label: t("dashboard:jianying_v5_x") },
+                ]}
+                onChange={setJianyingVersion}
+                ariaLabel={t("dashboard:jianying_version")}
+                panelLabel={t("dashboard:jianying_version")}
+              />
             </FormField>
 
             <FormField

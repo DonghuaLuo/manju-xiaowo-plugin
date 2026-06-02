@@ -271,12 +271,12 @@ describe("CreateProjectModal", () => {
       expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled()
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /生成质量策略/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成质量策略/ }));
     const videoFinalRow = screen.getByText("视频最终版").closest(".grid");
     expect(videoFinalRow).not.toBeNull();
-    fireEvent.change(within(videoFinalRow as HTMLElement).getByLabelText("分辨率"), {
-      target: { value: "4K" },
-    });
+    fireEvent.click(within(videoFinalRow as HTMLElement).getByRole("combobox", { name: "分辨率" }));
+    fireEvent.click(screen.getByRole("option", { name: "4K" }));
+    fireEvent.click(screen.getByRole("button", { name: /生成质量策略/ }));
 
     fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
     await waitFor(() =>

@@ -2,6 +2,8 @@ import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, Plus, X } from "lucide-react";
 import { Popover } from "@/components/ui/Popover";
+import { SelectMenu } from "@/components/ui/SelectMenu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import {
   DIALOGUE_SCREEN_POSITION_I18N_KEYS,
   DIALOGUE_SCREEN_POSITIONS,
@@ -21,6 +23,9 @@ export function DialogueListEditor({
   onChange,
 }: DialogueListEditorProps) {
   const { t } = useTranslation("dashboard");
+  const optionalPromptHint = t("dialogue_optional_prompt_hint", {
+    defaultValue: "留空表示不指定，不会加入生成提示词。",
+  });
 
   const update = (index: number, patch: Partial<Dialogue>) => {
     const next = dialogue.map((d, i) =>
@@ -70,29 +75,40 @@ export function DialogueListEditor({
           </div>
 
           <div className="flex flex-col gap-1.5 pl-0 sm:flex-row sm:items-start sm:pl-[102px]">
-            <input
-              type="text"
-              value={d.emotion ?? ""}
-              onChange={(e) => update(i, { emotion: e.target.value })}
-              placeholder={t("dialogue_emotion_placeholder")}
-              className="dlg-input min-w-0 flex-1"
-            />
-            <select
-              value={d.screen_position ?? ""}
-              onChange={(e) =>
-                update(i, {
-                  screen_position: e.target.value as DialogueScreenPosition,
-                })
-              }
-              aria-label={t("dialogue_position")}
-              className="dlg-input h-[30px] w-full shrink-0 px-2 py-0 text-[12px] sm:w-24"
-            >
-              {DIALOGUE_SCREEN_POSITIONS.map((position) => (
-                <option key={position || "unspecified"} value={position}>
-                  {t(DIALOGUE_SCREEN_POSITION_I18N_KEYS[position])}
-                </option>
-              ))}
-            </select>
+            <Tooltip>
+              <TooltipTrigger className="min-w-0 flex-1">
+                <input
+                  type="text"
+                  value={d.emotion ?? ""}
+                  onChange={(e) => update(i, { emotion: e.target.value })}
+                  placeholder={t("dialogue_emotion_placeholder")}
+                  className="dlg-input min-w-0 w-full"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top">{optionalPromptHint}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger className="w-full shrink-0 sm:w-24">
+                <SelectMenu
+                  value={d.screen_position ?? ""}
+                  options={DIALOGUE_SCREEN_POSITIONS.map((position) => ({
+                    value: position,
+                    label: t(DIALOGUE_SCREEN_POSITION_I18N_KEYS[position]),
+                  }))}
+                  onChange={(value) =>
+                    update(i, {
+                      screen_position: value as DialogueScreenPosition,
+                    })
+                  }
+                  ariaLabel={t("dialogue_position")}
+                  panelLabel={t("dialogue_position")}
+                  triggerSize="micro"
+                  minPanelWidth={120}
+                  className="dlg-input h-[30px] w-full shrink-0 px-2 py-0 text-[12px]"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top">{optionalPromptHint}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
       ))}

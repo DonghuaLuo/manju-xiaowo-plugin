@@ -10,6 +10,7 @@ from lib.generation_worker import (
     _build_default_pools,
     _extract_provider,
     _read_int_env,
+    _retry_budget_for_task,
 )
 
 
@@ -363,6 +364,25 @@ class TestGenerationWorker:
         assert retry_payload["_retry"]["attempt"] == 2
         assert retry_payload["_retry"]["max_attempts"] == 2
         assert retry_payload["_retry"]["failure_type"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_retry_budget_defaults_missing_shot_tier_to_a_for_video(self, monkeypatch):
+        class _PM:
+            def load_project(self, _project_name):
+                return {"shot_tier_profiles": {"A": {"retry_budget": 2}}}
+
+        monkeypatch.setattr("lib.config.resolver.get_project_manager", lambda: _PM())
+
+        budget = await _retry_budget_for_task(
+            {
+                "task_id": "t-default-tier",
+                "project_name": "demo",
+                "task_type": "video",
+                "payload": {},
+            }
+        )
+
+        assert budget == 2
 
     @pytest.mark.asyncio
     async def test_process_task_cancelled_error_marks_cancelled(self, monkeypatch):

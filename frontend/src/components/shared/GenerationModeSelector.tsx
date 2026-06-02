@@ -6,6 +6,8 @@ export interface GenerationModeSelectorProps {
   onChange: (next: GenerationMode) => void;
   /** Modes to disable (e.g. if a provider cannot support reference_video). */
   disabledModes?: GenerationMode[];
+  /** Existing projects lock this value because generated assets are mode-specific. */
+  readOnly?: boolean;
   /** "lg" for wizard/settings (with description), "sm" for toolbars. */
   size?: "lg" | "sm";
   /** Optional name to differentiate multiple selectors on the same page. */
@@ -20,6 +22,7 @@ export function GenerationModeSelector({
   value,
   onChange,
   disabledModes = EMPTY_DISABLED as GenerationMode[],
+  readOnly = false,
   size = "lg",
   name = "generationMode",
 }: GenerationModeSelectorProps) {
@@ -47,14 +50,17 @@ export function GenerationModeSelector({
         className={size === "sm" ? "inline-flex gap-1" : "flex gap-3"}
       >
         {MODES.map((m) => {
-          const disabled = disabledModes.includes(m);
+          const modeDisabled = disabledModes.includes(m);
+          const disabled = readOnly || modeDisabled;
           const selected = value === m;
           const baseClass =
             size === "sm"
               ? "cursor-pointer rounded-[6px] border px-3 py-1 text-[11.5px] transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent"
               : "flex-1 cursor-pointer rounded-[8px] border px-3 py-2.5 text-center text-[13px] transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent";
           const stateClass = disabled
-            ? "border-hairline-soft bg-bg-grad-a/35 text-text-4 cursor-not-allowed"
+            ? selected
+              ? "border-hairline bg-bg-grad-a/55 text-text-2 cursor-not-allowed opacity-80"
+              : "border-hairline-soft bg-bg-grad-a/35 text-text-4 cursor-not-allowed opacity-70"
             : selected
               ? "border-accent/55 bg-accent-dim text-accent-2"
               : "border-hairline bg-bg-grad-a/55 text-text-2 hover:border-hairline-strong hover:text-text";
@@ -74,7 +80,9 @@ export function GenerationModeSelector({
                 value={m}
                 checked={selected}
                 disabled={disabled}
-                onChange={() => { if (!disabled) onChange(m); }}
+                onChange={() => {
+                  if (!disabled) onChange(m);
+                }}
                 className="sr-only"
               />
               {labelFor(m)}

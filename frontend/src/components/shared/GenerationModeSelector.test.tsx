@@ -42,4 +42,15 @@ describe("GenerationModeSelector", () => {
     const ref = screen.getByRole("radio", { name: /Reference-to-Video|参考生视频/ }) as HTMLInputElement;
     expect(ref.disabled).toBe(true);
   });
+
+  it("locks every mode in read-only mode", () => {
+    const { onChange } = setup({ readOnly: true });
+    const grid = screen.getByRole("radio", { name: /Grid-to-Video|宫格生视频/ }) as HTMLInputElement;
+    const storyboard = screen.getByRole("radio", { name: /Image-to-Video|图生视频/ }) as HTMLInputElement;
+
+    expect(storyboard.disabled).toBe(true);
+    expect(grid.disabled).toBe(true);
+    fireEvent.click(grid);
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

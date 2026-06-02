@@ -15,6 +15,7 @@ import type {
 import { priceLabel, urlPreviewFor, toggleDefaultReducer, type DiscoveryFormat } from "./customProviderHelpers";
 import { EndpointSelect } from "./EndpointSelect";
 import { ResolutionPicker } from "@/components/shared/ResolutionPicker";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { IMAGE_STANDARD_RESOLUTIONS, VIDEO_STANDARD_RESOLUTIONS } from "@/utils/provider-models";
 import {
   compactRangeFormat,
@@ -491,17 +492,19 @@ export function CustomProviderForm({ existing, onSaved, onCancel }: CustomProvid
           >
             {t("discovery_format_label")}
           </label>
-          <select
+          <SelectMenu
             id="cp-discovery"
             value={discoveryFormat}
-            onChange={(e) => setDiscoveryFormat(e.target.value as DiscoveryFormat)}
+            options={DISCOVERY_FORMAT_OPTIONS.map((o) => ({
+              value: o.value,
+              label: t(o.labelKey),
+            }))}
+            onChange={(next) => setDiscoveryFormat(next as DiscoveryFormat)}
             disabled={isEdit}
-            className="rounded-[6px] border border-hairline bg-bg-grad-a/55 px-2 py-1 text-[11.5px] text-text-2 hover:border-hairline-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
-          >
-            {DISCOVERY_FORMAT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
-            ))}
-          </select>
+            ariaLabel={t("discovery_format_label")}
+            panelLabel={t("discovery_format_label")}
+            triggerSize="tiny"
+          />
           <span className="font-mono text-[10.5px] text-text-4">{t("discovery_format_help")}</span>
         </div>
 
@@ -637,15 +640,17 @@ export function CustomProviderForm({ existing, onSaved, onCancel }: CustomProvid
 
                     {/* Pricing row */}
                     <div className="mt-2 flex flex-wrap items-center gap-2 pl-6 text-[11px] text-text-4">
-                      <select
+                      <SelectMenu
                         value={m.currency}
-                        onChange={(e) => updateModel(m.key, { currency: e.target.value })}
-                        aria-label={t("currency_label")}
-                        className="rounded-[5px] border border-hairline bg-bg-grad-a/55 px-1 py-0.5 text-[11px] text-text-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <option value="USD">$</option>
-                        <option value="CNY">&yen;</option>
-                      </select>
+                        options={[
+                          { value: "USD", label: "$" },
+                          { value: "CNY", label: "¥" },
+                        ]}
+                        onChange={(next) => updateModel(m.key, { currency: next })}
+                        ariaLabel={t("currency_label")}
+                        triggerSize="micro"
+                        minPanelWidth={72}
+                      />
                       <input
                         type="text"
                         inputMode="decimal"

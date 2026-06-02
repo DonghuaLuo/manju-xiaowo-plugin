@@ -47,6 +47,7 @@ _EXTERNAL_UPLOAD_EXTENSIONS = {
     "storyboards": frozenset({".png", ".jpg", ".jpeg", ".webp"}),
     "videos": frozenset({".mp4"}),
 }
+_CURRENT_VERSION_BACKFILL_METADATA = {"version_origin": "current_asset_backfill"}
 
 
 def get_project_manager() -> ProjectManager:
@@ -76,6 +77,35 @@ def _resolve_resource_path(
     except ValueError:
         raise HTTPException(status_code=400, detail=_t("invalid_resource_id", resource_id=resource_id))
     return current_file, relative
+
+
+def _backfill_current_version_if_needed(
+    *,
+    project_name: str,
+    resource_type: str,
+    resource_id: str,
+    version_manager: VersionManager,
+    versions_info: dict[str, Any],
+) -> dict[str, Any]:
+    """Register legacy current files that predate per-resource version tracking."""
+    if versions_info.get("current_version", 0) > 0 or resource_type not in _RESTORABLE_RESOURCE_TYPES:
+        return versions_info
+
+    project_path = get_project_manager().get_project_path(project_name)
+    current_file, _ = _resolve_resource_path(resource_type, resource_id, project_path, lambda key, **_kw: key)
+    if not current_file.is_file():
+        return versions_info
+
+    created_version = version_manager.ensure_current_tracked(
+        resource_type=resource_type,
+        resource_id=resource_id,
+        current_file=current_file,
+        prompt="",
+        **_CURRENT_VERSION_BACKFILL_METADATA,
+    )
+    if created_version is None:
+        return versions_info
+    return version_manager.get_versions(resource_type, resource_id)
 
 
 def _sync_storyboard_metadata(
@@ -475,6 +505,13 @@ async def get_versions(
         def _sync():
             vm = get_version_manager(project_name)
             versions_info = vm.get_versions(resource_type, resource_id)
+            versions_info = _backfill_current_version_if_needed(
+                project_name=project_name,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                version_manager=vm,
+                versions_info=versions_info,
+            )
             return {"resource_type": resource_type, "resource_id": resource_id, **versions_info}
 
         return await asyncio.to_thread(_sync)
