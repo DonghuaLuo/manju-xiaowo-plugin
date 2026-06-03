@@ -11,7 +11,10 @@ import {
 } from "@/utils/generation-profiles";
 import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { GenerationMode } from "@/utils/generation-mode";
-import { lookupVideoContinuitySupport } from "@/utils/provider-models";
+import {
+  lookupStoryboardVideoStartImageSupport,
+  lookupVideoContinuitySupport,
+} from "@/utils/provider-models";
 import type {
   GenerationProfiles,
   ImageGenerationProfile,
@@ -90,6 +93,12 @@ export function WizardStep2Models({
       effectiveVideoBackend &&
       !lookupVideoContinuitySupport(effectiveVideoBackend, data.customProviders).referenceImages,
   );
+  const storyboardVideoStartImageUnsupported = Boolean(
+    data &&
+      generationMode !== "reference_video" &&
+      effectiveVideoBackend &&
+      lookupStoryboardVideoStartImageSupport(effectiveVideoBackend, data.customProviders) === false,
+  );
 
   const updateImageProfile = (
     key: ImageProfileKey,
@@ -158,6 +167,7 @@ export function WizardStep2Models({
               providerNames: data.options.providerNames,
             }}
             globalDefaults={data.globalDefaults}
+            storyboardVideoStartImageUnsupported={storyboardVideoStartImageUnsupported}
           />
           {referenceVideoUnsupported ? (
             <div

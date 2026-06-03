@@ -95,6 +95,7 @@ export default {
   video_continuity_reference_images_hint: "The model can use visual references, but it cannot guarantee ending on the next storyboard.",
   video_continuity_start_only: "Start-frame only",
   video_continuity_start_only_hint: "Videos start from the current storyboard; continuity mainly comes from storyboard consistency and editing.",
+  storyboard_video_model_requires_start_image: "Storyboard and grid video flows use the current storyboard as the video start image. This model does not support start-frame input, so it may fail or drift from the current storyboard. Switch to an I2V / start-frame video model.",
   model_text_script: "Script generation model",
   model_text_overview: "Overview generation model",
   model_text_style: "Style analysis model",

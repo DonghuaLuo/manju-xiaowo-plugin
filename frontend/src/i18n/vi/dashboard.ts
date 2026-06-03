@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "Chỉ khung đầu",
   video_continuity_policy_end_frame: "Storyboard kế tiếp làm khung cuối",
   video_continuity_policy_reference_assisted: "Storyboard kế tiếp làm tham chiếu",
-  video_continuity_policy_auto_hint: "Tự chọn theo khả năng mô hình, chuyển cảnh và storyboard kế tiếp; mô hình hỗ trợ khung đầu/cuối sẽ ưu tiên dùng storyboard kế tiếp làm end_image.",
+  video_continuity_policy_auto_hint: "Tự chọn theo khả năng mô hình, chuyển cảnh và storyboard kế tiếp; ưu tiên end_image, sau đó dùng làm ảnh tham chiếu chuyển tiếp nếu hỗ trợ.",
   video_continuity_policy_start_only_hint: "Mỗi clip chỉ bắt đầu từ storyboard hiện tại; độ liền mạch chủ yếu dựa vào storyboard và dựng phim.",
   video_continuity_policy_end_frame_hint: "Dùng rõ storyboard kế tiếp làm end_image; nếu mô hình không hỗ trợ khung cuối sẽ quay về chỉ khung đầu.",
   video_continuity_policy_reference_assisted_hint: "Gửi storyboard kế tiếp làm ảnh tham chiếu; phù hợp mô hình hỗ trợ reference images nhưng không có khung cuối ổn định.",

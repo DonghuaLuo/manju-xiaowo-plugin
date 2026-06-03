@@ -126,6 +126,7 @@ export interface VideoContinuityMetadata {
   skip_reason?: string;
   provider_supports_end_image?: boolean;
   provider_supports_reference_images?: boolean;
+  provider_supports_reference_with_start_image?: boolean;
   provider_max_reference_images?: number | null;
   provider?: string;
   model?: string;
@@ -380,9 +381,12 @@ export interface VideoCapabilitiesResponse {
   supports_start_image?: boolean;
   supports_end_image?: boolean;
   supports_reference_images?: boolean;
+  supports_reference_with_start_image?: boolean;
   supports_first_frame?: boolean;
   supports_last_frame?: boolean;
-  video_continuity_capabilities?: Array<"start_image" | "end_image" | "reference_images">;
+  video_continuity_capabilities?: Array<
+    "start_image" | "end_image" | "reference_images" | "reference_images_with_start_image"
+  >;
   recommended_continuity_policy?: "end_frame" | "reference_assisted" | "start_only";
   service_tiers?: string[];
   endpoint?: string | null;

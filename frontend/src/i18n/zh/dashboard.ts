@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "仅首帧",
   video_continuity_policy_end_frame: "下一分镜作尾帧",
   video_continuity_policy_reference_assisted: "下一分镜作参考图",
-  video_continuity_policy_auto_hint: "自动根据模型能力、转场和下一张分镜决定；支持首尾帧时优先使用下一张分镜作为尾帧。",
+  video_continuity_policy_auto_hint: "自动根据模型能力、转场和下一张分镜决定；支持首尾帧时优先作尾帧，否则支持参考图时作过渡参考。",
   video_continuity_policy_start_only_hint: "每个视频只从当前分镜图开始生成，镜头衔接主要依赖分镜一致性和剪辑。",
   video_continuity_policy_end_frame_hint: "明确要求使用下一张分镜作为 end_image；若模型不支持首尾帧会回退到仅首帧。",
   video_continuity_policy_reference_assisted_hint: "明确要求把下一张分镜作为参考图；适合不支持尾帧但支持参考图的视频模型。",

@@ -91,7 +91,12 @@ _MODEL_PROFILES: dict[str, tuple[set[VideoCapability], VideoCapabilities]] = {
     "wan2.7-i2v": ({_IV, _AUDIO, _SEED}, VideoCapabilities(first_frame=True)),
     "wan2.7-r2v": (
         {_IV, _AUDIO, _SEED},
-        VideoCapabilities(first_frame=True, reference_images=True, max_reference_images=5),
+        VideoCapabilities(
+            first_frame=True,
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=5,
+        ),
     ),
 }
 

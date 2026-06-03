@@ -1064,14 +1064,15 @@ def _storyboard_path_for_item(project_path: Path, item: dict, id_field: str) -> 
     return resource_id, storyboard_file
 
 
-def _video_backend_caps(generator: Any) -> tuple[Any | None, bool, bool, str | None, str | None]:
+def _video_backend_caps(generator: Any) -> tuple[Any | None, bool, bool, bool, str | None, str | None]:
     backend = getattr(generator, "_video_backend", None)
     caps = getattr(backend, "video_capabilities", None) if backend is not None else None
     supports_end_image = bool(getattr(caps, "last_frame", False))
     supports_reference_images = bool(getattr(caps, "reference_images", False))
+    supports_reference_with_start_image = bool(getattr(caps, "reference_images_with_start_image", False))
     provider = getattr(backend, "name", None)
     model = getattr(backend, "model", None)
-    return caps, supports_end_image, supports_reference_images, provider, model
+    return caps, supports_end_image, supports_reference_images, supports_reference_with_start_image, provider, model
 
 
 def _resolve_video_end_image(
@@ -1088,13 +1089,21 @@ def _resolve_video_end_image(
     payload: dict[str, Any],
 ) -> tuple[Path | None, list[Path] | None, dict[str, Any]]:
     policy = _normalize_continuity_policy(project, payload)
-    caps, supports_end_image, supports_reference_images, provider, model = _video_backend_caps(generator)
+    (
+        caps,
+        supports_end_image,
+        supports_reference_images,
+        supports_reference_with_start_image,
+        provider,
+        model,
+    ) = _video_backend_caps(generator)
     meta: dict[str, Any] = {
         "requested_policy": policy,
         "effective_policy": "start_only",
         "start_storyboard_id": resource_id,
         "provider_supports_end_image": supports_end_image,
         "provider_supports_reference_images": supports_reference_images,
+        "provider_supports_reference_with_start_image": supports_reference_with_start_image,
     }
     max_reference_images = getattr(caps, "max_reference_images", None)
     if max_reference_images is not None:
@@ -1143,9 +1152,21 @@ def _resolve_video_end_image(
         if not supports_reference_images:
             meta["skip_reason"] = "provider_no_reference_images"
             return None, None, meta
+        if not supports_reference_with_start_image:
+            meta["skip_reason"] = "provider_no_reference_with_start_image"
+            return None, None, meta
         meta["effective_policy"] = "reference_assisted"
         meta["submitted_reference_images"] = [str(next_storyboard)]
         return None, [next_storyboard], meta
+
+    if policy == "auto" and not supports_end_image:
+        if supports_reference_images and supports_reference_with_start_image:
+            meta["effective_policy"] = "reference_assisted"
+            meta["submitted_reference_images"] = [str(next_storyboard)]
+            return None, [next_storyboard], meta
+        if supports_reference_images:
+            meta["skip_reason"] = "provider_no_reference_with_start_image"
+            return None, None, meta
 
     if not supports_end_image:
         meta["skip_reason"] = "provider_no_end_image"

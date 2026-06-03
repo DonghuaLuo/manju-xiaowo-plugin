@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "Nur Startbild",
   video_continuity_policy_end_frame: "Nächstes Storyboard als Endbild",
   video_continuity_policy_reference_assisted: "Nächstes Storyboard als Referenz",
-  video_continuity_policy_auto_hint: "Wählt automatisch nach Modellfähigkeit, Übergang und nächstem Storyboard; Start-/Endbild-Modelle nutzen das nächste Storyboard als end_image.",
+  video_continuity_policy_auto_hint: "Wählt automatisch nach Modellfähigkeit, Übergang und nächstem Storyboard; bevorzugt end_image und nutzt es sonst als Übergangsreferenz, wenn unterstützt.",
   video_continuity_policy_start_only_hint: "Jeder Clip startet nur mit dem aktuellen Storyboard; Kontinuität kommt vor allem aus Storyboard und Schnitt.",
   video_continuity_policy_end_frame_hint: "Verwendet das nächste Storyboard explizit als end_image; ohne Endbild-Unterstützung fällt es auf Nur-Startbild zurück.",
   video_continuity_policy_reference_assisted_hint: "Sendet das nächste Storyboard explizit als Referenzbild für Modelle mit Referenzbild-Unterstützung.",

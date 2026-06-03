@@ -17,7 +17,9 @@ import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import {
   getProviderModels,
   getCustomProviderModels,
+  lookupStoryboardVideoStartImageSupport,
   lookupVideoContinuitySupport,
+  storyboardVideoStartImageSupportFromCapabilities,
   videoContinuitySupportFromCapabilities,
 } from "@/utils/provider-models";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
@@ -632,6 +634,17 @@ export function ProjectSettingsPage() {
     }
     return lookupVideoContinuitySupport(effectiveVideoBackendForContinuity, customProviders);
   }, [customProviders, effectiveVideoBackendForContinuity, videoCapabilities]);
+  const storyboardVideoStartImageUnsupported = useMemo(() => {
+    if (generationMode === "reference_video" || !effectiveVideoBackendForContinuity) return false;
+    const capsBackend = videoCapabilities
+      ? `${videoCapabilities.provider_id}/${videoCapabilities.model}`
+      : "";
+    const capsStartImageSupport = storyboardVideoStartImageSupportFromCapabilities(videoCapabilities);
+    if (capsStartImageSupport !== null && capsBackend === effectiveVideoBackendForContinuity) {
+      return capsStartImageSupport === false;
+    }
+    return lookupStoryboardVideoStartImageSupport(effectiveVideoBackendForContinuity, customProviders) === false;
+  }, [customProviders, effectiveVideoBackendForContinuity, generationMode, videoCapabilities]);
 
   const updateImageProfile = (
     key: ImageProfileKey,
@@ -1114,6 +1127,7 @@ export function ProjectSettingsPage() {
                     textStyle: globalDefaults.textStyle ?? "",
                   }}
                   videoContinuitySupport={videoContinuitySupport}
+                  storyboardVideoStartImageUnsupported={storyboardVideoStartImageUnsupported}
                 />
                 <div className="mt-4 rounded-[10px] border border-hairline-soft bg-bg-grad-a/35 p-3">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -1230,6 +1244,11 @@ export function ProjectSettingsPage() {
                       const tierProfile = normalizedShotTierProfiles[tier];
                       const storyboardOverride = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
                       const videoOverride = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+                      const tierVideoStartImageUnsupported = Boolean(
+                        generationMode !== "reference_video" &&
+                          videoOverride.video_backend &&
+                          lookupStoryboardVideoStartImageSupport(videoOverride.video_backend, customProviders) === false,
+                      );
                       return (
                         <div
                           key={tier}
@@ -1373,6 +1392,17 @@ export function ProjectSettingsPage() {
                                 panelLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
                                 className={PROFILE_INPUT_CLS}
                               />
+                              {tierVideoStartImageUnsupported && (
+                                <span
+                                  role="status"
+                                  className="mt-1.5 block text-[11.5px] leading-[1.45] text-warm"
+                                >
+                                  {t("templates:storyboard_video_model_requires_start_image", {
+                                    defaultValue:
+                                      "当前图生视频 / 宫格生视频流程会用当前分镜作为视频起始图。此模型不支持首帧输入，可能失败或偏离当前分镜，请切换到支持 I2V / 首帧的视频模型。",
+                                  })}
+                                </span>
+                              )}
                             </label>
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">

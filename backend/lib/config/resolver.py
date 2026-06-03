@@ -151,7 +151,7 @@ def _video_capability_fields(capabilities: list[str]) -> dict[str, object]:
 def _recommended_video_continuity_policy(caps: VideoCapabilities) -> str:
     if caps.last_frame:
         return "end_frame"
-    if caps.reference_images:
+    if caps.reference_images_with_start_image:
         return "reference_assisted"
     return "start_only"
 
@@ -164,10 +164,13 @@ def _video_continuity_fields(caps: VideoCapabilities) -> dict[str, object]:
         capabilities.append("end_image")
     if caps.reference_images:
         capabilities.append("reference_images")
+    if caps.reference_images_with_start_image:
+        capabilities.append("reference_images_with_start_image")
     return {
         "supports_start_image": caps.first_frame,
         "supports_end_image": caps.last_frame,
         "supports_reference_images": caps.reference_images,
+        "supports_reference_with_start_image": caps.reference_images_with_start_image,
         # Keep raw first/last frame names too, so API consumers can match provider docs directly.
         "supports_first_frame": caps.first_frame,
         "supports_last_frame": caps.last_frame,
@@ -199,7 +202,11 @@ def _video_caps_for_endpoint(
 
         return DashScopeVideoBackend.video_capabilities_for_model(model_id)
     if endpoint_key == "openai-video":
-        return VideoCapabilities(reference_images=True, max_reference_images=1)
+        return VideoCapabilities(
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=1,
+        )
     if endpoint_key == "newapi-video":
         return VideoCapabilities(reference_images=False, max_reference_images=0)
     return VideoCapabilities(
@@ -210,7 +217,12 @@ def _video_caps_for_endpoint(
 
 def _video_caps_for_provider(provider_id: str, model_id: str) -> VideoCapabilities | None:
     if provider_id in {"gemini-aistudio", "gemini-vertex"}:
-        return VideoCapabilities(last_frame=True, reference_images=True, max_reference_images=3)
+        return VideoCapabilities(
+            last_frame=True,
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=3,
+        )
     if provider_id in {"ark", "ark-agent-plan"}:
         from lib.video_backends.ark import ArkVideoBackend
 
@@ -224,9 +236,17 @@ def _video_caps_for_provider(provider_id: str, model_id: str) -> VideoCapabiliti
 
         return DashScopeVideoBackend.video_capabilities_for_model(model_id)
     if provider_id == "openai":
-        return VideoCapabilities(reference_images=True, max_reference_images=1)
+        return VideoCapabilities(
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=1,
+        )
     if provider_id == "grok":
-        return VideoCapabilities(reference_images=True, max_reference_images=7)
+        return VideoCapabilities(
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=7,
+        )
     if provider_id == "newapi":
         return VideoCapabilities(reference_images=False, max_reference_images=0)
     return None

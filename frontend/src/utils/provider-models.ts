@@ -148,11 +148,24 @@ export type VideoContinuityCapability = "end_frame" | "reference_images" | "star
 export interface VideoContinuitySupport {
   endFrame: boolean;
   referenceImages: boolean;
+  referenceWithStartImage: boolean;
 }
 
 const VIDU_START_END_MODELS = new Set([
   "viduq3-turbo",
   "viduq3-pro",
+  "viduq2-pro-fast",
+  "viduq2-pro",
+  "viduq2-turbo",
+  "viduq1",
+  "viduq1-classic",
+  "vidu2.0",
+]);
+
+const VIDU_START_IMAGE_MODELS = new Set([
+  "viduq3-turbo",
+  "viduq3-pro",
+  "viduq3-pro-fast",
   "viduq2-pro-fast",
   "viduq2-pro",
   "viduq2-turbo",
@@ -171,11 +184,44 @@ const VIDU_REFERENCE_MODELS = new Set([
   "vidu2.0",
 ]);
 
+function videoContinuitySupport(
+  support: Partial<VideoContinuitySupport> = {},
+): VideoContinuitySupport {
+  const referenceImages = Boolean(support.referenceImages);
+  return {
+    endFrame: Boolean(support.endFrame),
+    referenceImages,
+    referenceWithStartImage: Boolean(referenceImages && support.referenceWithStartImage),
+  };
+}
+
+function dashscopeR2vSupportsStartReference(modelId: string): boolean {
+  return modelId.includes("wan") && modelId.includes("r2v");
+}
+
+function dashscopeSupportsStartImage(modelId: string): boolean {
+  if (modelId.includes("i2v")) return true;
+  if (modelId.includes("r2v")) return dashscopeR2vSupportsStartReference(modelId);
+  if (modelId.includes("t2v")) return false;
+  return true;
+}
+
+function lookupCustomEndpoint(
+  providerId: string,
+  modelId: string,
+  customProviders?: CustomProviderInfo[],
+): string {
+  if (!providerId.startsWith(CUSTOM_PREFIX) || !customProviders) return "";
+  const dbId = parseInt(providerId.slice(CUSTOM_PREFIX.length), 10);
+  const cp = customProviders.find((p) => p.id === dbId);
+  return cp?.models?.find((m) => m.model_id.toLowerCase() === modelId)?.endpoint.toLowerCase() ?? "";
+}
+
 export function capabilityFromVideoContinuitySupport(
   support: VideoContinuitySupport,
 ): VideoContinuityCapability {
   if (support.endFrame) return "end_frame";
-  if (support.referenceImages) return "reference_images";
+  if (support.referenceImages && support.referenceWithStartImage) return "reference_images";
   return "start_only";
 }
 
@@ -185,6 +231,7 @@ export function videoContinuitySupportFromCapabilities(
         supports_end_image?: boolean;
         supports_last_frame?: boolean;
         supports_reference_images?: boolean;
+        supports_reference_with_start_image?: boolean;
         video_continuity_capabilities?: string[];
       }
     | null
@@ -192,10 +239,16 @@ export function videoContinuitySupportFromCapabilities(
 ): VideoContinuitySupport | null {
   if (!caps) return null;
   const rawCapabilities = caps.video_continuity_capabilities ?? [];
-  return {
+  const referenceImages = Boolean(caps.supports_reference_images || rawCapabilities.includes("reference_images"));
+  return videoContinuitySupport({
     endFrame: Boolean(caps.supports_end_image || caps.supports_last_frame || rawCapabilities.includes("end_image")),
-    referenceImages: Boolean(caps.supports_reference_images || rawCapabilities.includes("reference_images")),
-  };
+    referenceImages,
+    referenceWithStartImage: Boolean(
+      referenceImages &&
+        (caps.supports_reference_with_start_image ||
+          rawCapabilities.includes("reference_images_with_start_image")),
+    ),
+  });
 }
 
 /** Conservative UI hint for storyboard-video continuity. Backend capability checks remain authoritative. */
@@ -204,42 +257,144 @@ export function lookupVideoContinuitySupport(
   customProviders?: CustomProviderInfo[],
 ): VideoContinuitySupport {
   const slashIdx = backend.indexOf("/");
-  if (slashIdx === -1) return { endFrame: false, referenceImages: false };
+  if (slashIdx === -1) return videoContinuitySupport();
   const providerId = backend.slice(0, slashIdx).toLowerCase();
   const modelId = backend.slice(slashIdx + 1).toLowerCase();
 
   if (providerId.startsWith(CUSTOM_PREFIX) && customProviders) {
-    const dbId = parseInt(providerId.slice(CUSTOM_PREFIX.length), 10);
-    const cp = customProviders.find((p) => p.id === dbId);
-    const endpoint = cp?.models?.find((m) => m.model_id.toLowerCase() === modelId)?.endpoint ?? "";
-    if (endpoint === "v2-video-generations") return { endFrame: true, referenceImages: false };
-    if (endpoint.includes("openai") || endpoint.includes("grok")) return { endFrame: false, referenceImages: true };
-    if (endpoint.includes("dashscope") && modelId.includes("r2v")) return { endFrame: false, referenceImages: true };
-    return { endFrame: false, referenceImages: false };
+    const endpoint = lookupCustomEndpoint(providerId, modelId, customProviders);
+    if (endpoint === "v2-video-generations") {
+      return videoContinuitySupport({ endFrame: true, referenceImages: true, referenceWithStartImage: true });
+    }
+    if (endpoint.includes("openai") || endpoint.includes("grok")) {
+      return videoContinuitySupport({ referenceImages: true, referenceWithStartImage: true });
+    }
+    if (endpoint.includes("dashscope") && modelId.includes("r2v")) {
+      return videoContinuitySupport({
+        referenceImages: true,
+        referenceWithStartImage: dashscopeR2vSupportsStartReference(modelId),
+      });
+    }
+    return videoContinuitySupport();
   }
 
   if ((providerId === "gemini-aistudio" || providerId === "gemini-vertex") && modelId.startsWith("veo-3.1")) {
-    return { endFrame: true, referenceImages: false };
+    return videoContinuitySupport({ endFrame: true, referenceImages: true, referenceWithStartImage: true });
   }
   if (providerId === "ark") {
-    if (modelId.includes("seedance-2")) return { endFrame: true, referenceImages: true };
-    if (modelId.includes("seedance-1-5-pro")) return { endFrame: true, referenceImages: false };
-    if (modelId.includes("seedance-1-0-pro") && !modelId.includes("fast")) {
-      return { endFrame: true, referenceImages: false };
+    if (modelId.includes("seedance-2")) {
+      return videoContinuitySupport({ endFrame: true, referenceImages: true, referenceWithStartImage: true });
     }
-    return { endFrame: false, referenceImages: false };
+    if (modelId.includes("seedance-1-5-pro")) return videoContinuitySupport({ endFrame: true });
+    if (modelId.includes("seedance-1-0-pro") && !modelId.includes("fast")) {
+      return videoContinuitySupport({ endFrame: true });
+    }
+    return videoContinuitySupport();
   }
   if (providerId === "vidu") {
-    return {
+    return videoContinuitySupport({
       endFrame: VIDU_START_END_MODELS.has(modelId),
       referenceImages: VIDU_REFERENCE_MODELS.has(modelId),
-    };
+    });
   }
-  if (providerId === "v2-video-generations") return { endFrame: true, referenceImages: false };
-  if (providerId === "openai" && modelId.startsWith("sora")) return { endFrame: false, referenceImages: true };
-  if (providerId === "grok") return { endFrame: false, referenceImages: true };
-  if (providerId === "dashscope" && modelId.includes("r2v")) return { endFrame: false, referenceImages: true };
-  return { endFrame: false, referenceImages: false };
+  if (providerId === "v2-video-generations") {
+    return videoContinuitySupport({ endFrame: true, referenceImages: true, referenceWithStartImage: true });
+  }
+  if (providerId === "openai" && modelId.startsWith("sora")) {
+    return videoContinuitySupport({ referenceImages: true, referenceWithStartImage: true });
+  }
+  if (providerId === "grok") {
+    return videoContinuitySupport({ referenceImages: true, referenceWithStartImage: true });
+  }
+  if (providerId === "dashscope" && modelId.includes("r2v")) {
+    return videoContinuitySupport({
+      referenceImages: true,
+      referenceWithStartImage: dashscopeR2vSupportsStartReference(modelId),
+    });
+  }
+  return videoContinuitySupport();
+}
+
+export function storyboardVideoStartImageSupportFromCapabilities(
+  caps:
+    | {
+        supports_start_image?: boolean;
+        supports_first_frame?: boolean;
+        supports_end_image?: boolean;
+        supports_last_frame?: boolean;
+        supports_reference_with_start_image?: boolean;
+        video_continuity_capabilities?: string[];
+      }
+    | null
+    | undefined,
+): boolean | null {
+  if (!caps) return null;
+  const rawCapabilities = caps.video_continuity_capabilities ?? [];
+  if (
+    caps.supports_start_image ||
+    caps.supports_first_frame ||
+    caps.supports_end_image ||
+    caps.supports_last_frame ||
+    caps.supports_reference_with_start_image ||
+    rawCapabilities.includes("start_image") ||
+    rawCapabilities.includes("end_image") ||
+    rawCapabilities.includes("reference_images_with_start_image")
+  ) {
+    return true;
+  }
+  if (
+    "supports_start_image" in caps ||
+    "supports_first_frame" in caps ||
+    rawCapabilities.length > 0
+  ) {
+    return false;
+  }
+  return null;
+}
+
+export function lookupStoryboardVideoStartImageSupport(
+  backend: string,
+  customProviders?: CustomProviderInfo[],
+): boolean | null {
+  const slashIdx = backend.indexOf("/");
+  if (slashIdx === -1) return null;
+  const providerId = backend.slice(0, slashIdx).toLowerCase();
+  const modelId = backend.slice(slashIdx + 1).toLowerCase();
+
+  if (providerId.startsWith(CUSTOM_PREFIX)) {
+    const endpoint = lookupCustomEndpoint(providerId, modelId, customProviders);
+    if (!endpoint) return null;
+    if (
+      endpoint === "openai-video" ||
+      endpoint === "newapi-video" ||
+      endpoint === "v2-video-generations" ||
+      endpoint === "ark-seedance"
+    ) {
+      return true;
+    }
+    if (endpoint === "vidu-video" || endpoint.includes("vidu")) {
+      return VIDU_START_IMAGE_MODELS.has(modelId);
+    }
+    if (endpoint === "dashscope-async-video" || endpoint.includes("dashscope")) {
+      return dashscopeSupportsStartImage(modelId);
+    }
+    return null;
+  }
+
+  if (providerId === "vidu") return VIDU_START_IMAGE_MODELS.has(modelId);
+  if (providerId === "dashscope") return dashscopeSupportsStartImage(modelId);
+  if (
+    providerId === "gemini-aistudio" ||
+    providerId === "gemini-vertex" ||
+    providerId === "ark" ||
+    providerId === "v2-video-generations" ||
+    providerId === "openai" ||
+    providerId === "grok" ||
+    providerId === "newapi"
+  ) {
+    return true;
+  }
+  return null;
 }
 
 export function lookupVideoContinuityCapability(

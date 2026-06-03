@@ -415,7 +415,7 @@ export default {
   video_continuity_policy_start_only: "Start frame only",
   video_continuity_policy_end_frame: "Next storyboard as end frame",
   video_continuity_policy_reference_assisted: "Next storyboard as reference",
-  video_continuity_policy_auto_hint: "Automatically chooses from model capability, transition, and the next storyboard; start/end-frame models prefer the next storyboard as end_image.",
+  video_continuity_policy_auto_hint: "Automatically chooses from model capability, transition, and the next storyboard; prefers end_image, then uses it as a transition reference when supported.",
   video_continuity_policy_start_only_hint: "Each clip starts only from the current storyboard; continuity mainly comes from storyboard consistency and editing.",
   video_continuity_policy_end_frame_hint: "Explicitly uses the next storyboard as end_image; falls back to start-only if the model cannot use an end frame.",
   video_continuity_policy_reference_assisted_hint: "Explicitly sends the next storyboard as a reference image for models with reference-image support but no reliable end frame.",

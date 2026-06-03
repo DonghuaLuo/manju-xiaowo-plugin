@@ -107,7 +107,12 @@ class GeminiVideoBackend:
 
     @property
     def video_capabilities(self) -> VideoCapabilities:
-        return VideoCapabilities(last_frame=True, reference_images=True, max_reference_images=3)
+        return VideoCapabilities(
+            last_frame=True,
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=3,
+        )
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         """生成视频。任务创建和轮询阶段分离重试，避免瞬态错误导致重建任务。"""

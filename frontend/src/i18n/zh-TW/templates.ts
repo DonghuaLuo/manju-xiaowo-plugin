@@ -95,6 +95,7 @@ export default {
   video_continuity_reference_images_hint: "可參考角色或場景圖，但不能保證影片準確停在下一張分鏡。",
   video_continuity_start_only: "僅首幀生成",
   video_continuity_start_only_hint: "從目前分鏡圖開始生成，鏡頭之間主要依賴分鏡一致性與剪輯銜接。",
+  storyboard_video_model_requires_start_image: "目前圖生影片 / 宮格生影片流程會用目前分鏡作為影片起始圖。此模型不支援首幀輸入，可能失敗或偏離目前分鏡，請切換到支援 I2V / 首幀的影片模型。",
   model_text_script: "劇本生成模型",
   model_text_overview: "概述生成模型",
   model_text_style: "風格分析模型",

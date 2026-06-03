@@ -56,7 +56,11 @@ class GrokVideoBackend:
 
     @property
     def video_capabilities(self) -> VideoCapabilities:
-        return VideoCapabilities(reference_images=True, max_reference_images=7)
+        return VideoCapabilities(
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=7,
+        )
 
     async def resume_video(self, job_id: str, request: VideoGenerationRequest) -> VideoGenerationResult:
         # Grok 同步型 API，无 job_id 可接续；orphan handler 据 NotImplementedError 标 [resume_unsupported]

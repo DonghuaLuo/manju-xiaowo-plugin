@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "開始フレームのみ",
   video_continuity_policy_end_frame: "次の絵コンテを終了フレームにする",
   video_continuity_policy_reference_assisted: "次の絵コンテを参照画像にする",
-  video_continuity_policy_auto_hint: "モデル能力、トランジション、次の絵コンテから自動選択します。開始/終了フレーム対応モデルでは次の絵コンテを end_image として優先します。",
+  video_continuity_policy_auto_hint: "モデル能力、トランジション、次の絵コンテから自動選択します。end_image を優先し、対応時は遷移用の参照画像として使います。",
   video_continuity_policy_start_only_hint: "各クリップは現在の絵コンテからのみ開始します。連続性は主に絵コンテの一貫性と編集で担保します。",
   video_continuity_policy_end_frame_hint: "次の絵コンテを明示的に end_image として使います。終了フレーム非対応モデルでは開始フレームのみへ戻ります。",
   video_continuity_policy_reference_assisted_hint: "参照画像対応モデル向けに、次の絵コンテを参照画像として明示的に送ります。",

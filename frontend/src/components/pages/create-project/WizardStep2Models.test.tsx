@@ -65,6 +65,19 @@ const generationProfileProps = {
   onVideoContinuityPolicyChange: vi.fn(),
 };
 
+const startImageUnsupportedData = {
+  ...mockData,
+  options: {
+    ...mockData.options,
+    video: ["dashscope/happyhorse-1.0-r2v"],
+    providerNames: { dashscope: "DashScope" },
+  },
+  globalDefaults: {
+    ...mockData.globalDefaults,
+    video: "dashscope/happyhorse-1.0-r2v",
+  },
+} as unknown as WizardStep2Data;
+
 describe("WizardStep2Models", () => {
   it("shows loading state when data is null and no error", () => {
     render(
@@ -157,6 +170,28 @@ describe("WizardStep2Models", () => {
     expect(next).toBeDisabled();
     fireEvent.click(next);
     expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it("warns storyboard and grid modes when the selected video model cannot use the current storyboard as start image", () => {
+    const onNext = vi.fn();
+    render(
+      <WizardStep2Models
+        value={baseValue}
+        onChange={() => {}}
+        {...generationProfileProps}
+        generationMode="storyboard"
+        onBack={() => {}}
+        onNext={onNext}
+        onCancel={() => {}}
+        data={startImageUnsupportedData}
+        error={null}
+      />,
+    );
+    expect(screen.getByText(/当前图生视频|Storyboard and grid video flows/i)).toBeInTheDocument();
+    const next = screen.getByRole("button", { name: /下一步|Next/i });
+    expect(next).not.toBeDisabled();
+    fireEvent.click(next);
+    expect(onNext).toHaveBeenCalledOnce();
   });
 
   it("calls onCancel when cancel button is clicked", () => {

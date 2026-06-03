@@ -95,6 +95,7 @@ export default {
   video_continuity_reference_images_hint: "可参考角色或场景图，但不能保证视频准确停在下一张分镜。",
   video_continuity_start_only: "仅首帧生成",
   video_continuity_start_only_hint: "从当前分镜图开始生成，镜头之间主要依赖分镜一致性和剪辑衔接。",
+  storyboard_video_model_requires_start_image: "当前图生视频 / 宫格生视频流程会用当前分镜作为视频起始图。此模型不支持首帧输入，可能失败或偏离当前分镜，请切换到支持 I2V / 首帧的视频模型。",
   model_text_script: "剧本生成模型",
   model_text_overview: "概述生成模型",
   model_text_style: "风格分析模型",

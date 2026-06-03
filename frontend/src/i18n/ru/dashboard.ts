@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "Только первый кадр",
   video_continuity_policy_end_frame: "Следующая раскадровка как финальный кадр",
   video_continuity_policy_reference_assisted: "Следующая раскадровка как референс",
-  video_continuity_policy_auto_hint: "Автоматически выбирает по возможностям модели, переходу и следующей раскадровке; модели с первым/последним кадром используют следующую раскадровку как end_image.",
+  video_continuity_policy_auto_hint: "Выбирает по возможностям модели, переходу и следующей раскадровке; сначала end_image, затем переходный референс, если поддерживается.",
   video_continuity_policy_start_only_hint: "Каждый клип начинается только с текущей раскадровки; связность в основном зависит от раскадровки и монтажа.",
   video_continuity_policy_end_frame_hint: "Явно использует следующую раскадровку как end_image; если модель не поддерживает последний кадр, будет только первый кадр.",
   video_continuity_policy_reference_assisted_hint: "Явно отправляет следующую раскадровку как референс; полезно для моделей с reference images без надежного последнего кадра.",

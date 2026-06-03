@@ -249,10 +249,17 @@ def _external_video_continuity_reference(
         meta["effective_policy"] = "reference_assisted"
         meta["external_suggested_use"] = "reference_image"
         description = "外部生成时可作为下一镜头参考图，用于保持前后镜头过渡一致"
-    else:
+    elif policy == "end_frame":
         meta["effective_policy"] = "end_frame"
         meta["external_suggested_use"] = "end_image"
         description = "外部生成时建议作为 end_image / last_frame 使用，用于衔接下一镜头"
+    else:
+        meta["effective_policy"] = "auto"
+        meta["external_suggested_use"] = "end_image_or_reference_image"
+        description = (
+            "外部生成时按所选模型能力使用：支持 end_image / last_frame 的模型请作为尾帧；"
+            "仅支持参考图且能同时保留首帧的模型请作为过渡参考；不支持则忽略"
+        )
 
     return (
         {

@@ -94,7 +94,11 @@ class OpenAIVideoBackend:
 
     @property
     def video_capabilities(self) -> VideoCapabilities:
-        return VideoCapabilities(reference_images=True, max_reference_images=1)
+        return VideoCapabilities(
+            reference_images=True,
+            reference_images_with_start_image=True,
+            max_reference_images=1,
+        )
 
     async def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         kwargs: dict = {

@@ -75,7 +75,11 @@ export function resolveExpectedShotVideoContinuity({
   nextSegment?: Segment;
 }): ShotVideoContinuityPlan {
   const requestedPolicy = normalizeVideoContinuityPolicy(policy);
-  const capabilities = support ?? { endFrame: false, referenceImages: false };
+  const capabilities = support ?? {
+    endFrame: false,
+    referenceImages: false,
+    referenceWithStartImage: false,
+  };
 
   const startOnly = (reason?: string): ShotVideoContinuityPlan => ({
     requestedPolicy,
@@ -101,14 +105,17 @@ export function resolveExpectedShotVideoContinuity({
     if (capabilities.endFrame) {
       return { requestedPolicy, effectivePolicy: "end_frame", nextStoryboardId };
     }
+    if (capabilities.referenceImages && capabilities.referenceWithStartImage) {
+      return { requestedPolicy, effectivePolicy: "reference_assisted", nextStoryboardId };
+    }
+    if (capabilities.referenceImages) return startOnly("provider_no_reference_with_start_image");
     return startOnly("provider_no_end_image");
   }
 
   if (requestedPolicy === "reference_assisted") {
-    if (capabilities.referenceImages) {
-      return { requestedPolicy, effectivePolicy: "reference_assisted", nextStoryboardId };
-    }
-    return startOnly("provider_no_reference_images");
+    if (!capabilities.referenceImages) return startOnly("provider_no_reference_images");
+    if (!capabilities.referenceWithStartImage) return startOnly("provider_no_reference_with_start_image");
+    return { requestedPolicy, effectivePolicy: "reference_assisted", nextStoryboardId };
   }
 
   if (capabilities.endFrame) {

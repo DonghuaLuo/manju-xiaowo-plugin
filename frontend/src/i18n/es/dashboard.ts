@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "Solo fotograma inicial",
   video_continuity_policy_end_frame: "Siguiente storyboard como fotograma final",
   video_continuity_policy_reference_assisted: "Siguiente storyboard como referencia",
-  video_continuity_policy_auto_hint: "Elige automáticamente según la capacidad del modelo, la transición y el siguiente storyboard; los modelos con fotograma inicial/final usan el siguiente storyboard como end_image.",
+  video_continuity_policy_auto_hint: "Elige según capacidad del modelo, transición y siguiente storyboard; prioriza end_image y, si se admite, lo usa como referencia de transición.",
   video_continuity_policy_start_only_hint: "Cada clip empieza solo desde el storyboard actual; la continuidad depende sobre todo del storyboard y la edición.",
   video_continuity_policy_end_frame_hint: "Usa explícitamente el siguiente storyboard como end_image; si el modelo no admite fotograma final, vuelve a solo inicio.",
   video_continuity_policy_reference_assisted_hint: "Envía explícitamente el siguiente storyboard como imagen de referencia para modelos con soporte de referencias.",

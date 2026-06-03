@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "첫 프레임만",
   video_continuity_policy_end_frame: "다음 스토리보드를 끝 프레임으로 사용",
   video_continuity_policy_reference_assisted: "다음 스토리보드를 참조 이미지로 사용",
-  video_continuity_policy_auto_hint: "모델 능력, 전환, 다음 스토리보드에 따라 자동 선택합니다. 첫/끝 프레임 지원 모델은 다음 스토리보드를 end_image로 우선 사용합니다.",
+  video_continuity_policy_auto_hint: "모델 능력, 전환, 다음 스토리보드에 따라 자동 선택합니다. end_image를 우선하고, 지원되면 전환 참고 이미지로 사용합니다.",
   video_continuity_policy_start_only_hint: "각 클립은 현재 스토리보드에서만 시작합니다. 연속성은 주로 스토리보드 일관성과 편집에 의존합니다.",
   video_continuity_policy_end_frame_hint: "다음 스토리보드를 명시적으로 end_image로 사용합니다. 끝 프레임 미지원 모델은 첫 프레임만 사용합니다.",
   video_continuity_policy_reference_assisted_hint: "참조 이미지 지원 모델에 다음 스토리보드를 참조 이미지로 명시적으로 전달합니다.",

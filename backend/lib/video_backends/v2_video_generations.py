@@ -296,6 +296,7 @@ class V2VideoGenerationsBackend:
             first_frame=True,
             last_frame=True,
             reference_images=True,
+            reference_images_with_start_image=True,
             max_reference_images=_DEFAULT_MAX_REFERENCE_IMAGES,
         )
 

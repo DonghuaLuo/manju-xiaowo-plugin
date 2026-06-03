@@ -252,6 +252,7 @@ class VideoCapabilities:
     first_frame: bool = True
     last_frame: bool = False
     reference_images: bool = False
+    reference_images_with_start_image: bool = False
     max_reference_images: int = 0
 
 

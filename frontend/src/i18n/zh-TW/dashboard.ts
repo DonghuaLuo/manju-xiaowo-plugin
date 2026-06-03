@@ -417,7 +417,7 @@ export default {
   video_continuity_policy_start_only: "僅首幀",
   video_continuity_policy_end_frame: "下一分鏡作尾幀",
   video_continuity_policy_reference_assisted: "下一分鏡作參考圖",
-  video_continuity_policy_auto_hint: "自動根據模型能力、轉場與下一張分鏡決定；支援首尾幀時優先使用下一張分鏡作尾幀。",
+  video_continuity_policy_auto_hint: "自動根據模型能力、轉場與下一張分鏡決定；支援首尾幀時優先作尾幀，否則支援參考圖時作過渡參考。",
   video_continuity_policy_start_only_hint: "每段影片只從目前分鏡圖開始生成，鏡頭銜接主要依賴分鏡一致性與剪輯。",
   video_continuity_policy_end_frame_hint: "明確要求使用下一張分鏡作 end_image；若模型不支援首尾幀會回退到僅首幀。",
   video_continuity_policy_reference_assisted_hint: "明確要求把下一張分鏡作參考圖；適合不支援尾幀但支援參考圖的影片模型。",

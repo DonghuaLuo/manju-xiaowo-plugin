@@ -1,5 +1,6 @@
 import { useEffect, useMemo, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
+import { AlertTriangle } from "lucide-react";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
 import {
   lookupSupportedDurations,
@@ -57,6 +58,7 @@ export interface ModelConfigSectionProps {
     duration?: boolean;
   };
   videoContinuitySupport?: VideoContinuitySupport | null;
+  storyboardVideoStartImageUnsupported?: boolean;
 }
 
 interface ChannelCardProps {
@@ -88,6 +90,7 @@ export function ModelConfigSection({
   globalDefaults,
   enable,
   videoContinuitySupport,
+  storyboardVideoStartImageUnsupported = false,
 }: ModelConfigSectionProps) {
   const { t } = useTranslation("templates");
 
@@ -191,6 +194,20 @@ export function ModelConfigSection({
               <div className="mt-1 text-[11.5px] leading-[1.45] text-text-4">
                 {t(`video_continuity_${videoContinuityCapability}_hint`)}
               </div>
+            </div>
+          )}
+          {storyboardVideoStartImageUnsupported && (
+            <div
+              role="status"
+              className="mt-2 flex gap-2 rounded-[8px] border border-warm/35 bg-warm/10 px-3 py-2 text-[12px] leading-[1.5] text-warm"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>
+                {t("storyboard_video_model_requires_start_image", {
+                  defaultValue:
+                    "当前图生视频 / 宫格生视频流程会用当前分镜作为视频起始图。此模型不支持首帧输入，可能失败或偏离当前分镜，请切换到支持 I2V / 首帧的视频模型。",
+                })}
+              </span>
             </div>
           )}
 
