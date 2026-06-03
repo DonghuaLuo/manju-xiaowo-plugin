@@ -99,10 +99,12 @@ function ReferenceImageStrip({
   references,
   projectName,
   refreshKey,
+  onPreview,
 }: {
   references: ReferenceImage[];
   projectName: string;
   refreshKey: number;
+  onPreview: (preview: { src: string; path: string; alt: string }) => void;
 }) {
   const fingerprints = useProjectsStore((s) => s.assetFingerprints);
   return (
@@ -110,6 +112,7 @@ function ReferenceImageStrip({
       {references.map((ref, idx) => {
         const isChar = ref.ref_type === "character";
         const cacheBust = fingerprints[ref.path] ?? refreshKey;
+        const imageUrl = API.getFileUrl(projectName, ref.path, cacheBust);
         return (
           <motion.div
             key={ref.path}
@@ -118,19 +121,22 @@ function ReferenceImageStrip({
             transition={{ delay: idx * 0.05, duration: 0.2 }}
             className="group flex w-14 shrink-0 flex-col items-center gap-1"
           >
-            <div
-              className={`w-full overflow-hidden rounded border bg-gray-900/50 transition-all duration-200 ${
+            <button
+              type="button"
+              onClick={() => onPreview({ src: imageUrl, path: ref.path, alt: ref.name })}
+              aria-label={`${ref.name} 全屏预览`}
+              className={`w-full cursor-zoom-in overflow-hidden rounded border bg-gray-900/50 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60 ${
                 isChar
                   ? "border-amber-800/30 group-hover:border-amber-500/50"
                   : "border-sky-800/30 group-hover:border-sky-500/50"
               }`}
             >
               <img
-                src={API.getFileUrl(projectName, ref.path, cacheBust)}
+                src={imageUrl}
                 alt={ref.name}
                 className="block aspect-square w-full object-cover transition-transform duration-200 group-hover:scale-105"
               />
-            </div>
+            </button>
             <div className="flex max-w-full items-center gap-0.5">
               {isChar ? (
                 <User className="h-2 w-2 shrink-0 text-amber-500/50" />
@@ -170,7 +176,7 @@ export function GridPreviewPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
-  const [previewImage, setPreviewImage] = useState<{ src: string; path: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; path: string; alt: string } | null>(null);
   const { t } = useTranslation("dashboard");
 
   const hasGrids = gridIds.length > 0;
@@ -224,9 +230,8 @@ export function GridPreviewPanel({
 
   // 优先使用持久化的 mtime 指纹做 cache-bust，跨页面刷新仍然有效；
   // 回退到 refreshKey 仅用于指纹尚未送达前的当次会话。
-  const gridFp = useProjectsStore((s) =>
-    grid?.grid_image_path ? (s.assetFingerprints[grid.grid_image_path] ?? null) : null,
-  );
+  const assetFingerprints = useProjectsStore((s) => s.assetFingerprints);
+  const gridFp = grid?.grid_image_path ? (assetFingerprints[grid.grid_image_path] ?? null) : null;
   const imageUrl =
     grid?.grid_image_path
       ? API.getFileUrl(projectName, grid.grid_image_path, gridFp ?? refreshKey)
@@ -234,6 +239,21 @@ export function GridPreviewPanel({
   const displayedGridError = summarizeUserFacingError(t, grid?.error_message);
 
   const refs = grid?.reference_images ?? [];
+  const mosaicCells = grid
+    ? Array.from({ length: Math.max(grid.rows * grid.cols, grid.cell_count, grid.frame_chain.length) }, (_, idx) => {
+        const byIndex = grid.frame_chain.find((cell) => cell.index === idx);
+        return byIndex ?? {
+          index: idx,
+          row: Math.floor(idx / Math.max(1, grid.cols)),
+          col: idx % Math.max(1, grid.cols),
+          frame_type: "placeholder" as const,
+          prev_scene_id: null,
+          next_scene_id: null,
+          image_path: null,
+        };
+      })
+    : [];
+  const hasMosaicImages = mosaicCells.some((cell) => Boolean(cell.image_path));
 
   return (
     <div>
@@ -365,14 +385,100 @@ export function GridPreviewPanel({
                     </motion.button>
                   </div>
 
-                  {/* Composite image + metadata */}
-                  {imageUrl ? (
+                  {/* Current storyboard mosaic + original grid fallback */}
+                  {hasMosaicImages && grid ? (
+                    <div className="overflow-hidden rounded-md border border-gray-800/50 bg-gray-900/40">
+                      <div
+                        className="grid gap-1.5 p-1.5"
+                        style={{
+                          gridTemplateColumns: `repeat(${Math.max(1, grid.cols)}, minmax(0, 1fr))`,
+                        }}
+                        role="group"
+                        aria-label={t("grid_storyboard_mosaic_alt", {
+                          defaultValue: "宫格切片分镜预览",
+                        })}
+                      >
+                        {mosaicCells.map((cell) => {
+                          const cellPath = cell.image_path;
+                          const cellUrl = cellPath
+                            ? API.getFileUrl(projectName, cellPath, assetFingerprints[cellPath] ?? refreshKey)
+                            : null;
+                          const cellLabel = cell.next_scene_id
+                            ? t("grid_cell_storyboard_label", {
+                                defaultValue: "第 {{index}} 格 · {{id}}",
+                                index: cell.index + 1,
+                                id: cell.next_scene_id,
+                              })
+                            : t("grid_cell_placeholder_label", {
+                                defaultValue: "第 {{index}} 格 · 占位",
+                                index: cell.index + 1,
+                              });
+                          return cellUrl && cellPath ? (
+                            <button
+                              key={cell.index}
+                              type="button"
+                              onClick={() => {
+                                setPreviewImage({ src: cellUrl, path: cellPath, alt: cellLabel });
+                              }}
+                              aria-label={`${cellLabel} 全屏预览`}
+                              title={cellLabel}
+                              className="group aspect-video min-w-0 cursor-zoom-in overflow-hidden rounded border border-gray-800/70 bg-black/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+                            >
+                              <img
+                                src={cellUrl}
+                                alt={cellLabel}
+                                className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                                loading="lazy"
+                              />
+                            </button>
+                          ) : (
+                            <div
+                              key={cell.index}
+                              className="flex aspect-video min-w-0 items-center justify-center rounded border border-dashed border-gray-800/60 bg-black/20"
+                              title={cellLabel}
+                            >
+                              <span className="font-mono text-[9px] text-gray-700">
+                                {cell.index + 1}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-2 border-t border-gray-800/50 px-2.5 py-1.5">
+                        <span className="font-mono text-[10px] text-gray-500">
+                          {t("grid_cell_info", { count: grid.cell_count, size: grid.grid_size })}
+                        </span>
+                        <span className="text-[10px] text-gray-700">
+                          {grid.rows}×{grid.cols}
+                        </span>
+                        {imageUrl && grid.grid_image_path && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewImage({
+                                src: imageUrl,
+                                path: grid.grid_image_path ?? "",
+                                alt: t("grid_composite_image_alt"),
+                              });
+                            }}
+                            className="ml-auto rounded border border-gray-800/70 px-2 py-0.5 text-[10px] text-gray-500 transition-colors hover:border-amber-800/50 hover:text-amber-300"
+                          >
+                            {t("grid_original_image_btn", { defaultValue: "原始宫格图" })}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : imageUrl ? (
                     <div className="overflow-hidden rounded-md border border-gray-800/50 bg-gray-900/40">
                       <button
                         type="button"
                         onClick={() => {
                           if (grid.grid_image_path) {
-                            setPreviewImage({ src: imageUrl, path: grid.grid_image_path });
+                            setPreviewImage({
+                              src: imageUrl,
+                              path: grid.grid_image_path,
+                              alt: t("grid_composite_image_alt"),
+                            });
                           }
                         }}
                         aria-label={`${t("grid_composite_image_alt")} 全屏预览`}
@@ -381,7 +487,7 @@ export function GridPreviewPanel({
                         <img
                           src={imageUrl}
                           alt={t("grid_composite_image_alt")}
-                          className="block max-h-64 w-full object-contain bg-black/20"
+                          className="block max-h-[26rem] w-full object-contain bg-black/20"
                         />
                       </button>
                       <div className="flex items-center gap-2 border-t border-gray-800/50 px-2.5 py-1.5">
@@ -413,6 +519,7 @@ export function GridPreviewPanel({
                         references={refs}
                         projectName={projectName}
                         refreshKey={refreshKey}
+                        onPreview={setPreviewImage}
                       />
                     </div>
                   )}
@@ -425,7 +532,7 @@ export function GridPreviewPanel({
       {previewImage && (
         <ImageLightbox
           src={previewImage.src}
-          alt={t("grid_composite_image_alt")}
+          alt={previewImage.alt}
           downloadSource={{ kind: "project", projectName, path: previewImage.path }}
           onClose={() => setPreviewImage(null)}
         />

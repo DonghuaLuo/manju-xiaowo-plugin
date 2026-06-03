@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PluginSDK } from "xiaowo-sdk";
-import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Star, Upload } from "lucide-react";
+import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Star, Upload, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API, type VersionInfo, type VersionResourceType } from "@/api";
 import { useAppStore } from "@/stores/app-store";
@@ -8,14 +8,15 @@ import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { ImageFlipReveal } from "@/components/ui/ImageFlipReveal";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
+import { Popover } from "@/components/ui/Popover";
 import { SelectMenu } from "@/components/ui/SelectMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { VideoLightbox } from "@/components/ui/VideoLightbox";
-import { formatCost } from "@/utils/cost-format";
+import { DROPDOWN_PANEL_CLS, SELECT_MENU_PANEL_STYLE } from "@/components/ui/darkroom-tokens";
 import { errMsg } from "@/utils/async";
 import { pickDesktopFile } from "@/utils/desktop-file";
 import { downloadProjectVideoWithDialog } from "@/utils/video-export";
-import type { CostBreakdown, GenerationQuality } from "@/types";
+import type { CostBreakdown, GenerationQuality, StoryboardFinalGenerationMode } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
 import {
   videoContinuityMetadataToPlan,
@@ -23,6 +24,9 @@ import {
 } from "@/utils/video-continuity";
 
 type MediaKind = "storyboard" | "video";
+type MediaGenerateOptions = {
+  finalGenerationMode?: StoryboardFinalGenerationMode;
+};
 type ArrayItem<T> = T extends Array<infer Item> ? Item : T;
 type ProviderInputImageItem = NonNullable<
   ArrayItem<NonNullable<VersionInfo["provider_input_images"]>[string]>
@@ -47,6 +51,8 @@ interface MediaCardProps {
   aspectRatio: "9:16" | "16:9";
   /** 是否在 grid 模式下隐藏单独生成按钮 */
   hideGenerateButton?: boolean;
+  /** 是否只隐藏草稿生成按钮。宫格模式下单格已经是草稿，仍允许生成最终版。 */
+  hideDraftGenerateButton?: boolean;
   /** 生成按钮是否禁用（视频生成需要先有分镜图） */
   generateDisabled?: boolean;
   /** 外部上传按钮是否禁用（通常仅在当前提示词有未保存编辑时禁用） */
@@ -60,7 +66,7 @@ interface MediaCardProps {
   /** 未生成时展示的预计分镜视频连续性策略 */
   expectedVideoContinuity?: ShotVideoContinuityPlan;
   /** 触发生成 */
-  onGenerate?: (quality: GenerationQuality) => void;
+  onGenerate?: (quality: GenerationQuality, options?: MediaGenerateOptions) => void;
   /** 版本恢复回调 */
   onRestore?: () => Promise<void> | void;
   /** 外部上传成新版本后的回调 */
@@ -112,16 +118,31 @@ function sourceStoryboardLabel(
   if (kind !== "video") return null;
   const quality = info?.source_storyboard_generation_quality;
   if (quality === "final") {
-    return t("media_based_on_final_storyboard", { defaultValue: "基于最终分镜" });
+    return t("media_based_on_final_storyboard", { defaultValue: "基于当前最终分镜" });
   }
   if (quality === "draft") {
-    return t("media_based_on_draft_storyboard", { defaultValue: "基于草稿分镜" });
+    return t("media_based_on_draft_storyboard", { defaultValue: "基于当前草稿分镜" });
   }
   if (quality === "custom") {
-    return t("media_based_on_custom_storyboard", { defaultValue: "基于自定义分镜" });
+    return t("media_based_on_custom_storyboard", { defaultValue: "基于当前自定义分镜" });
   }
   if (quality === "grid") {
-    return t("media_based_on_grid_storyboard", { defaultValue: "基于宫格镜头板" });
+    return t("media_based_on_grid_storyboard", { defaultValue: "基于当前宫格分镜" });
+  }
+  return null;
+}
+
+function storyboardFinalModeLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  kind: MediaKind,
+  info: VersionInfo | null,
+): string | null {
+  if (kind !== "storyboard" || info?.generation_quality !== "final") return null;
+  if (info.final_generation_mode === "draft_locked") {
+    return t("media_storyboard_final_mode_draft_locked", { defaultValue: "沿当前分镜精修" });
+  }
+  if (info.final_generation_mode === "fresh_sample") {
+    return t("media_storyboard_final_mode_fresh_sample", { defaultValue: "重新出图" });
   }
   return null;
 }
@@ -140,6 +161,7 @@ function currentVersionBadges(
     route?.generate_audio === true ? t("generate_audio_label") : null,
     providerInputStatusLabel(t, info),
     sourceStoryboardLabel(t, kind, info),
+    storyboardFinalModeLabel(t, kind, info),
   ].filter((badge): badge is string => Boolean(badge));
 }
 
@@ -184,11 +206,11 @@ export function MediaCard({
   posterPath,
   aspectRatio,
   hideGenerateButton,
+  hideDraftGenerateButton,
   generateDisabled,
   uploadDisabled,
   generateDisabledHint,
   generating,
-  estimatedCost,
   expectedVideoContinuity,
   onGenerate,
   onRestore,
@@ -201,6 +223,8 @@ export function MediaCard({
   const [currentVersionInfo, setCurrentVersionInfo] = useState<VersionInfo | null>(null);
   const [qualityRatingInfo, setQualityRatingInfo] = useState<QualityRatingState | null>(null);
   const [ratingSaving, setRatingSaving] = useState(false);
+  const [finalModeOpen, setFinalModeOpen] = useState(false);
+  const finalModeAnchorRef = useRef<HTMLDivElement>(null);
 
   const assetFp = useProjectsStore((s) =>
     assetPath ? s.getAssetFingerprint(assetPath) : null,
@@ -236,6 +260,26 @@ export function MediaCard({
     kind === "storyboard"
       ? t("media_generate_storyboard_final", { defaultValue: "最终版" })
       : t("media_generate_video_final", { defaultValue: "最终版" });
+  const storyboardFinalModes: Array<{
+    value: StoryboardFinalGenerationMode;
+    label: string;
+    description: string;
+  }> = [
+    {
+      value: "draft_locked",
+      label: t("media_storyboard_final_mode_draft_locked", { defaultValue: "沿当前分镜精修" }),
+      description: t("media_storyboard_final_mode_draft_locked_desc", {
+        defaultValue: "保留当前分镜构图、角色位置和镜头关系，适合稳定出正式分镜。",
+      }),
+    },
+    {
+      value: "fresh_sample",
+      label: t("media_storyboard_final_mode_fresh_sample", { defaultValue: "重新出图" }),
+      description: t("media_storyboard_final_mode_fresh_sample_desc", {
+        defaultValue: "不锁定当前分镜，只按提示词与角色、场景、道具参考重新抽一张。",
+      }),
+    },
+  ];
   const resourceType: VersionResourceType =
     kind === "storyboard" ? "storyboards" : "videos";
   const previewTitle = `${segmentId} ${title}`;
@@ -256,6 +300,12 @@ export function MediaCard({
     ...currentVersionBadges(t, kind, effectiveVersionInfo),
     continuityBadge,
   ].filter((badge): badge is string => Boolean(badge));
+  const ratingVersionBadge = effectiveVersionInfo
+    ? [
+        `v${effectiveVersionInfo.version}`,
+        qualityLabel(t, effectiveVersionInfo.generation_quality),
+      ].filter(Boolean).join(" · ")
+    : "";
   const qualityDimensions = qualityDimensionsForKind(kind);
   const dimensionHint = t("media_quality_dimension_hint", {
     defaultValue: "可选细项，不选不参与维度统计。",
@@ -429,6 +479,14 @@ export function MediaCard({
     await saveQualityRating(effectiveQualityRating, nextDimensions);
   };
 
+  const handleGenerateFinal = (mode?: StoryboardFinalGenerationMode) => {
+    if (kind === "storyboard") {
+      onGenerate?.("final", { finalGenerationMode: mode ?? "draft_locked" });
+      return;
+    }
+    onGenerate?.("final");
+  };
+
   return (
     <div>
       {/* Header */}
@@ -571,6 +629,23 @@ export function MediaCard({
 
       {assetPath && effectiveVersionInfo && (
         <div className="mt-2 space-y-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10.5px] font-medium text-text-4">
+              {t("media_quality_current_version", { defaultValue: "当前版本评分" })}
+            </span>
+            {ratingVersionBadge && (
+              <span
+                className="num rounded-full border px-1.5 py-0.5 text-[9.5px]"
+                style={{
+                  borderColor: "var(--color-hairline-soft)",
+                  background: "oklch(1 0 0 / 0.04)",
+                  color: "var(--color-text-3)",
+                }}
+              >
+                {ratingVersionBadge}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             {[1, 2, 3, 4, 5].map((rating) => {
               const active = effectiveQualityRating != null && rating <= effectiveQualityRating;
@@ -641,50 +716,121 @@ export function MediaCard({
 
       {/* Generate CTA */}
       {!hideGenerateButton && onGenerate && (
-        <div className="mt-2.5 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-          <button
-            type="button"
-            onClick={() => onGenerate("draft")}
-            disabled={generateDisabled || generating}
-            title={
-              generateDisabled
-                ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-                : undefined
-            }
-            className="focus-ring inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-            style={{
-              color: "oklch(0.14 0 0)",
-              background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
-              boxShadow:
-                "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
-            }}
-          >
-            <Sparkles className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{draftGenerateLabel}</span>
-            {estimatedCost && Object.values(estimatedCost).some((v) => v > 0) && (
-              <span className="num ml-1 shrink-0 text-[11px] opacity-70">
-                ~{formatCost(estimatedCost)}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => onGenerate("final")}
-            disabled={generateDisabled || generating}
-            title={
-              generateDisabled
-                ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-                : finalGenerateLabel
-            }
-            className="focus-ring inline-flex h-full items-center justify-center rounded-[10px] border px-3 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            style={{
-              borderColor: "var(--color-hairline)",
-              color: "var(--color-text-2)",
-              background: "oklch(1 0 0 / 0.045)",
-            }}
-          >
-            {finalGenerateLabel}
-          </button>
+        <div
+          className={`mt-2.5 grid gap-2 ${
+            hideDraftGenerateButton
+              ? "grid-cols-1"
+              : "grid-cols-2"
+          }`}
+        >
+          {!hideDraftGenerateButton && (
+            <button
+              type="button"
+              onClick={() => onGenerate("draft")}
+              disabled={generateDisabled || generating}
+              title={
+                generateDisabled
+                  ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                  : undefined
+              }
+              className="focus-ring inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                color: "oklch(0.14 0 0)",
+                background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
+                boxShadow:
+                  "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{draftGenerateLabel}</span>
+            </button>
+          )}
+          {kind === "storyboard" ? (
+            <div ref={finalModeAnchorRef} className="relative flex min-w-0">
+              <button
+                type="button"
+                onClick={() => setFinalModeOpen((v) => !v)}
+                disabled={generateDisabled || generating}
+                title={
+                  generateDisabled
+                    ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                    : t("media_storyboard_final_mode_menu", {
+                        defaultValue: "选择最终版生成方式",
+                      })
+                }
+                className="focus-ring inline-flex h-full w-full min-w-0 items-center justify-center gap-1.5 rounded-[10px] border px-3 py-2.5 text-[12px] font-semibold transition-colors hover:bg-[oklch(1_0_0_/_0.06)] disabled:cursor-not-allowed disabled:opacity-50"
+                style={{
+                  borderColor: "var(--color-hairline)",
+                  color: "var(--color-text-2)",
+                  background: "oklch(1 0 0 / 0.045)",
+                }}
+              >
+                <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{finalGenerateLabel}</span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 shrink-0 text-text-3 transition-transform ${finalModeOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              <Popover
+                open={finalModeOpen}
+                onClose={() => setFinalModeOpen(false)}
+                anchorRef={finalModeAnchorRef}
+                align="end"
+                sideOffset={6}
+                width="w-72"
+                layer="modal"
+                className={DROPDOWN_PANEL_CLS}
+                style={SELECT_MENU_PANEL_STYLE}
+              >
+                <div className="space-y-1">
+                  {storyboardFinalModes.map((mode) => (
+                    <button
+                      key={mode.value}
+                      type="button"
+                      onClick={() => {
+                        setFinalModeOpen(false);
+                        handleGenerateFinal(mode.value);
+                      }}
+                      className="focus-ring flex w-full items-start rounded-md px-2 py-2 text-left transition-colors hover:bg-[oklch(1_0_0_/_0.08)]"
+                      style={{ background: "transparent" }}
+                    >
+                      <span className="min-w-0">
+                        <span
+                          className="block text-[12.5px] font-semibold"
+                          style={{ color: "var(--color-text-2)" }}
+                        >
+                          {mode.label}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-snug text-text-4">
+                          {mode.description}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </Popover>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleGenerateFinal()}
+              disabled={generateDisabled || generating}
+              title={
+                generateDisabled
+                  ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                  : finalGenerateLabel
+              }
+              className="focus-ring inline-flex h-full w-full items-center justify-center gap-1.5 rounded-[10px] border px-3 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                borderColor: "var(--color-hairline)",
+                color: "var(--color-text-2)",
+                background: "oklch(1 0 0 / 0.045)",
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{finalGenerateLabel}</span>
+            </button>
+          )}
         </div>
       )}
       {videoLightboxOpen && assetUrl && kind === "video" && (

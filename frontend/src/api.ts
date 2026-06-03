@@ -43,6 +43,7 @@ import type {
   TransitionType,
   GenerationProfiles,
   GenerationQuality,
+  StoryboardFinalGenerationMode,
   VideoContinuityPolicy,
 } from "@/types";
 import type { GenerationMode } from "@/utils/generation-mode";
@@ -170,6 +171,7 @@ export interface VersionInfo {
   provider_input_payload?: Record<string, unknown> | null;
   video_continuity?: VideoContinuityMetadata | null;
   source_storyboard_generation_quality?: string;
+  final_generation_mode?: string | null;
   source_version?: number | string | null;
 }
 
@@ -315,6 +317,7 @@ export interface CreateProjectPayload {
 
 export interface GenerationRequestOptions {
   quality?: GenerationQuality;
+  final_generation_mode?: StoryboardFinalGenerationMode | null;
   shot_tier?: "S" | "A" | "B" | null;
   resolution?: string | null;
   source_version?: number | null;

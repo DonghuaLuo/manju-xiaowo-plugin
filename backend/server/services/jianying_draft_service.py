@@ -164,34 +164,6 @@ class JianyingDraftService:
                 shown = f"{shown} 等 {len(draft_ids)} 个"
             raise ValueError(f"第 {episode} 集包含草稿视频片段：{shown}。请先生成最终版视频后再导出剪映草稿。")
 
-        draft_source_ids = [
-            str(clip.get("id") or "")
-            for clip in clips
-            if clip.get("resource_type", "videos") == "videos"
-            and (clip.get("version_metadata") or {}).get("source_storyboard_generation_quality") == "draft"
-        ]
-        draft_source_ids = [item_id for item_id in draft_source_ids if item_id]
-        if draft_source_ids:
-            shown = "、".join(draft_source_ids[:12])
-            if len(draft_source_ids) > 12:
-                shown = f"{shown} 等 {len(draft_source_ids)} 个"
-            raise ValueError(f"第 {episode} 集包含基于草稿分镜生成的视频：{shown}。请先最终化本集后再导出剪映草稿。")
-
-        if isinstance(project.get("generation_profiles"), dict):
-            missing_source_ids = [
-                str(clip.get("id") or "")
-                for clip in clips
-                if clip.get("resource_type", "videos") == "videos"
-                and clip.get("generation_quality") == "final"
-                and "source_storyboard_generation_quality" not in (clip.get("version_metadata") or {})
-            ]
-            missing_source_ids = [item_id for item_id in missing_source_ids if item_id]
-            if missing_source_ids:
-                shown = "、".join(missing_source_ids[:12])
-                if len(missing_source_ids) > 12:
-                    shown = f"{shown} 等 {len(missing_source_ids)} 个"
-                raise ValueError(f"第 {episode} 集包含缺少分镜来源记录的视频：{shown}。请先最终化本集后再导出剪映草稿。")
-
         low_resolution_by_target: dict[str, list[str]] = {}
         for clip in clips:
             target_resolution = cls._final_video_resolution(project, str(clip.get("resource_type") or "videos"))

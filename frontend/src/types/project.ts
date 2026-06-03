@@ -103,6 +103,8 @@ export interface ModelSettingEntry {
 
 export type GenerationQuality = "draft" | "final" | "custom";
 
+export type StoryboardFinalGenerationMode = "draft_locked" | "fresh_sample";
+
 export interface ImageGenerationProfile {
   image_provider_t2i?: string | null;
   image_provider_i2i?: string | null;

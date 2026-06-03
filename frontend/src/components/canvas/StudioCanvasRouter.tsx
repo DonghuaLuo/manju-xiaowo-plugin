@@ -27,7 +27,14 @@ import {
 import { effectiveMode } from "@/utils/generation-mode";
 import { normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { Scene, Prop, CustomProviderInfo, ProviderInfo, GenerationQuality } from "@/types";
+import type {
+  Scene,
+  Prop,
+  CustomProviderInfo,
+  ProviderInfo,
+  GenerationQuality,
+  StoryboardFinalGenerationMode,
+} from "@/types";
 import type { EpisodeScript } from "@/types/script";
 
 // ---------------------------------------------------------------------------
@@ -233,17 +240,26 @@ export function StudioCanvasRouter() {
     segmentId: string,
     scriptFile?: string,
     quality: GenerationQuality = "draft",
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) => {
     if (!currentProjectName || !currentScripts) return;
     const resolved = resolveSegmentPrompt(currentScripts, segmentId, "image_prompt", scriptFile);
     if (!resolved) return;
     try {
+      const generationOptions: {
+        quality: GenerationQuality;
+        shot_tier: "S" | "A" | "B" | null;
+        final_generation_mode?: StoryboardFinalGenerationMode;
+      } = { quality, shot_tier: resolved.shotTier };
+      if (options?.finalGenerationMode) {
+        generationOptions.final_generation_mode = options.finalGenerationMode;
+      }
       await API.generateStoryboard(
         currentProjectName,
         segmentId,
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
-        { quality, shot_tier: resolved.shotTier },
+        generationOptions,
       );
       useAppStore.getState().pushToast(tRef.current("storyboard_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {

@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { NarrationSegment, DramaScene, GenerationQuality, ProjectData, VideoContinuityPolicy } from "@/types";
+import type {
+  NarrationSegment,
+  DramaScene,
+  GenerationQuality,
+  ProjectData,
+  StoryboardFinalGenerationMode,
+  VideoContinuityPolicy,
+} from "@/types";
 import type { VideoContinuitySupport } from "@/utils/provider-models";
 import { useAppStore } from "@/stores/app-store";
 import { ShotList } from "./ShotList";
@@ -19,7 +26,11 @@ interface ShotSplitViewProps {
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => void | Promise<void>;
-  onGenerateStoryboard?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateStoryboard?: (
+    segmentId: string,
+    quality?: GenerationQuality,
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
+  ) => void;
   onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;

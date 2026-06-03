@@ -271,6 +271,7 @@ class GenerateStoryboardRequest(BaseModel):
     prompt: str | dict
     script_file: str
     quality: Literal["draft", "final", "custom"] | None = None
+    final_generation_mode: Literal["draft_locked", "fresh_sample"] | None = None
     shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
@@ -344,6 +345,7 @@ class GenerationRoutePreviewRequest(BaseModel):
 
 _IMAGE_GENERATION_FIELDS = (
     "quality",
+    "final_generation_mode",
     "shot_tier",
     "resolution",
     "source_version",
@@ -784,7 +786,7 @@ async def finalize_episode(
     episode: int,
     _user: CurrentUser,
 ):
-    """提交本集最终化任务：补齐最终分镜和最终视频，返回即时报告。"""
+    """提交本集最终化任务：补齐缺失分镜和最终视频，返回即时报告。"""
 
     try:
         service = EpisodeFinalizationService(get_project_manager(), get_generation_queue())

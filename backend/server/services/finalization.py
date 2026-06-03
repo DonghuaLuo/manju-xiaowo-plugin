@@ -1,8 +1,9 @@
 """Episode finalization helpers.
 
-Finalization is an async queue submission step: it finds storyboard/video assets
-that are not final-ready, enqueues the missing final tasks, and returns a report
-that the UI can show immediately while the normal task HUD tracks execution.
+Finalization is an async queue submission step: it finds missing current
+storyboards and non-final-ready videos, enqueues the needed tasks, and returns
+a report that the UI can show immediately while the normal task HUD tracks
+execution.
 """
 
 from __future__ import annotations
@@ -18,8 +19,6 @@ from lib.project_manager import ProjectManager, effective_mode
 from lib.reference_video import assemble_shots_text
 from lib.storyboard_sequence import build_storyboard_dependency_plan, get_storyboard_items
 from server.services.generation_route_resolver import is_video_resolution_below, merged_generation_profiles
-
-FINAL_ENOUGH_STORYBOARD_QUALITIES = {"final", "grid", "custom"}
 
 
 def _load_versions(project_dir: Path) -> dict[str, Any]:
@@ -58,7 +57,7 @@ def _current_version_metadata(
 
 def _quality(metadata: dict[str, Any]) -> str:
     value = metadata.get("generation_quality")
-    return str(value) if value in {"draft", "final", "custom"} else "unknown"
+    return str(value) if value in {"draft", "final", "grid", "custom"} else "unknown"
 
 
 def _route_resolution(metadata: dict[str, Any]) -> str | None:
@@ -90,12 +89,6 @@ def _final_reference_video_resolution(project: dict[str, Any]) -> str | None:
     profile = merged_generation_profiles(project).get("reference_video_final") or {}
     value = profile.get("resolution")
     return str(value) if value else None
-
-
-def _final_ready_source_quality(source_quality: str, storyboard_quality: str) -> bool:
-    if source_quality:
-        return source_quality in FINAL_ENOUGH_STORYBOARD_QUALITIES
-    return storyboard_quality in FINAL_ENOUGH_STORYBOARD_QUALITIES
 
 
 def build_finalization_task_report(tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -209,10 +202,8 @@ class EpisodeFinalizationService:
                 continue
             item_by_id[resource_id] = item
             assets = item.get("generated_assets") if isinstance(item.get("generated_assets"), dict) else {}
-            storyboard_meta = _current_version_metadata(versions, "storyboards", resource_id)
-            storyboard_quality = "grid" if assets.get("grid_id") else _quality(storyboard_meta)
             storyboard_exists = _project_path_exists(project_dir, assets.get("storyboard_image"))
-            if not storyboard_exists or storyboard_quality not in FINAL_ENOUGH_STORYBOARD_QUALITIES:
+            if not storyboard_exists:
                 storyboard_ids.append(resource_id)
 
         storyboard_plans = build_storyboard_dependency_plan(
@@ -227,7 +218,10 @@ class EpisodeFinalizationService:
         for plan in storyboard_plans:
             item = item_by_id.get(plan.resource_id) or {}
             try:
-                extra_payload: dict[str, Any] = {"quality": "final"}
+                extra_payload: dict[str, Any] = {
+                    "quality": "final",
+                    "final_generation_mode": "draft_locked",
+                }
                 if item.get("shot_tier") in {"S", "A", "B"}:
                     extra_payload["shot_tier"] = item.get("shot_tier")
                 spec = TaskSpec.from_request(
@@ -283,19 +277,15 @@ class EpisodeFinalizationService:
             if not resource_id:
                 continue
             assets = item.get("generated_assets") if isinstance(item.get("generated_assets"), dict) else {}
-            storyboard_meta = _current_version_metadata(versions, "storyboards", resource_id)
-            storyboard_quality = "grid" if assets.get("grid_id") else _quality(storyboard_meta)
             storyboard_exists = _project_path_exists(project_dir, assets.get("storyboard_image"))
             video_meta = _current_version_metadata(versions, "videos", resource_id)
             video_quality = _quality(video_meta)
-            source_quality = str(video_meta.get("source_storyboard_generation_quality") or "")
             video_resolution = _route_resolution(video_meta)
             video_exists = _project_path_exists(project_dir, assets.get("video_clip"))
 
             needs_video = (
                 not video_exists
                 or video_quality != "final"
-                or not _final_ready_source_quality(source_quality, storyboard_quality)
                 or is_video_resolution_below(video_resolution, target_video_resolution)
             )
             if not needs_video:
@@ -303,14 +293,12 @@ class EpisodeFinalizationService:
                 continue
 
             dependency_task_id = storyboard_task_ids.get(resource_id)
-            if not dependency_task_id and (
-                not storyboard_exists or storyboard_quality not in FINAL_ENOUGH_STORYBOARD_QUALITIES
-            ):
+            if not dependency_task_id and not storyboard_exists:
                 issues.append(
                     {
                         "resource_id": resource_id,
                         "kind": "video",
-                        "message": "缺少可用于最终视频的最终版分镜",
+                        "message": "缺少可用于生成视频的当前分镜",
                     }
                 )
                 continue

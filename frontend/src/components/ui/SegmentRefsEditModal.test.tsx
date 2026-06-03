@@ -39,10 +39,10 @@ describe("SegmentRefsEditModal", () => {
   it("renders dialog with three sections (character/scene/prop)", () => {
     render(<SegmentRefsEditModal {...baseProps} />);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    // Section headings appear (using i18n badge labels)
-    expect(screen.getByText("角色")).toBeInTheDocument();
-    expect(screen.getByText("场景")).toBeInTheDocument();
-    expect(screen.getByText("道具")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /角色集/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /场景集/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /道具集/ })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("搜索角色集…")).toBeInTheDocument();
     // All character candidates listed
     expect(screen.getByRole("button", { name: /Hero/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Villain/ })).toBeInTheDocument();
@@ -63,6 +63,7 @@ describe("SegmentRefsEditModal", () => {
     render(
       <SegmentRefsEditModal
         {...baseProps}
+        initialCharacters={["Villain"]}
         characters={{
           ...characters,
           Villain: {
@@ -73,14 +74,19 @@ describe("SegmentRefsEditModal", () => {
       />,
     );
 
-    const villainRow = screen.getByRole("button", { name: /Villain/ });
-    expect(villainRow).toHaveAttribute("aria-pressed", "false");
+    const villainRow = screen
+      .getAllByRole("button", { name: /Villain/ })
+      .find((el) => el.getAttribute("aria-pressed") !== null);
+    expect(villainRow).toBeTruthy();
+    expect(villainRow).toHaveAttribute("aria-pressed", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "资产图片 全屏预览" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Villain 全屏预览" }),
+    );
 
-    expect(villainRow).toHaveAttribute("aria-pressed", "false");
+    expect(villainRow).toHaveAttribute("aria-pressed", "true");
     expect(
-      screen.getByRole("dialog", { name: "资产图片 全屏预览" }),
+      screen.getByRole("dialog", { name: "Villain 全屏预览" }),
     ).toBeInTheDocument();
   });
 
@@ -98,6 +104,7 @@ describe("SegmentRefsEditModal", () => {
     render(<SegmentRefsEditModal {...baseProps} onSave={onSave} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Villain/ })); // add char
+    fireEvent.click(screen.getByRole("button", { name: /场景集/ }));
     fireEvent.click(screen.getByRole("button", { name: /Forest/ })); // add scene
 
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -156,13 +163,13 @@ describe("SegmentRefsEditModal", () => {
 
   it("search filters rows by name (case-insensitive)", () => {
     render(<SegmentRefsEditModal {...baseProps} />);
-    const search = screen.getByPlaceholderText("搜索…");
+    const search = screen.getByPlaceholderText("搜索角色集…");
     fireEvent.change(search, { target: { value: "vil" } });
     expect(screen.getByRole("button", { name: /Villain/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Mentor/ })).toBeNull();
   });
 
-  it("virtualizes large asset sections but still finds offscreen rows through search", () => {
+  it("paginates large asset sections but still finds offscreen rows through search", () => {
     const manyProps: Record<string, Prop> = Object.fromEntries(
       Array.from({ length: 80 }, (_, i) => [
         `Prop ${String(i).padStart(2, "0")}`,
@@ -175,15 +182,17 @@ describe("SegmentRefsEditModal", () => {
 
     render(<SegmentRefsEditModal {...baseProps} props={manyProps} />);
 
-    expect(screen.getByRole("button", { name: /Prop 00/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Prop 79/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /道具集/ }));
 
-    fireEvent.change(screen.getByPlaceholderText("搜索…"), { target: { value: "Prop 79" } });
+    expect(screen.getByText("Prop 00")).toBeInTheDocument();
+    expect(screen.queryByText("Prop 79")).toBeNull();
 
-    expect(screen.getByRole("button", { name: /Prop 79/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("搜索道具集…"), { target: { value: "Prop 79" } });
+
+    expect(screen.getByText("Prop 79")).toBeInTheDocument();
   });
 
-  it("keeps filtered rows visible after a virtualized section was scrolled", () => {
+  it("keeps filtered rows visible after a paginated section was scrolled", () => {
     const manyProps: Record<string, Prop> = Object.fromEntries(
       Array.from({ length: 80 }, (_, i) => [
         `Prop ${String(i).padStart(2, "0")}`,
@@ -193,12 +202,13 @@ describe("SegmentRefsEditModal", () => {
 
     render(<SegmentRefsEditModal {...baseProps} props={manyProps} />);
 
-    fireEvent.scroll(screen.getByTestId("segment-refs-virtual-prop"), {
+    fireEvent.click(screen.getByRole("button", { name: /道具集/ }));
+    fireEvent.scroll(screen.getByTestId("segment-refs-grid-prop"), {
       target: { scrollTop: 2400 },
     });
-    fireEvent.change(screen.getByPlaceholderText("搜索…"), { target: { value: "Prop 01" } });
+    fireEvent.change(screen.getByPlaceholderText("搜索道具集…"), { target: { value: "Prop 79" } });
 
-    expect(screen.getByRole("button", { name: /Prop 01/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Prop 79/ })).toBeInTheDocument();
   });
 
   it("close (X) button invokes onClose", () => {

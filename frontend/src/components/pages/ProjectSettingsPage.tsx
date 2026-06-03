@@ -86,6 +86,13 @@ function deriveStyleValue(
   };
 }
 
+function findQualityGroup(
+  stats: QualityStatsResponse | undefined,
+  groupName: string,
+) {
+  return stats?.groups?.generation_quality?.find((item) => item.key === groupName);
+}
+
 function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
   templates: StyleTemplate[];
   prompts: Record<string, string>;
@@ -610,6 +617,9 @@ export function ProjectSettingsPage() {
     }
     return (route.warnings ?? []).map((warning) => formatRouteWarning(t, route, warning));
   }), [routePreview.routes, t]);
+  const finalQualityStats = findQualityGroup(routePreview.qualityStats, "final");
+  const displayedQualityAverage =
+    finalQualityStats?.average_rating ?? routePreview.qualityStats?.average_rating ?? null;
   const effectiveVideoBackendForContinuity = videoBackend || globalDefaults.video || "";
   const videoContinuitySupport = useMemo(() => {
     if (!effectiveVideoBackendForContinuity) return null;
@@ -1183,9 +1193,20 @@ export function ProjectSettingsPage() {
                     {routePreview.qualityStats && routePreview.qualityStats.count > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3">
-                          {t("quality_stats_average", {
-                            defaultValue: "平均 {{score}}",
-                            score: routePreview.qualityStats.average_rating?.toFixed(1) ?? "-",
+                          {finalQualityStats
+                            ? t("quality_stats_final_average", {
+                                defaultValue: "最终版平均 {{score}}",
+                                score: displayedQualityAverage?.toFixed(1) ?? "-",
+                              })
+                            : t("quality_stats_average", {
+                                defaultValue: "平均 {{score}}",
+                                score: displayedQualityAverage?.toFixed(1) ?? "-",
+                              })}
+                        </span>
+                        <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-4">
+                          {t("quality_stats_sample_count", {
+                            defaultValue: "全版本 {{count}} 条",
+                            count: routePreview.qualityStats.count,
                           })}
                         </span>
                         {(routePreview.qualityStats.dimension_averages ?? []).slice(0, 4).map((item) => (
@@ -1193,7 +1214,11 @@ export function ProjectSettingsPage() {
                             key={item.key}
                             className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3"
                           >
-                            {item.key}: {item.average_rating?.toFixed(1) ?? "-"}
+                            {t("quality_stats_dimension_average", {
+                              defaultValue: "全版本 {{key}} {{score}}",
+                              key: item.key,
+                              score: item.average_rating?.toFixed(1) ?? "-",
+                            })}
                           </span>
                         ))}
                       </div>
@@ -1363,19 +1388,6 @@ export function ProjectSettingsPage() {
                                 className={PROFILE_INPUT_CLS}
                                 placeholder="default"
                               />
-                            </label>
-                            <label className="flex items-center gap-2 pt-5 text-[12px] text-text-3">
-                              <input
-                                type="checkbox"
-                                checked={tierProfile.prefer_final_storyboard_source !== false}
-                                onChange={(event) =>
-                                  updateShotTierProfile(tier, {
-                                    prefer_final_storyboard_source: event.currentTarget.checked,
-                                  })
-                                }
-                                className="accent-[oklch(0.76_0.09_295)]"
-                              />
-                              {t("prefer_final_storyboard_source", { defaultValue: "优先最终分镜" })}
                             </label>
                           </div>
                         </div>

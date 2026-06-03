@@ -74,7 +74,7 @@ describe("AssetPickerModal", () => {
     expect(card).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("previews only assets that are not already in the project", async () => {
+  it("previews assets even when they are already in the project", async () => {
     vi.spyOn(API, "listAssets").mockResolvedValue({
       items: [
         {
@@ -98,8 +98,16 @@ describe("AssetPickerModal", () => {
     await waitFor(() => screen.getByText("小师妹"));
 
     expect(
-      screen.queryByRole("button", { name: "王小明 全屏预览" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "王小明 全屏预览" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "王小明 全屏预览" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "王小明 全屏预览" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭全屏预览" }));
 
     fireEvent.click(screen.getByRole("button", { name: "小师妹 全屏预览" }));
 

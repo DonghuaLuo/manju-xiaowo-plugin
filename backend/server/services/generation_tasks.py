@@ -713,17 +713,14 @@ def _version_info(versions: Any, resource_type: str, resource_id: str, version: 
 
 
 def _storyboard_source_quality(versions: Any, resource_id: str, assets: dict[str, Any] | None) -> str:
+    current = _current_version_info(versions, "storyboards", resource_id)
+    if current:
+        quality = current.get("generation_quality")
+        if quality in {"draft", "final", "custom", "grid"}:
+            return str(quality)
     if isinstance(assets, dict) and assets.get("grid_id"):
         return "grid"
-    current = _current_version_info(versions, "storyboards", resource_id)
-    if not current:
-        return "unknown"
-    quality = current.get("generation_quality")
-    return str(quality) if quality in {"draft", "final", "custom"} else "unknown"
-
-
-def _is_final_ready_storyboard_quality(quality: str) -> bool:
-    return quality in {"final", "grid", "custom"}
+    return "unknown"
 
 
 def _payload_with_shot_tier(payload: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any]:
@@ -742,6 +739,77 @@ def _wants_final_storyboard(payload: dict[str, Any]) -> bool:
     return quality == "final" or payload.get("source_version") is not None
 
 
+_STORYBOARD_FINAL_DRAFT_LOCKED = "draft_locked"
+_STORYBOARD_FINAL_FRESH_SAMPLE = "fresh_sample"
+_STORYBOARD_SOURCE_QUALITIES = {"draft", "final", "grid", "custom"}
+
+
+def _storyboard_final_generation_mode(payload: dict[str, Any]) -> str | None:
+    if not _wants_final_storyboard(payload):
+        return None
+    if payload.get("source_version") is not None:
+        return _STORYBOARD_FINAL_DRAFT_LOCKED
+    raw = payload.get("final_generation_mode") or payload.get("storyboard_final_mode")
+    mode = str(raw or _STORYBOARD_FINAL_DRAFT_LOCKED).strip().lower()
+    if mode in {_STORYBOARD_FINAL_DRAFT_LOCKED, _STORYBOARD_FINAL_FRESH_SAMPLE}:
+        return mode
+    return _STORYBOARD_FINAL_DRAFT_LOCKED
+
+
+def _should_use_storyboard_source(payload: dict[str, Any], final_generation_mode: str | None) -> bool:
+    if payload.get("source_version") is not None:
+        return True
+    return final_generation_mode == _STORYBOARD_FINAL_DRAFT_LOCKED
+
+
+def _should_use_previous_storyboard_reference(
+    payload: dict[str, Any],
+    final_generation_mode: str | None,
+) -> bool:
+    quality = payload.get("generation_quality")
+    if quality is None:
+        quality = payload.get("quality")
+    if quality is None:
+        return False
+    if quality == "draft":
+        return False
+    if final_generation_mode == _STORYBOARD_FINAL_FRESH_SAMPLE:
+        return False
+    return True
+
+
+def _version_file_exists(project_path: Path, info: dict[str, Any] | None) -> bool:
+    rel = str((info or {}).get("file") or "")
+    return bool(rel) and (project_path / rel).exists()
+
+
+def _latest_storyboard_source_version(
+    *,
+    project_path: Path,
+    versions: Any,
+    resource_id: str,
+) -> dict[str, Any] | None:
+    try:
+        info = versions.get_versions("storyboards", resource_id)
+    except Exception:
+        logger.debug("读取 storyboards/%s 版本历史失败", resource_id, exc_info=True)
+        return None
+    version_items = [item for item in (info.get("versions") or []) if isinstance(item, dict)]
+    current_version = info.get("current_version")
+    current = next((item for item in version_items if item.get("version") == current_version), None)
+
+    def _usable(item: dict[str, Any] | None) -> bool:
+        quality = str((item or {}).get("generation_quality") or "")
+        return quality in _STORYBOARD_SOURCE_QUALITIES and _version_file_exists(project_path, item)
+
+    if _usable(current):
+        return current
+    for item in reversed(version_items):
+        if _usable(item):
+            return item
+    return None
+
+
 def _storyboard_source_reference(
     *,
     project_path: Path,
@@ -751,16 +819,17 @@ def _storyboard_source_reference(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     requested_version = payload.get("source_version")
-    info = (
-        _version_info(versions, "storyboards", resource_id, requested_version)
-        if requested_version is not None
-        else _current_version_info(versions, "storyboards", resource_id)
-    )
-    if requested_version is not None and info is None:
-        raise ValueError(f"storyboard source_version not found: {resource_id} v{requested_version}")
+    if requested_version is not None:
+        info = _version_info(versions, "storyboards", resource_id, requested_version)
+        if info is None:
+            raise ValueError(f"storyboard source_version not found: {resource_id} v{requested_version}")
+    else:
+        info = _latest_storyboard_source_version(
+            project_path=project_path,
+            versions=versions,
+            resource_id=resource_id,
+        )
     source_quality = str((info or {}).get("generation_quality") or "unknown")
-    if requested_version is None and source_quality == "final":
-        return None, {}
 
     source_rel = str((info or {}).get("file") or "")
     source_path = project_path / source_rel if source_rel else None
@@ -770,14 +839,24 @@ def _storyboard_source_reference(
         asset_rel = assets.get("storyboard_image") if isinstance(assets, dict) else None
         source_path = project_path / asset_rel if asset_rel else project_path / "storyboards" / f"scene_{resource_id}.png"
         source_rel = str(asset_rel or f"storyboards/scene_{resource_id}.png")
+        if source_quality == "unknown":
+            current = _current_version_info(versions, "storyboards", resource_id)
+            current_quality = str((current or {}).get("generation_quality") or "")
+            if current_quality in _STORYBOARD_SOURCE_QUALITIES:
+                source_quality = current_quality
+            elif isinstance(assets, dict) and assets.get("grid_id"):
+                source_quality = "grid"
     if not source_path.exists():
         return None, {}
 
-    label = "指定分镜版本（最终化参考）" if requested_version is not None else "当前草稿分镜（最终化参考）"
+    if requested_version is not None:
+        label = "指定分镜版本（精修参考）"
+    else:
+        label = "当前分镜（精修参考）"
     reference = {
         "image": source_path,
         "label": label,
-        "description": "用于保持当前分镜构图、角色位置和画面连续性；请按当前 prompt 提升细节与最终规格。",
+        "description": "用于保持当前分镜构图、角色位置和画面连续性；请按当前 prompt 与已引用资产提升细节。",
     }
     metadata = {
         "source_storyboard_version": (info or {}).get("version"),
@@ -895,6 +974,60 @@ def _apply_reference_image_policy(
         "reference_image_submitted_count": len(submitted),
         "reference_image_dropped_count": len(reference_images) - len(submitted),
         "reference_image_drop_reason": "shot_tier_reference_image_policy",
+    }
+
+
+def _image_reference_limit(provider_id: str | None, model_id: str | None) -> int | None:
+    provider = str(provider_id or "").strip().lower()
+    model = str(model_id or "").strip().lower()
+    if provider == PROVIDER_OPENAI:
+        return 16
+    if provider == PROVIDER_VIDU:
+        return 7
+    if provider == PROVIDER_DASHSCOPE:
+        return 9 if model.startswith("wan") else 3
+    return None
+
+
+def _apply_provider_image_reference_limit(
+    reference_images: list[object] | None,
+    *,
+    provider_id: str | None,
+    model_id: str | None,
+) -> tuple[list[object] | None, dict[str, Any]]:
+    if not reference_images:
+        return reference_images, {}
+    limit = _image_reference_limit(provider_id, model_id)
+    if limit is None:
+        return reference_images, {}
+    if limit <= 0:
+        return None, {
+            "provider": provider_id,
+            "model": model_id,
+            "max_reference_images": limit,
+            "reference_image_count": len(reference_images),
+            "reference_image_submitted_count": 0,
+            "reference_image_dropped_count": len(reference_images),
+            "reference_image_drop_reason": "provider_max_reference_images",
+        }
+    if len(reference_images) <= limit:
+        return reference_images, {
+            "provider": provider_id,
+            "model": model_id,
+            "max_reference_images": limit,
+            "reference_image_count": len(reference_images),
+            "reference_image_submitted_count": len(reference_images),
+            "reference_image_dropped_count": 0,
+        }
+    submitted = reference_images[:limit]
+    return submitted, {
+        "provider": provider_id,
+        "model": model_id,
+        "max_reference_images": limit,
+        "reference_image_count": len(reference_images),
+        "reference_image_submitted_count": len(submitted),
+        "reference_image_dropped_count": len(reference_images) - len(submitted),
+        "reference_image_drop_reason": "provider_max_reference_images",
     }
 
 
@@ -1197,7 +1330,13 @@ async def execute_storyboard_task(
         _assets = _target_item.get("generated_assets") if isinstance(_target_item.get("generated_assets"), dict) else {}
         _source_meta: dict[str, Any] = {}
         _source_ref: dict[str, Any] | None = None
-        if _wants_final_storyboard(payload):
+        _final_generation_mode = _storyboard_final_generation_mode(payload)
+        _previous_ref_path = (
+            _prev_path
+            if _should_use_previous_storyboard_reference(payload, _final_generation_mode)
+            else None
+        )
+        if _should_use_storyboard_source(payload, _final_generation_mode):
             _source_ref, _source_meta = _storyboard_source_reference(
                 project_path=_project_path,
                 versions=VersionManager(_project_path),
@@ -1214,13 +1353,13 @@ async def execute_storyboard_task(
             scene_field=_scene_field,
             prop_field=_prop_field,
             extra_reference_images=payload.get("extra_reference_images") or [],
-            previous_storyboard_path=_prev_path,
+            previous_storyboard_path=_previous_ref_path,
         )
         if _source_ref is not None:
             _ref_images = [_source_ref, *(_ref_images or [])]
-        return _project, _project_path, _target_item, _prompt_text, _ref_images, _source_meta
+        return _project, _project_path, _target_item, _prompt_text, _ref_images, _source_meta, _final_generation_mode
 
-    project, project_path, target_item, prompt_text, reference_images, source_storyboard_meta = await asyncio.to_thread(
+    project, project_path, target_item, prompt_text, reference_images, source_storyboard_meta, final_generation_mode = await asyncio.to_thread(
         _prepare
     )
     route_payload = _payload_with_shot_tier(payload, target_item)
@@ -1233,22 +1372,19 @@ async def execute_storyboard_task(
         needs_i2i=_needs_i2i,
     )
     effective_payload = route.effective_payload if route else payload
-    if (
-        route is not None
-        and route.shot_tier_strategy.get("prefer_final_storyboard_source") is False
-        and payload.get("source_version") is None
-        and reference_images
-        and isinstance(reference_images[0], dict)
-    ):
-        reference_images = reference_images[1:] or None
-        source_storyboard_meta = {}
     if route is not None:
         reference_images, reference_policy_meta = _apply_reference_image_policy(
             reference_images,
             route.shot_tier_strategy.get("reference_image_policy"),
         )
+        reference_images, provider_reference_policy_meta = _apply_provider_image_reference_limit(
+            reference_images,
+            provider_id=route.provider_id,
+            model_id=route.model_id,
+        )
     else:
         reference_policy_meta = {}
+        provider_reference_policy_meta = {}
     effective_needs_i2i = bool(reference_images)
     if route is not None and effective_needs_i2i != _needs_i2i:
         route = await _maybe_resolve_generation_route(
@@ -1277,8 +1413,12 @@ async def execute_storyboard_task(
         version_metadata = {}
     for key, value in source_storyboard_meta.items():
         version_metadata.setdefault(key, value)
+    if final_generation_mode:
+        version_metadata.setdefault("final_generation_mode", final_generation_mode)
     if reference_policy_meta:
         version_metadata.setdefault("reference_image_policy", reference_policy_meta)
+    if provider_reference_policy_meta:
+        version_metadata.setdefault("provider_image_reference_policy", provider_reference_policy_meta)
 
     _, version = await generator.generate_image_async(
         prompt=prompt_text,
@@ -1366,13 +1506,6 @@ async def execute_video_task(
     if not storyboard_file.exists():
         raise ValueError(f"storyboard not found: {storyboard_file.name}")
     source_storyboard_quality = _storyboard_source_quality(generator.versions, resource_id, assets)
-    requires_final_storyboard = (
-        route is not None
-        and route.quality == "final"
-        and route.shot_tier_strategy.get("prefer_final_storyboard_source") is not False
-    )
-    if requires_final_storyboard and not _is_final_ready_storyboard_quality(source_storyboard_quality):
-        raise ValueError("请先生成最终版分镜，再生成最终版视频；当前首帧不是最终分镜。")
 
     prompt_policy = await _video_prompt_policy_from_generator(generator, project_name)
     prompt_text = _normalize_video_prompt(

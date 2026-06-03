@@ -139,7 +139,7 @@ export function GridPreviewView({
         </span>
       </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))]">
         {groups.map((group, idx) => {
           const layout = computeGridSize(group.length, aspectRatio);
           const ids = getGridIdsForGroup(group);

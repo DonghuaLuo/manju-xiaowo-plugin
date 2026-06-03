@@ -1,7 +1,16 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Check,
   ExternalLink,
+  ImageIcon,
   Link2,
   MapPin,
   Puzzle,
@@ -10,24 +19,21 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
+import { AssetThumb } from "@/components/assets/AssetThumb";
 import { GlassModal } from "@/components/ui/GlassModal";
+import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
-import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { Character, Prop, Scene } from "@/types";
 import { type AssetKind, SHEET_FIELD } from "@/types/reference-video";
-import { colorForName } from "@/utils/color";
 import { WARM_TONE } from "@/utils/severity-tone";
 
 type Asset = Character | Scene | Prop;
 
-const VIRTUALIZE_ROW_THRESHOLD = 36;
-const VIRTUAL_GRID_COLUMNS = 1;
-const VIRTUAL_ROW_ESTIMATE = 48;
-const VIRTUAL_SECTION_MAX_HEIGHT = 288;
-const VIRTUAL_SECTION_OVERSCAN = 4;
+const REF_PAGE_SIZE = 50;
+const LOAD_MORE_DISTANCE_PX = 160;
 
 interface RefRow {
   kind: AssetKind;
@@ -106,14 +112,30 @@ export function SegmentRefsEditModal({
 }: SegmentRefsEditModalProps) {
   const { t } = useTranslation("dashboard");
   const titleId = useId();
-  const [query, setQuery] = useState("");
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [activeKind, setActiveKind] = useState<AssetKind>("character");
+  const [queries, setQueries] = useState<Record<AssetKind, string>>({
+    character: "",
+    scene: "",
+    prop: "",
+  });
+  const [visibleCounts, setVisibleCounts] = useState<Record<AssetKind, number>>({
+    character: REF_PAGE_SIZE,
+    scene: REF_PAGE_SIZE,
+    prop: REF_PAGE_SIZE,
+  });
   const [tempChars, setTempChars] = useState<string[]>(initialCharacters);
   const [tempScenes, setTempScenes] = useState<string[]>(initialScenes);
   const [tempProps, setTempProps] = useState<string[]>(initialProps);
+  const [previewAsset, setPreviewAsset] = useState<{
+    src: string;
+    alt: string;
+    path?: string;
+  } | null>(null);
 
-  const tempCharsSet = new Set(tempChars);
-  const tempScenesSet = new Set(tempScenes);
-  const tempPropsSet = new Set(tempProps);
+  const tempCharsSet = useMemo(() => new Set(tempChars), [tempChars]);
+  const tempScenesSet = useMemo(() => new Set(tempScenes), [tempScenes]);
+  const tempPropsSet = useMemo(() => new Set(tempProps), [tempProps]);
 
   const charRows = useMemo(
     () => buildRows("character", characters, tempChars),
@@ -128,16 +150,32 @@ export function SegmentRefsEditModal({
     [props, tempProps],
   );
 
-  const q = query.trim().toLowerCase();
-  const filtered = useMemo(() => {
-    const filterRows = (rows: RefRow[]) =>
-      q ? rows.filter((r) => r.name.toLowerCase().includes(q)) : rows;
-    return {
-      character: filterRows(charRows),
-      scene: filterRows(sceneRows),
-      prop: filterRows(propRows),
-    };
-  }, [charRows, sceneRows, propRows, q]);
+  const rowsByKind = useMemo(
+    () => ({
+      character: charRows,
+      scene: sceneRows,
+      prop: propRows,
+    }),
+    [charRows, sceneRows, propRows],
+  );
+  const selectedSetByKind = useMemo(
+    () => ({
+      character: tempCharsSet,
+      scene: tempScenesSet,
+      prop: tempPropsSet,
+    }),
+    [tempCharsSet, tempScenesSet, tempPropsSet],
+  );
+  const activeQuery = queries[activeKind];
+  const activeRows = useMemo(() => {
+    const q = activeQuery.trim().toLowerCase();
+    const rows = rowsByKind[activeKind];
+    return q
+      ? rows.filter((r) => r.name.toLowerCase().includes(q))
+      : rows;
+  }, [activeKind, activeQuery, rowsByKind]);
+  const visibleRows = activeRows.slice(0, visibleCounts[activeKind]);
+  const hasMore = visibleRows.length < activeRows.length;
 
   // stale 计数基于未过滤的完整 rows，避免搜索词把 stale 项过滤后徽标消失
   const countSelectedStale = (rows: RefRow[], set: Set<string>) =>
@@ -163,6 +201,57 @@ export function SegmentRefsEditModal({
   const scenesChanged = !arraysEqualUnordered(tempScenes, initialScenes);
   const propsChanged = !arraysEqualUnordered(tempProps, initialProps);
   const hasChanges = charChanged || scenesChanged || propsChanged;
+  const groups: Array<{
+    kind: AssetKind;
+    label: string;
+    icon: ReactNode;
+    selectedSet: Set<string>;
+    staleCount: number;
+  }> = [
+    {
+      kind: "character",
+      label: t("segment_refs_group_character", { defaultValue: "角色集" }),
+      icon: <User className="h-3.5 w-3.5" aria-hidden="true" />,
+      selectedSet: tempCharsSet,
+      staleCount: staleCounts.character,
+    },
+    {
+      kind: "scene",
+      label: t("segment_refs_group_scene", { defaultValue: "场景集" }),
+      icon: <MapPin className="h-3.5 w-3.5" aria-hidden="true" />,
+      selectedSet: tempScenesSet,
+      staleCount: staleCounts.scene,
+    },
+    {
+      kind: "prop",
+      label: t("segment_refs_group_prop", { defaultValue: "道具集" }),
+      icon: <Puzzle className="h-3.5 w-3.5" aria-hidden="true" />,
+      selectedSet: tempPropsSet,
+      staleCount: staleCounts.prop,
+    },
+  ];
+  const activeGroup = groups.find((g) => g.kind === activeKind) ?? groups[0];
+
+  useEffect(() => {
+    if (gridRef.current) gridRef.current.scrollTop = 0;
+  }, [activeKind, activeQuery]);
+
+  const loadMore = useCallback(() => {
+    setVisibleCounts((prev) => ({
+      ...prev,
+      [activeKind]: Math.min(
+        activeRows.length,
+        prev[activeKind] + REF_PAGE_SIZE,
+      ),
+    }));
+  }, [activeKind, activeRows.length]);
+
+  const handleGridScroll = useCallback(() => {
+    const el = gridRef.current;
+    if (!el || !hasMore) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceToBottom <= LOAD_MORE_DISTANCE_PX) loadMore();
+  }, [hasMore, loadMore]);
 
   const handleSave = async () => {
     const changes: SegmentRefsChanges = {};
@@ -177,8 +266,8 @@ export function SegmentRefsEditModal({
       open={open}
       onClose={onClose}
       labelledBy={titleId}
-      widthClassName="w-[680px] max-w-[96vw]"
-      panelClassName="flex max-h-[80vh] flex-col"
+      widthClassName="w-[860px] max-w-[96vw]"
+      panelClassName="flex max-h-[90vh] flex-col"
     >
         {/* Header */}
         <div
@@ -217,84 +306,181 @@ export function SegmentRefsEditModal({
             </div>
           </div>
 
-          <div
-            className="flex w-44 items-center gap-2 rounded-md px-2.5 py-1.5 sm:w-52"
-            style={{
-              background: "oklch(0.16 0.010 265 / 0.6)",
-              border: "1px solid var(--color-hairline)",
-            }}
-          >
-            <Search
-              className="h-3.5 w-3.5 shrink-0"
-              style={{ color: "var(--color-text-4)" }}
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("segment_refs_search_placeholder")}
-              aria-label={t("segment_refs_search_placeholder")}
-              autoComplete="off"
-              spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
-              style={{ color: "var(--color-text)" }}
-            />
-          </div>
-
           <ModalCloseButton onClick={onClose} ariaLabel={t("segment_refs_close")} />
         </div>
 
         {/* Body */}
-        <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
-          <Section
-            title={t("segment_refs_badge_character")}
-            kind="character"
-            icon={<User className="h-3.5 w-3.5" aria-hidden="true" />}
-            rows={filtered.character}
-            selectedSet={tempCharsSet}
-            staleCount={staleCounts.character}
-            onToggle={toggle}
-            projectName={projectName}
-            emptyText={t("segment_refs_empty_characters")}
-            manageText={t("segment_refs_manage_link")}
-            onManageClick={onManageClick}
-            hasQuery={!!q}
-            staleHint={t("segment_refs_stale_hint")}
-            searchEmptyText={t("segment_refs_search_empty")}
-          />
-          <Section
-            title={t("segment_refs_badge_scene")}
-            kind="scene"
-            icon={<MapPin className="h-3.5 w-3.5" aria-hidden="true" />}
-            rows={filtered.scene}
-            selectedSet={tempScenesSet}
-            staleCount={staleCounts.scene}
-            onToggle={toggle}
-            projectName={projectName}
-            emptyText={t("segment_refs_empty_clues")}
-            manageText={t("segment_refs_manage_link")}
-            onManageClick={onManageClick}
-            hasQuery={!!q}
-            staleHint={t("segment_refs_stale_hint")}
-            searchEmptyText={t("segment_refs_search_empty")}
-          />
-          <Section
-            title={t("segment_refs_badge_prop")}
-            kind="prop"
-            icon={<Puzzle className="h-3.5 w-3.5" aria-hidden="true" />}
-            rows={filtered.prop}
-            selectedSet={tempPropsSet}
-            staleCount={staleCounts.prop}
-            onToggle={toggle}
-            projectName={projectName}
-            emptyText={t("segment_refs_empty_clues")}
-            manageText={t("segment_refs_manage_link")}
-            onManageClick={onManageClick}
-            hasQuery={!!q}
-            staleHint={t("segment_refs_stale_hint")}
-            searchEmptyText={t("segment_refs_search_empty")}
-          />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div
+            className="flex items-center gap-2 px-5 py-3"
+            style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
+          >
+            {groups.map((group) => {
+              const active = group.kind === activeKind;
+              const rows = rowsByKind[group.kind];
+              const selectedCount = rows.reduce(
+                (n, r) => (group.selectedSet.has(r.name) ? n + 1 : n),
+                0,
+              );
+              return (
+                <button
+                  key={group.kind}
+                  type="button"
+                  onClick={() => {
+                    setActiveKind(group.kind);
+                    setVisibleCounts((prev) => ({
+                      ...prev,
+                      [group.kind]: REF_PAGE_SIZE,
+                    }));
+                  }}
+                  className="focus-ring inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors"
+                  style={{
+                    color: active ? "var(--color-text)" : "var(--color-text-4)",
+                    background: active
+                      ? "oklch(0.23 0.012 265 / 0.78)"
+                      : "oklch(0.17 0.010 265 / 0.45)",
+                    border: active
+                      ? "1px solid var(--color-accent-soft)"
+                      : "1px solid var(--color-hairline)",
+                  }}
+                >
+                  <span style={{ color: active ? "var(--color-accent-2)" : "var(--color-text-4)" }}>
+                    {group.icon}
+                  </span>
+                  <span>{group.label}</span>
+                  <span
+                    className="num rounded px-1.5 py-px text-[10px]"
+                    style={{
+                      color: active ? "var(--color-accent-2)" : "var(--color-text-4)",
+                      background: "oklch(0.10 0.008 265 / 0.42)",
+                    }}
+                  >
+                    {selectedCount}/{rows.length}
+                  </span>
+                  {group.staleCount > 0 && (
+                    <span
+                      className="num rounded px-1 py-px text-[10px]"
+                      style={{
+                        color: WARM_TONE.color,
+                        background: WARM_TONE.soft,
+                      }}
+                    >
+                      {group.staleCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            className="flex items-center gap-3 px-5 py-3"
+            style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
+          >
+            <div
+              className="flex flex-1 items-center gap-2 rounded-md px-2.5 py-1.5"
+              style={{
+                background: "oklch(0.16 0.010 265 / 0.6)",
+                border: "1px solid var(--color-hairline)",
+              }}
+            >
+              <Search
+                className="h-3.5 w-3.5 shrink-0"
+                style={{ color: "var(--color-text-4)" }}
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={activeQuery}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setQueries((prev) => ({ ...prev, [activeKind]: value }));
+                  setVisibleCounts((prev) => ({
+                    ...prev,
+                    [activeKind]: REF_PAGE_SIZE,
+                  }));
+                }}
+                placeholder={t("segment_refs_search_group_placeholder", {
+                  group: activeGroup.label,
+                  defaultValue: "搜索{{group}}…",
+                })}
+                aria-label={t("segment_refs_search_group_aria", {
+                  group: activeGroup.label,
+                  defaultValue: "搜索{{group}}",
+                })}
+                autoComplete="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+                style={{ color: "var(--color-text)" }}
+              />
+            </div>
+            <span
+              className="num text-[11px]"
+              style={{ color: "var(--color-text-4)" }}
+            >
+              {visibleRows.length}/{activeRows.length}
+            </span>
+          </div>
+
+          <div
+            ref={gridRef}
+            data-testid={`segment-refs-grid-${activeKind}`}
+            onScroll={handleGridScroll}
+            className="grid flex-1 grid-cols-4 gap-2 overflow-y-auto p-3"
+          >
+            {activeRows.length === 0 && activeQuery.trim() && (
+              <p
+                className="col-span-4 px-4 py-12 text-center text-[12px]"
+                style={{ color: "var(--color-text-4)" }}
+              >
+                {t("segment_refs_search_empty")}
+              </p>
+            )}
+            {activeRows.length === 0 && !activeQuery.trim() && (
+              <div
+                className="col-span-4 flex items-center gap-2 rounded-md px-3 py-2 text-[12px]"
+                style={{
+                  border: "1px dashed var(--color-hairline)",
+                  color: "var(--color-text-4)",
+                }}
+              >
+                <span className="flex-1">
+                  {activeKind === "character"
+                    ? t("segment_refs_empty_characters")
+                    : t("segment_refs_empty_clues")}
+                </span>
+                {onManageClick && (
+                  <button
+                    type="button"
+                    onClick={() => onManageClick(activeKind)}
+                    className="focus-ring inline-flex items-center gap-1 rounded transition-colors"
+                    style={{ color: "var(--color-accent-2)" }}
+                  >
+                    <span>{t("segment_refs_manage_link")}</span>
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )}
+            {visibleRows.map((row) => (
+              <RefAssetCard
+                key={`${row.kind}-${row.name}`}
+                row={row}
+                selected={selectedSetByKind[row.kind].has(row.name)}
+                onToggle={() => toggle(row.kind, row.name)}
+                projectName={projectName}
+                staleHint={t("segment_refs_stale_hint")}
+                onPreview={setPreviewAsset}
+              />
+            ))}
+            {hasMore && (
+              <div className="col-span-4 flex justify-center py-2">
+                <SecondaryButton size="sm" onClick={loadMore}>
+                  {t("load_more", { defaultValue: "加载更多" })}
+                </SecondaryButton>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer */}
@@ -327,199 +513,19 @@ export function SegmentRefsEditModal({
             {saving ? t("shot_detail_saving") : t("segment_refs_save")}
           </PrimaryButton>
         </div>
+        {previewAsset && (
+          <ImageLightbox
+            src={previewAsset.src}
+            alt={previewAsset.alt}
+            downloadSource={
+              previewAsset.path
+                ? { kind: "project", projectName, path: previewAsset.path }
+                : undefined
+            }
+            onClose={() => setPreviewAsset(null)}
+          />
+        )}
     </GlassModal>
-  );
-}
-
-interface SectionProps {
-  title: string;
-  kind: AssetKind;
-  icon: ReactNode;
-  rows: RefRow[];
-  selectedSet: Set<string>;
-  /** 已选且失效的引用数；由 parent 基于未过滤集合计算，避免搜索过滤后徽标消失 */
-  staleCount: number;
-  onToggle: (kind: AssetKind, name: string) => void;
-  projectName: string;
-  emptyText: string;
-  manageText: string;
-  onManageClick?: (kind: AssetKind) => void;
-  hasQuery: boolean;
-  staleHint: string;
-  searchEmptyText: string;
-}
-
-function Section({
-  title,
-  kind,
-  icon,
-  rows,
-  selectedSet,
-  staleCount,
-  onToggle,
-  projectName,
-  emptyText,
-  manageText,
-  onManageClick,
-  hasQuery,
-  staleHint,
-  searchEmptyText,
-}: SectionProps) {
-  const { t } = useTranslation("dashboard");
-  const [scrollTop, setScrollTop] = useState(0);
-  const selectedCount = rows.reduce(
-    (n, r) => (selectedSet.has(r.name) ? n + 1 : n),
-    0,
-  );
-  const rowGroups = useMemo(() => {
-    const groups: RefRow[][] = [];
-    for (let i = 0; i < rows.length; i += VIRTUAL_GRID_COLUMNS) {
-      groups.push(rows.slice(i, i + VIRTUAL_GRID_COLUMNS));
-    }
-    return groups;
-  }, [rows]);
-  const shouldVirtualize = rows.length > VIRTUALIZE_ROW_THRESHOLD;
-  const visibleRowCount = Math.ceil(VIRTUAL_SECTION_MAX_HEIGHT / VIRTUAL_ROW_ESTIMATE);
-  const rawFirstVisibleRow = shouldVirtualize ? Math.floor(scrollTop / VIRTUAL_ROW_ESTIMATE) : 0;
-  const maxFirstVisibleRow = Math.max(0, rowGroups.length - visibleRowCount);
-  const firstVisibleRow = Math.min(rawFirstVisibleRow, maxFirstVisibleRow);
-  const virtualStart = shouldVirtualize
-    ? Math.max(0, firstVisibleRow - VIRTUAL_SECTION_OVERSCAN)
-    : 0;
-  const virtualEnd = shouldVirtualize
-    ? Math.min(rowGroups.length, firstVisibleRow + visibleRowCount + VIRTUAL_SECTION_OVERSCAN)
-    : rowGroups.length;
-  const virtualRows = shouldVirtualize
-    ? rowGroups.slice(virtualStart, virtualEnd).map((group, offset) => ({
-        group,
-        index: virtualStart + offset,
-      }))
-    : [];
-
-  return (
-    <section>
-      <div className="mb-2 flex items-center gap-2">
-        <span style={{ color: "var(--color-text-3)" }}>{icon}</span>
-        <h4
-          className="num text-[10.5px] font-bold uppercase"
-          style={{
-            color: "var(--color-text-3)",
-            letterSpacing: "1.0px",
-          }}
-        >
-          {title}
-        </h4>
-        {rows.length > 0 && (
-          <span
-            className="num text-[10.5px]"
-            style={{ color: "var(--color-text-4)" }}
-          >
-            {selectedCount}/{rows.length}
-          </span>
-        )}
-        {staleCount > 0 && (
-          <span
-            className="num inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]"
-            style={{
-              background: WARM_TONE.soft,
-              border: `1px solid ${WARM_TONE.ring}`,
-              color: WARM_TONE.color,
-            }}
-            title={staleHint}
-          >
-            <span aria-hidden="true">⚠</span>
-            <span>{t("segment_refs_stale_badge", { count: staleCount })}</span>
-          </span>
-        )}
-      </div>
-      {rows.length === 0 && hasQuery && (
-        <p
-          className="px-2 py-1 text-[11.5px]"
-          style={{ color: "var(--color-text-4)" }}
-        >
-          {searchEmptyText}
-        </p>
-      )}
-      {rows.length === 0 && !hasQuery && (
-        <div
-          className="flex items-center gap-2 rounded-md px-3 py-2 text-[12px]"
-          style={{
-            border: "1px dashed var(--color-hairline)",
-            color: "var(--color-text-4)",
-          }}
-        >
-          <span className="flex-1">{emptyText}</span>
-          {onManageClick && (
-            <button
-              type="button"
-              onClick={() => onManageClick(kind)}
-              className="focus-ring inline-flex items-center gap-1 rounded transition-colors"
-              style={{ color: "var(--color-accent-2)" }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = "var(--color-text)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--color-accent-2)";
-              }}
-            >
-              <span>{manageText}</span>
-              <ExternalLink className="h-3 w-3" aria-hidden="true" />
-            </button>
-          )}
-        </div>
-      )}
-      {rows.length > 0 && !shouldVirtualize && (
-        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-          {rows.map((r) => (
-            <Row
-              key={`${kind}-${r.name}`}
-              row={r}
-              selected={selectedSet.has(r.name)}
-              onToggle={() => onToggle(r.kind, r.name)}
-              projectName={projectName}
-              staleHint={staleHint}
-            />
-          ))}
-        </div>
-      )}
-      {rows.length > 0 && shouldVirtualize && (
-        <div
-          data-testid={`segment-refs-virtual-${kind}`}
-          className="relative max-h-72 overflow-y-auto overscroll-contain pr-1"
-          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-        >
-          <div
-            className="relative"
-            style={{ height: `${rowGroups.length * VIRTUAL_ROW_ESTIMATE}px` }}
-          >
-            {virtualRows.map((virtualRow) => {
-              const group = virtualRow.group;
-              return (
-                <div
-                  key={`${kind}-virtual-row-${virtualRow.index}`}
-                  data-index={virtualRow.index}
-                  className="absolute left-0 right-0 grid grid-cols-1 gap-1.5"
-                  style={{
-                    transform: `translateY(${virtualRow.index * VIRTUAL_ROW_ESTIMATE}px)`,
-                  }}
-                >
-                  {group.map((r) => (
-                    <Row
-                      key={`${kind}-${r.name}`}
-                      row={r}
-                      selected={selectedSet.has(r.name)}
-                      onToggle={() => onToggle(r.kind, r.name)}
-                      projectName={projectName}
-                      staleHint={staleHint}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -529,18 +535,25 @@ interface RowProps {
   onToggle: () => void;
   projectName: string;
   staleHint: string;
+  onPreview: (asset: { src: string; alt: string; path?: string } | null) => void;
 }
 
-function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
+function RefAssetCard({
+  row,
+  selected,
+  onToggle,
+  projectName,
+  staleHint,
+  onPreview,
+}: RowProps) {
   const sheetFp = useProjectsStore((s) =>
     row.thumbPath ? s.getAssetFingerprint(row.thumbPath) : null,
   );
-  const isCharacter = row.kind === "character";
-  const thumbShape = isCharacter ? "rounded-full" : "rounded-md";
   const showImage = !!row.thumbPath && !row.isStale;
   const thumbSrc = showImage && row.thumbPath
     ? API.getFileUrl(projectName, row.thumbPath, sheetFp)
     : null;
+  const description = row.description?.split("\n")[0] ?? "";
 
   const baseStyle = row.isStale
     ? {
@@ -581,119 +594,107 @@ function Row({ row, selected, onToggle, projectName, staleHint }: RowProps) {
       }}
       aria-pressed={selected}
       title={row.isStale ? staleHint : row.name}
-      className="focus-ring group flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors"
+      className="focus-ring relative rounded-lg p-2 text-left transition-colors"
       style={baseStyle}
       onMouseEnter={(e) => {
-        if (row.isStale) return;
-        if (selected) {
-          e.currentTarget.style.borderColor = "var(--color-accent)";
-        } else {
-          e.currentTarget.style.borderColor = "var(--color-hairline-strong)";
-          e.currentTarget.style.background = "oklch(0.22 0.011 265 / 0.7)";
-        }
+        if (row.isStale || selected) return;
+        e.currentTarget.style.borderColor = "var(--color-hairline-strong)";
+        e.currentTarget.style.background = "oklch(0.22 0.011 265 / 0.7)";
       }}
       onMouseLeave={(e) => {
-        if (row.isStale) {
-          e.currentTarget.style.borderColor = WARM_TONE.ring;
-          return;
-        }
-        if (selected) {
-          e.currentTarget.style.borderColor = "var(--color-accent-soft)";
-        } else {
-          e.currentTarget.style.borderColor = "var(--color-hairline)";
-          e.currentTarget.style.background = "oklch(0.20 0.011 265 / 0.4)";
-        }
+        if (row.isStale || selected) return;
+        e.currentTarget.style.borderColor = "var(--color-hairline)";
+        e.currentTarget.style.background = "oklch(0.20 0.011 265 / 0.5)";
       }}
     >
       {thumbSrc && row.thumbPath ? (
-        <span
+        <button
+          type="button"
           data-ref-preview-trigger="true"
-          className={`shrink-0 ${thumbShape}`}
-        >
-          <PreviewableImageFrame
-            src={thumbSrc}
-            alt="资产图片"
-            showPreviewIcon={false}
-            downloadSource={{
-              kind: "project",
-              projectName,
+          onClick={(event) => {
+            event.stopPropagation();
+            onPreview({
+              src: thumbSrc,
+              alt: row.name,
               path: row.thumbPath,
-            }}
-          >
-            <img
-              src={thumbSrc}
-              alt="资产图片"
-              loading="lazy"
-              decoding="async"
-              className={`h-8 w-8 shrink-0 object-cover ${thumbShape}`}
-              draggable={false}
-            />
-          </PreviewableImageFrame>
-        </span>
-      ) : (
-        <span
-          className={`grid h-8 w-8 shrink-0 place-items-center text-[10px] font-semibold text-white ${thumbShape} ${
-            row.isStale ? "" : colorForName(row.name)
-          }`}
-          style={
-            row.isStale
-              ? { background: WARM_TONE.soft, color: WARM_TONE.color }
-              : undefined
-          }
+            });
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          aria-label={`${row.name} 全屏预览`}
+          className="block w-full cursor-zoom-in rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          {row.name.charAt(0)}
+          <AssetThumb
+            imageUrl={thumbSrc}
+            alt={row.name}
+            fallback="—"
+            variant="picker"
+          />
+        </button>
+      ) : (
+        <AssetThumb
+          imageUrl={null}
+          alt={row.name}
+          fallback={
+            row.isStale ? (
+              <span className="text-[10px]">{staleHint}</span>
+            ) : (
+              <ImageIcon className="h-5 w-5" aria-hidden="true" />
+            )
+          }
+          variant="picker"
+        />
+      )}
+      <div
+        className="mt-1.5 truncate text-[12px] font-semibold"
+        style={{ color: row.isStale ? WARM_TONE.color : "var(--color-text)" }}
+      >
+        {row.name}
+      </div>
+      {row.isStale ? (
+        <div
+          className="truncate text-[10px]"
+          style={{ color: WARM_TONE.color }}
+        >
+          {staleHint}
+        </div>
+      ) : (
+        description && (
+          <div
+            className="truncate text-[10px]"
+            style={{ color: "var(--color-text-4)" }}
+          >
+            {description}
+          </div>
+        )
+      )}
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full"
+          style={{
+            color: "oklch(0.14 0 0)",
+            background:
+              "linear-gradient(135deg, var(--color-accent-2), var(--color-accent))",
+            boxShadow:
+              "inset 0 1px 0 oklch(1 0 0 / 0.35), 0 0 0 1px var(--color-accent-soft)",
+          }}
+        >
+          <Check className="h-3 w-3" strokeWidth={3} />
         </span>
       )}
-      <div className="min-w-0 flex-1">
-        <p
-          className={`truncate text-[13px] ${
-            selected ? "font-semibold" : "font-medium"
-          }`}
+      {row.isStale && (
+        <span
+          className="num absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9.5px]"
           style={{
-            color: row.isStale ? WARM_TONE.color : "var(--color-text)",
+            letterSpacing: "0.4px",
+            color: WARM_TONE.color,
+            background: WARM_TONE.soft,
+            border: `1px solid ${WARM_TONE.ring}`,
           }}
         >
           {row.name}
-        </p>
-        {row.isStale ? (
-          <p
-            className="truncate text-[11px]"
-            style={{ color: WARM_TONE.color }}
-          >
-            {staleHint}
-          </p>
-        ) : (
-          row.description && (
-            <p
-              className="truncate text-[11px]"
-              style={{ color: "var(--color-text-4)" }}
-            >
-              {row.description.split("\n")[0]}
-            </p>
-          )
-        )}
-      </div>
-      <span
-        aria-hidden="true"
-        className="grid h-5 w-5 shrink-0 place-items-center rounded-full transition-colors"
-        style={
-          selected
-            ? {
-                color: "oklch(0.14 0 0)",
-                background:
-                  "linear-gradient(135deg, var(--color-accent-2), var(--color-accent))",
-                border: "1px solid var(--color-accent-soft)",
-                boxShadow: "inset 0 1px 0 oklch(1 0 0 / 0.35)",
-              }
-            : {
-                color: "var(--color-text-4)",
-                background: "transparent",
-                border: "1px solid var(--color-hairline)",
-              }
-        }
-      >
-        <Check className="h-3 w-3" strokeWidth={3} />
-      </span>
+        </span>
+      )}
     </div>
   );
 }

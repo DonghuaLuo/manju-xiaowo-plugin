@@ -126,7 +126,7 @@ describe("MediaCard", () => {
     expect(screen.getByText("6s")).toBeInTheDocument();
     expect(screen.getByText("doubao/seedance")).toBeInTheDocument();
     expect(screen.getByText("已优化输入图")).toBeInTheDocument();
-    expect(screen.getByText("基于最终分镜")).toBeInTheDocument();
+    expect(screen.getByText("基于当前最终分镜")).toBeInTheDocument();
   });
 
   it("shows grid storyboard as a valid video source badge", async () => {
@@ -158,7 +158,7 @@ describe("MediaCard", () => {
       />,
     );
 
-    expect(await screen.findByText("基于宫格镜头板")).toBeInTheDocument();
+    expect(await screen.findByText("基于当前宫格分镜")).toBeInTheDocument();
   });
 
   it("requires an overall rating before saving dimension ratings", async () => {
@@ -217,5 +217,55 @@ describe("MediaCard", () => {
         }),
       ),
     );
+  });
+
+  it("opens storyboard final generation modes before triggering generation", async () => {
+    const onGenerate = vi.fn();
+
+    render(
+      <MediaCard
+        kind="storyboard"
+        projectName="demo"
+        segmentId="SEG-1"
+        assetPath={null}
+        aspectRatio="16:9"
+        onGenerate={onGenerate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "最终版" }));
+    expect(onGenerate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /最终版 ·/ })).not.toBeInTheDocument();
+
+    const draftLockedOption = await screen.findByRole("button", { name: /沿当前分镜精修/ });
+    expect(draftLockedOption.querySelector("svg")).not.toBeInTheDocument();
+    fireEvent.click(draftLockedOption);
+    expect(onGenerate).toHaveBeenLastCalledWith("final", {
+      finalGenerationMode: "draft_locked",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "最终版" }));
+    fireEvent.click(await screen.findByRole("button", { name: /重新出图/ }));
+    expect(onGenerate).toHaveBeenLastCalledWith("final", {
+      finalGenerationMode: "fresh_sample",
+    });
+  });
+
+  it("renders the video final button with the same action icon", () => {
+    render(
+      <MediaCard
+        kind="video"
+        projectName="demo"
+        segmentId="SEG-1"
+        assetPath={null}
+        aspectRatio="16:9"
+        estimatedCost={{ CNY: 1.23 }}
+        onGenerate={vi.fn()}
+      />,
+    );
+
+    const finalButton = screen.getByRole("button", { name: "最终版" });
+    expect(finalButton.querySelector("svg")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "生成草稿" })).toBeInTheDocument();
   });
 });

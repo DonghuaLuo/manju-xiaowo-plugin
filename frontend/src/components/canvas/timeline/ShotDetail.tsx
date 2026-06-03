@@ -19,6 +19,7 @@ import type {
   VideoPrompt,
   Dialogue,
   GenerationQuality,
+  StoryboardFinalGenerationMode,
   ShotTier,
   ShotTierProfile,
   TransitionType,
@@ -72,7 +73,11 @@ interface ShotDetailProps {
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => void | Promise<void>;
-  onGenerateStoryboard?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateStoryboard?: (
+    segmentId: string,
+    quality?: GenerationQuality,
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
+  ) => void;
   onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
@@ -1000,10 +1005,10 @@ export function ShotDetail({
         assetPath={assets?.storyboard_image ?? null}
         scriptFile={scriptFile}
         aspectRatio={aspectRatio}
-        hideGenerateButton={isGridMode}
+        hideDraftGenerateButton={isGridMode}
         generating={generatingStoryboard}
         estimatedCost={sbEstimate ?? undefined}
-        onGenerate={(quality) => onGenerateStoryboard?.(segmentId, quality)}
+        onGenerate={(quality, options) => onGenerateStoryboard?.(segmentId, quality, options)}
         onRestore={onRestoreStoryboard}
         onUploaded={onRestoreStoryboard}
         generateDisabled={dirty || saving}

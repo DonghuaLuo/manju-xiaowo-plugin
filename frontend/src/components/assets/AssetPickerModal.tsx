@@ -133,7 +133,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
       open
       onClose={onClose}
       labelledBy={titleId}
-      widthClassName="w-[760px] max-w-[96vw]"
+      widthClassName="w-[860px] max-w-[96vw]"
       panelClassName="flex max-h-[90vh] flex-col"
     >
       {/* Header */}
@@ -227,7 +227,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                 onKeyDown={(event) => handleCardKeyDown(event, a, dup)}
                 className={
                   "focus-ring relative rounded-lg p-2 text-left transition-colors " +
-                  (dup ? "cursor-not-allowed " : "cursor-pointer ")
+                  (dup ? "cursor-default " : "cursor-pointer ")
                 }
                 style={{
                   border: dup
@@ -240,7 +240,6 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                     : sel
                       ? "linear-gradient(135deg, var(--color-accent-dim) 0%, oklch(0.20 0.011 265 / 0.5) 60%)"
                       : "oklch(0.20 0.011 265 / 0.5)",
-                  opacity: dup ? 0.4 : 1,
                   boxShadow: sel
                     ? "inset 0 1px 0 oklch(1 0 0 / 0.04), 0 6px 18px -6px var(--color-accent-glow)"
                     : "inset 0 1px 0 oklch(1 0 0 / 0.03)",
@@ -258,7 +257,7 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                   }
                 }}
               >
-                {url && !dup ? (
+                {url ? (
                   <button
                     type="button"
                     onClick={(event) => {
@@ -313,8 +312,8 @@ export function AssetPickerModal({ type, existingNames, onClose, onImport }: Pro
                     style={{
                       letterSpacing: "0.4px",
                       color: "oklch(0.85 0.13 75)",
-                      background: "oklch(0.30 0.10 75 / 0.30)",
-                      border: "1px solid oklch(0.45 0.13 75 / 0.40)",
+                      background: "oklch(0.16 0.07 75 / 0.82)",
+                      border: "1px solid oklch(0.34 0.11 75 / 0.58)",
                     }}
                   >
                     {t("already_in_project")}

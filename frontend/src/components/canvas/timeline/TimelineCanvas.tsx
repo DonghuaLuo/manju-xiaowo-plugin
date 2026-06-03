@@ -14,6 +14,7 @@ import type {
   DramaScene,
   ProjectData,
   GenerationQuality,
+  StoryboardFinalGenerationMode,
   VideoContinuityPolicy,
 } from "@/types";
 import type { VideoContinuitySupport } from "@/utils/provider-models";
@@ -38,6 +39,7 @@ interface TimelineCanvasProps {
     segmentId: string,
     scriptFile?: string,
     quality?: GenerationQuality,
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) => void;
   onGenerateVideo?: (
     segmentId: string,
@@ -165,8 +167,12 @@ export function TimelineCanvas({
     fieldOrPatch: string | Record<string, unknown>,
     value?: unknown,
   ) => onUpdatePrompt?.(segId, fieldOrPatch, value, scriptFile);
-  const handleGenSb = (segId: string, quality?: GenerationQuality) =>
-    onGenerateStoryboard?.(segId, scriptFile, quality);
+  const handleGenSb = (
+    segId: string,
+    quality?: GenerationQuality,
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
+  ) =>
+    onGenerateStoryboard?.(segId, scriptFile, quality, options);
   const handleGenVid = (segId: string, quality?: GenerationQuality) =>
     onGenerateVideo?.(segId, scriptFile, quality);
 
