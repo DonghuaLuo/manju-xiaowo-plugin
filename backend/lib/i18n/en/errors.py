@@ -96,6 +96,7 @@ MESSAGES = {
     # Projects
     "unknown_style_template": "Unknown style template: {template_id}",
     "project_id_not_editable": "content_mode cannot be modified after project creation",
+    "project_generation_mode_not_editable": "generation_mode cannot be modified after project creation",
     "project_deleted": "Project '{name}' deleted",
     "scene_updated": "Scene '{scene_id}' updated",
     "segment_updated": "Segment '{segment_id}' updated",

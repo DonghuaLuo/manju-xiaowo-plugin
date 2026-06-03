@@ -86,12 +86,9 @@ class ScriptGenerator:
         self.content_mode = self.project_json.get("content_mode", "narration")
 
     def _effective_generation_mode(self, episode: int) -> str:
-        """按 episode → project → 默认 storyboard 回退解析 generation_mode。"""
-        episode_dict = next(
-            (ep for ep in (self.project_json.get("episodes") or []) if ep.get("episode") == episode),
-            {},
-        )
-        return effective_mode(project=self.project_json, episode=episode_dict)
+        """按项目级固定 generation_mode 分流。"""
+        _ = episode
+        return effective_mode(project=self.project_json, episode={})
 
     @classmethod
     async def create(cls, project_path: str | Path) -> "ScriptGenerator":
@@ -442,18 +439,37 @@ class ScriptGenerator:
         # 兜底改写 segment/scene/unit ID 中的 E\d+ 前缀，避免 LLM 写错集号导致文件
         # 名跨集冲突（如 storyboards/scene_E1S01.png 被 E2 重新覆盖）。
         ep = int(episode)
+        def _apply_default_transitions(items: list[dict]) -> None:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                item.setdefault("transition_to_next", "cut")
+                next_item = items[index + 1] if index + 1 < len(items) else None
+                if (
+                    isinstance(next_item, dict)
+                    and bool(next_item.get("segment_break"))
+                    and str(item.get("transition_to_next") or "cut").strip().lower() == "cut"
+                ):
+                    item["transition_to_next"] = "fade"
+
         if gen_mode == "reference_video":
-            for u in script_data.get("video_units") or []:
+            units = [u for u in script_data.get("video_units") or [] if isinstance(u, dict)]
+            for u in units:
                 if isinstance(u, dict) and "unit_id" in u:
                     u["unit_id"] = _rewrite_episode_prefix(u.get("unit_id"), ep)
+            _apply_default_transitions(units)
         elif self.content_mode == "narration":
-            for s in script_data.get("segments") or []:
+            segments = [s for s in script_data.get("segments") or [] if isinstance(s, dict)]
+            for s in segments:
                 if isinstance(s, dict) and "segment_id" in s:
                     s["segment_id"] = _rewrite_episode_prefix(s.get("segment_id"), ep)
+            _apply_default_transitions(segments)
         else:
-            for s in script_data.get("scenes") or []:
+            scenes = [s for s in script_data.get("scenes") or [] if isinstance(s, dict)]
+            for s in scenes:
                 if isinstance(s, dict) and "scene_id" in s:
                     s["scene_id"] = _rewrite_episode_prefix(s.get("scene_id"), ep)
+            _apply_default_transitions(scenes)
         # content_mode 严格只是"内容类型"（narration/drama）；reference_video 属于
         # "视频来源"维度，由 generation_mode 表达。
         # 参考视频集必须强制覆盖：ReferenceVideoScript.content_mode 有 Pydantic 默认值

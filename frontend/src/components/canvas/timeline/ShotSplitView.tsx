@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { NarrationSegment, DramaScene, GenerationQuality } from "@/types";
+import type { NarrationSegment, DramaScene, GenerationQuality, ProjectData, VideoContinuityPolicy } from "@/types";
+import type { VideoContinuitySupport } from "@/utils/provider-models";
 import { useAppStore } from "@/stores/app-store";
 import { ShotList } from "./ShotList";
 import { ShotDetail } from "./ShotDetail";
@@ -25,6 +26,9 @@ interface ShotSplitViewProps {
   generatingStoryboard?: (segmentId: string) => boolean;
   generatingVideo?: (segmentId: string) => boolean;
   durationOptions?: number[];
+  videoContinuityPolicy?: VideoContinuityPolicy;
+  videoContinuitySupport?: VideoContinuitySupport | null;
+  shotTierProfiles?: ProjectData["shot_tier_profiles"];
 }
 
 function getSegmentId(seg: Segment, mode: "narration" | "drama"): string {
@@ -51,6 +55,9 @@ export function ShotSplitView({
   generatingStoryboard,
   generatingVideo,
   durationOptions,
+  videoContinuityPolicy,
+  videoContinuitySupport,
+  shotTierProfiles,
 }: ShotSplitViewProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(
@@ -88,6 +95,7 @@ export function ShotSplitView({
 
   const safeIndex = Math.min(selectedIndex, segments.length - 1);
   const segment = segments[safeIndex];
+  const nextSegment = segments[safeIndex + 1];
   const segmentId = getSegmentId(segment, contentMode);
 
   return (
@@ -129,6 +137,10 @@ export function ShotSplitView({
         generatingStoryboard={generatingStoryboard?.(segmentId)}
         generatingVideo={generatingVideo?.(segmentId)}
         durationOptions={durationOptions}
+        nextSegment={nextSegment}
+        videoContinuityPolicy={videoContinuityPolicy}
+        videoContinuitySupport={videoContinuitySupport}
+        shotTierProfiles={shotTierProfiles}
       />
     </div>
   );

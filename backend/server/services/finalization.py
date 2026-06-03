@@ -176,6 +176,7 @@ class EpisodeFinalizationService:
         return await self._finalize_storyboard_episode(
             project_name=project_name,
             episode=episode,
+            mode=mode,
             script=script,
             script_file=script_file,
             project_dir=project_dir,
@@ -188,6 +189,7 @@ class EpisodeFinalizationService:
         *,
         project_name: str,
         episode: int,
+        mode: str,
         script: dict[str, Any],
         script_file: str,
         project_dir: Path,
@@ -361,7 +363,7 @@ class EpisodeFinalizationService:
 
         return {
             "success": True,
-            "mode": "storyboard",
+            "mode": mode if mode in {"storyboard", "grid"} else "storyboard",
             "project_name": project_name,
             "episode": episode,
             "script_file": script_file,

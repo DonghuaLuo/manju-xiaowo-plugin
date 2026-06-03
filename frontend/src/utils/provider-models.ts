@@ -143,3 +143,110 @@ export function lookupResolutions(
   const model = provider?.models?.[modelId];
   return { options: model?.resolutions ?? [], isCustom: false };
 }
+
+export type VideoContinuityCapability = "end_frame" | "reference_images" | "start_only";
+export interface VideoContinuitySupport {
+  endFrame: boolean;
+  referenceImages: boolean;
+}
+
+const VIDU_START_END_MODELS = new Set([
+  "viduq3-turbo",
+  "viduq3-pro",
+  "viduq2-pro-fast",
+  "viduq2-pro",
+  "viduq2-turbo",
+  "viduq1",
+  "viduq1-classic",
+  "vidu2.0",
+]);
+
+const VIDU_REFERENCE_MODELS = new Set([
+  "viduq3-mix",
+  "viduq3-turbo",
+  "viduq3",
+  "viduq2-pro",
+  "viduq2",
+  "viduq1",
+  "vidu2.0",
+]);
+
+export function capabilityFromVideoContinuitySupport(
+  support: VideoContinuitySupport,
+): VideoContinuityCapability {
+  if (support.endFrame) return "end_frame";
+  if (support.referenceImages) return "reference_images";
+  return "start_only";
+}
+
+export function videoContinuitySupportFromCapabilities(
+  caps:
+    | {
+        supports_end_image?: boolean;
+        supports_last_frame?: boolean;
+        supports_reference_images?: boolean;
+        video_continuity_capabilities?: string[];
+      }
+    | null
+    | undefined,
+): VideoContinuitySupport | null {
+  if (!caps) return null;
+  const rawCapabilities = caps.video_continuity_capabilities ?? [];
+  return {
+    endFrame: Boolean(caps.supports_end_image || caps.supports_last_frame || rawCapabilities.includes("end_image")),
+    referenceImages: Boolean(caps.supports_reference_images || rawCapabilities.includes("reference_images")),
+  };
+}
+
+/** Conservative UI hint for storyboard-video continuity. Backend capability checks remain authoritative. */
+export function lookupVideoContinuitySupport(
+  backend: string,
+  customProviders?: CustomProviderInfo[],
+): VideoContinuitySupport {
+  const slashIdx = backend.indexOf("/");
+  if (slashIdx === -1) return { endFrame: false, referenceImages: false };
+  const providerId = backend.slice(0, slashIdx).toLowerCase();
+  const modelId = backend.slice(slashIdx + 1).toLowerCase();
+
+  if (providerId.startsWith(CUSTOM_PREFIX) && customProviders) {
+    const dbId = parseInt(providerId.slice(CUSTOM_PREFIX.length), 10);
+    const cp = customProviders.find((p) => p.id === dbId);
+    const endpoint = cp?.models?.find((m) => m.model_id.toLowerCase() === modelId)?.endpoint ?? "";
+    if (endpoint === "v2-video-generations") return { endFrame: true, referenceImages: false };
+    if (endpoint.includes("openai") || endpoint.includes("grok")) return { endFrame: false, referenceImages: true };
+    if (endpoint.includes("dashscope") && modelId.includes("r2v")) return { endFrame: false, referenceImages: true };
+    return { endFrame: false, referenceImages: false };
+  }
+
+  if ((providerId === "gemini-aistudio" || providerId === "gemini-vertex") && modelId.startsWith("veo-3.1")) {
+    return { endFrame: true, referenceImages: false };
+  }
+  if (providerId === "ark") {
+    if (modelId.includes("seedance-2")) return { endFrame: true, referenceImages: true };
+    if (modelId.includes("seedance-1-5-pro")) return { endFrame: true, referenceImages: false };
+    if (modelId.includes("seedance-1-0-pro") && !modelId.includes("fast")) {
+      return { endFrame: true, referenceImages: false };
+    }
+    return { endFrame: false, referenceImages: false };
+  }
+  if (providerId === "vidu") {
+    return {
+      endFrame: VIDU_START_END_MODELS.has(modelId),
+      referenceImages: VIDU_REFERENCE_MODELS.has(modelId),
+    };
+  }
+  if (providerId === "v2-video-generations") return { endFrame: true, referenceImages: false };
+  if (providerId === "openai" && modelId.startsWith("sora")) return { endFrame: false, referenceImages: true };
+  if (providerId === "grok") return { endFrame: false, referenceImages: true };
+  if (providerId === "dashscope" && modelId.includes("r2v")) return { endFrame: false, referenceImages: true };
+  return { endFrame: false, referenceImages: false };
+}
+
+export function lookupVideoContinuityCapability(
+  backend: string,
+  customProviders?: CustomProviderInfo[],
+): VideoContinuityCapability {
+  return capabilityFromVideoContinuitySupport(
+    lookupVideoContinuitySupport(backend, customProviders),
+  );
+}

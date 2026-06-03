@@ -10,10 +10,16 @@ import {
   type ProviderRecommendation,
   type QualityStatsResponse,
   type StyleTemplateInfo,
+  type VideoCapabilitiesResponse,
 } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
-import { getProviderModels, getCustomProviderModels } from "@/utils/provider-models";
+import {
+  getProviderModels,
+  getCustomProviderModels,
+  lookupVideoContinuitySupport,
+  videoContinuitySupportFromCapabilities,
+} from "@/utils/provider-models";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import { SelectMenu } from "@/components/ui/SelectMenu";
@@ -25,6 +31,7 @@ import type {
   ProviderInfo,
   ShotTier,
   ShotTierProfile,
+  VideoContinuityPolicy,
   VideoGenerationProfile,
 } from "@/types";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
@@ -32,6 +39,7 @@ import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS, radioCardClass }
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { normalizeMode, type GenerationMode } from "@/utils/generation-mode";
+import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import { getProjectDisplayName } from "@/utils/project-display";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import {
@@ -262,6 +270,7 @@ export function ProjectSettingsPage() {
   const [textStyle, setTextStyle] = useState<string>("");
   const [aspectRatio, setAspectRatio] = useState<string>("");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("storyboard");
+  const [videoContinuityPolicy, setVideoContinuityPolicy] = useState<VideoContinuityPolicy>("auto");
   const [defaultDuration, setDefaultDuration] = useState<number | null>(null);
   const [episodeTargetUnits, setEpisodeTargetUnits] = useState<string>(String(DEFAULT_EPISODE_TARGET_UNITS));
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("zh");
@@ -276,6 +285,7 @@ export function ProjectSettingsPage() {
   );
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
+  const [videoCapabilities, setVideoCapabilities] = useState<VideoCapabilitiesResponse | null>(null);
   const [projectTitle, setProjectTitle] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [routePreview, setRoutePreview] = useState<{
@@ -297,6 +307,7 @@ export function ProjectSettingsPage() {
     videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null as boolean | null,
     textScript: "", textOverview: "", textStyle: "",
     aspectRatio: "", generationMode: "storyboard",
+    videoContinuityPolicy: "auto" as VideoContinuityPolicy,
     defaultDuration: null as number | null,
     episodeTargetUnits: String(DEFAULT_EPISODE_TARGET_UNITS),
     sourceLanguage: "zh",
@@ -317,7 +328,8 @@ export function ProjectSettingsPage() {
       API.getStyleTemplates().catch(() => ({ success: false, templates: [] as StyleTemplateInfo[] })),
       getProviderModels().catch(() => [] as ProviderInfo[]),
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
-    ]).then(([configRes, projectRes, styleTemplatesRes, providerList, customProviderList]) => {
+      API.getVideoCapabilities(projectName).catch(() => null),
+    ]).then(([configRes, projectRes, styleTemplatesRes, providerList, customProviderList, videoCaps]) => {
       if (disposed) return;
       const { templates, prompts: templatePrompts } = normalizeStyleTemplatePayload(styleTemplatesRes.templates);
       setStyleTemplates(templates);
@@ -345,6 +357,7 @@ export function ProjectSettingsPage() {
       });
       setProviders(providerList);
       setCustomProviders(customProviderList);
+      setVideoCapabilities(videoCaps);
 
       const project = projectRes.project as unknown as Record<string, unknown>;
       const vb = (project.video_backend as string | undefined) ?? "";
@@ -362,6 +375,7 @@ export function ProjectSettingsPage() {
       // Mirror that here so the UI reflects the actually-effective ratio.
       const ar = rawAr || "9:16";
       const gm = normalizeMode(project.generation_mode);
+      const vcp = normalizeVideoContinuityPolicy(project.video_continuity_policy);
       const dd = project.default_duration != null ? (project.default_duration as number) : null;
       const targetUnits = normalizeEpisodeTargetUnits(project.episode_target_units);
       const targetUnitsInput = String(targetUnits);
@@ -376,6 +390,7 @@ export function ProjectSettingsPage() {
       setTextStyle(tst);
       setAspectRatio(ar);
       setGenerationMode(gm);
+      setVideoContinuityPolicy(vcp);
       setDefaultDuration(dd);
       setEpisodeTargetUnits(targetUnitsInput);
       setSourceLanguage(lang);
@@ -420,7 +435,7 @@ export function ProjectSettingsPage() {
       initialRef.current = {
         videoBackend: vb, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i, audioOverride: ao,
         textScript: ts, textOverview: to, textStyle: tst,
-        aspectRatio: ar, generationMode: gm, defaultDuration: dd,
+        aspectRatio: ar, generationMode: gm, videoContinuityPolicy: vcp, defaultDuration: dd,
         episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
         videoResolution: vRes, imageResolution: iRes,
         generationProfiles: generationProfilesSignature(normalizedProfiles),
@@ -491,6 +506,7 @@ export function ProjectSettingsPage() {
         image_provider_t2i: imageBackendT2I || null,
         image_provider_i2i: imageBackendI2I || null,
         video_generate_audio: audioOverride,
+        video_continuity_policy: videoContinuityPolicy,
         default_duration: defaultDuration,
         model_settings: modelSettings,
       },
@@ -523,6 +539,7 @@ export function ProjectSettingsPage() {
     shotTierProfiles,
     t,
     videoBackend,
+    videoContinuityPolicy,
     videoResolution,
   ]);
 
@@ -535,6 +552,7 @@ export function ProjectSettingsPage() {
     textOverview !== initialRef.current.textOverview ||
     textStyle !== initialRef.current.textStyle ||
     aspectRatio !== initialRef.current.aspectRatio ||
+    videoContinuityPolicy !== initialRef.current.videoContinuityPolicy ||
     defaultDuration !== initialRef.current.defaultDuration ||
     episodeTargetUnits !== initialRef.current.episodeTargetUnits ||
     sourceLanguage !== initialRef.current.sourceLanguage ||
@@ -592,6 +610,18 @@ export function ProjectSettingsPage() {
     }
     return (route.warnings ?? []).map((warning) => formatRouteWarning(t, route, warning));
   }), [routePreview.routes, t]);
+  const effectiveVideoBackendForContinuity = videoBackend || globalDefaults.video || "";
+  const videoContinuitySupport = useMemo(() => {
+    if (!effectiveVideoBackendForContinuity) return null;
+    const capsBackend = videoCapabilities
+      ? `${videoCapabilities.provider_id}/${videoCapabilities.model}`
+      : "";
+    const capsSupport = videoContinuitySupportFromCapabilities(videoCapabilities);
+    if (capsSupport && capsBackend === effectiveVideoBackendForContinuity) {
+      return capsSupport;
+    }
+    return lookupVideoContinuitySupport(effectiveVideoBackendForContinuity, customProviders);
+  }, [customProviders, effectiveVideoBackendForContinuity, videoCapabilities]);
 
   const updateImageProfile = (
     key: ImageProfileKey,
@@ -864,6 +894,7 @@ export function ProjectSettingsPage() {
         text_backend_overview: textOverview || null,
         text_backend_style: textStyle || null,
         aspect_ratio: aspectRatio || undefined,
+        video_continuity_policy: videoContinuityPolicy,
         default_duration: defaultDuration,
         episode_target_units: normalizedEpisodeTargetUnits,
         source_language: sourceLanguage,
@@ -872,6 +903,8 @@ export function ProjectSettingsPage() {
         shot_tier_profiles: savedShotTierProfiles,
       });
       const savedEpisodeTargetUnits = String(normalizedEpisodeTargetUnits);
+      const refreshedVideoCaps = await API.getVideoCapabilities(projectName).catch(() => null);
+      setVideoCapabilities(refreshedVideoCaps);
       setEpisodeTargetUnits(savedEpisodeTargetUnits);
       setModelSettings(newModelSettings);
       setGenerationProfiles(savedGenerationProfiles);
@@ -879,7 +912,7 @@ export function ProjectSettingsPage() {
       initialRef.current = {
         videoBackend, imageBackendT2I, imageBackendI2I, audioOverride,
         textScript, textOverview, textStyle,
-        aspectRatio, generationMode, defaultDuration,
+        aspectRatio, generationMode, videoContinuityPolicy, defaultDuration,
         episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
         videoResolution, imageResolution,
         generationProfiles: generationProfilesSignature(savedGenerationProfiles),
@@ -891,7 +924,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
 
   return (
     <div
@@ -1070,7 +1103,32 @@ export function ProjectSettingsPage() {
                     textOverview: globalDefaults.textOverview ?? "",
                     textStyle: globalDefaults.textStyle ?? "",
                   }}
+                  videoContinuitySupport={videoContinuitySupport}
                 />
+                <div className="mt-4 rounded-[10px] border border-hairline-soft bg-bg-grad-a/35 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[13px] font-semibold text-text">
+                        {t("video_continuity_policy_label")}
+                      </div>
+                      <div className="mt-1 text-[11.5px] leading-[1.45] text-text-4">
+                        {t(`video_continuity_policy_${videoContinuityPolicy}_hint`)}
+                      </div>
+                    </div>
+                    <div className="w-44 shrink-0">
+                      <SelectMenu
+                        value={videoContinuityPolicy}
+                        options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
+                          value: policy,
+                          label: t(`video_continuity_policy_${policy}`),
+                        }))}
+                        onChange={(next) => setVideoContinuityPolicy(normalizeVideoContinuityPolicy(next))}
+                        ariaLabel={t("video_continuity_policy_label")}
+                        panelLabel={t("video_continuity_policy_label")}
+                      />
+                    </div>
+                  </div>
+                </div>
               </SectionCard>
 
               <SectionCard
@@ -1163,7 +1221,7 @@ export function ProjectSettingsPage() {
                               })}
                             </span>
                           </div>
-                          <div className="grid gap-3 sm:grid-cols-4">
+                          <div className="grid gap-3 sm:grid-cols-5">
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("shot_tier_retry_budget", { defaultValue: "重试预算" })}
@@ -1199,6 +1257,26 @@ export function ProjectSettingsPage() {
                                 }
                                 ariaLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
                                 panelLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
+                                className={PROFILE_INPUT_CLS}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1.5 block text-[11px] text-text-3">
+                                {t("video_continuity_policy_label")}
+                              </span>
+                              <SelectMenu
+                                value={tierProfile.video_continuity_policy ?? "auto"}
+                                options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
+                                  value: policy,
+                                  label: t(`video_continuity_policy_${policy}`),
+                                }))}
+                                onChange={(next) =>
+                                  updateShotTierProfile(tier, {
+                                    video_continuity_policy: normalizeVideoContinuityPolicy(next),
+                                  })
+                                }
+                                ariaLabel={t("video_continuity_policy_label")}
+                                panelLabel={t("video_continuity_policy_label")}
                                 className={PROFILE_INPUT_CLS}
                               />
                             </label>

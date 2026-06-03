@@ -184,11 +184,17 @@ class ViduVideoBackend:
     @staticmethod
     def video_capabilities_for_model(model: str) -> VideoCapabilities:
         """按 model_id 纯计算 caps，不构造 Vidu client。"""
+        model_id = (model or "").lower()
+        supports_first_frame = (
+            model_id in _ENDPOINT_MODELS["/img2video"] or model_id in _ENDPOINT_MODELS["/start-end2video"]
+        )
+        supports_last_frame = model_id in _ENDPOINT_MODELS["/start-end2video"]
+        supports_reference_images = model_id in _ENDPOINT_MODELS["/reference2video"]
         return VideoCapabilities(
-            first_frame=True,
-            last_frame=True,
-            reference_images=True,
-            max_reference_images=_MAX_REFERENCE_IMAGES,
+            first_frame=supports_first_frame,
+            last_frame=supports_last_frame,
+            reference_images=supports_reference_images,
+            max_reference_images=_MAX_REFERENCE_IMAGES if supports_reference_images else 0,
         )
 
     @property

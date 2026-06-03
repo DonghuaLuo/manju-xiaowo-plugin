@@ -33,6 +33,7 @@ from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.project_manager import ProjectManager
 from lib.text_backends.base import TextTaskType
+from lib.video_backends.base import VideoCapabilities
 
 _project_manager: ProjectManager | None = None
 
@@ -145,6 +146,98 @@ def _video_capability_fields(capabilities: list[str]) -> dict[str, object]:
         "supports_service_tier": supports_service_tier,
         "service_tiers": ["default", "flex"] if supports_service_tier else ["default"],
     }
+
+
+def _recommended_video_continuity_policy(caps: VideoCapabilities) -> str:
+    if caps.last_frame:
+        return "end_frame"
+    if caps.reference_images:
+        return "reference_assisted"
+    return "start_only"
+
+
+def _video_continuity_fields(caps: VideoCapabilities) -> dict[str, object]:
+    capabilities: list[str] = []
+    if caps.first_frame:
+        capabilities.append("start_image")
+    if caps.last_frame:
+        capabilities.append("end_image")
+    if caps.reference_images:
+        capabilities.append("reference_images")
+    return {
+        "supports_start_image": caps.first_frame,
+        "supports_end_image": caps.last_frame,
+        "supports_reference_images": caps.reference_images,
+        # Keep raw first/last frame names too, so API consumers can match provider docs directly.
+        "supports_first_frame": caps.first_frame,
+        "supports_last_frame": caps.last_frame,
+        "video_continuity_capabilities": capabilities,
+        "recommended_continuity_policy": _recommended_video_continuity_policy(caps),
+    }
+
+
+def _video_caps_for_endpoint(
+    endpoint_key: str,
+    model_id: str,
+    *,
+    max_reference_images: int | None,
+) -> VideoCapabilities:
+    if endpoint_key == "ark-seedance":
+        from lib.video_backends.ark import ArkVideoBackend
+
+        return ArkVideoBackend.video_capabilities_for_model(model_id)
+    if endpoint_key == "vidu-video":
+        from lib.video_backends.vidu import ViduVideoBackend
+
+        return ViduVideoBackend.video_capabilities_for_model(model_id)
+    if endpoint_key == "v2-video-generations":
+        from lib.video_backends.v2_video_generations import V2VideoGenerationsBackend
+
+        return V2VideoGenerationsBackend.video_capabilities_for_model(model_id)
+    if endpoint_key == "dashscope-async-video":
+        from lib.video_backends.dashscope import DashScopeVideoBackend
+
+        return DashScopeVideoBackend.video_capabilities_for_model(model_id)
+    if endpoint_key == "openai-video":
+        return VideoCapabilities(reference_images=True, max_reference_images=1)
+    if endpoint_key == "newapi-video":
+        return VideoCapabilities(reference_images=False, max_reference_images=0)
+    return VideoCapabilities(
+        reference_images=(max_reference_images or 0) > 0,
+        max_reference_images=max_reference_images or 0,
+    )
+
+
+def _video_caps_for_provider(provider_id: str, model_id: str) -> VideoCapabilities | None:
+    if provider_id in {"gemini-aistudio", "gemini-vertex"}:
+        return VideoCapabilities(last_frame=True, reference_images=True, max_reference_images=3)
+    if provider_id in {"ark", "ark-agent-plan"}:
+        from lib.video_backends.ark import ArkVideoBackend
+
+        return ArkVideoBackend.video_capabilities_for_model(model_id)
+    if provider_id == "vidu":
+        from lib.video_backends.vidu import ViduVideoBackend
+
+        return ViduVideoBackend.video_capabilities_for_model(model_id)
+    if provider_id == "dashscope":
+        from lib.video_backends.dashscope import DashScopeVideoBackend
+
+        return DashScopeVideoBackend.video_capabilities_for_model(model_id)
+    if provider_id == "openai":
+        return VideoCapabilities(reference_images=True, max_reference_images=1)
+    if provider_id == "grok":
+        return VideoCapabilities(reference_images=True, max_reference_images=7)
+    if provider_id == "newapi":
+        return VideoCapabilities(reference_images=False, max_reference_images=0)
+    return None
+
+
+def _fallback_video_caps(capabilities: list[str], max_reference_images: int | None) -> VideoCapabilities:
+    return VideoCapabilities(
+        first_frame="image_to_video" in set(capabilities),
+        reference_images=(max_reference_images or 0) > 0,
+        max_reference_images=max_reference_images or 0,
+    )
 
 
 def _trusted_payload_provider(provider_id: object) -> str | None:
@@ -483,6 +576,11 @@ class ConfigResolver:
             endpoint_cap = endpoint_spec.video_max_reference_images
             if endpoint_cap is not None:
                 max_reference_images = endpoint_cap
+                video_caps = _video_caps_for_endpoint(
+                    endpoint_key,
+                    model_id,
+                    max_reference_images=endpoint_cap,
+                )
             else:
                 caps_fn = endpoint_spec.video_caps_for_model
                 if caps_fn is None:
@@ -490,7 +588,8 @@ class ConfigResolver:
                         f"video endpoint {model.endpoint!r} declares neither video_max_reference_images "
                         f"nor video_caps_for_model: {provider_id}/{model_id}"
                     )
-                max_reference_images = caps_fn(model_id).max_reference_images
+                video_caps = caps_fn(model_id)
+                max_reference_images = video_caps.max_reference_images
                 if max_reference_images < 0:
                     raise ValueError(
                         f"invalid backend max_reference_images: {provider_id}/{model_id} "
@@ -518,8 +617,13 @@ class ConfigResolver:
             if model_info is None:
                 raise ValueError(f"model not found in registry: {provider_id}/{model_id}")
             supported_durations = list(model_info.supported_durations or [])
-            max_reference_images = model_info.max_reference_images
             capabilities = list(model_info.capabilities or [])
+            video_caps = _video_caps_for_provider(provider_id, model_id)
+            if video_caps is not None:
+                max_reference_images = video_caps.max_reference_images
+            else:
+                max_reference_images = model_info.max_reference_images
+                video_caps = _fallback_video_caps(capabilities, max_reference_images)
             resolutions = list(model_info.resolutions or [])
             duration_resolution_constraints = {
                 key: list(value) for key, value in (model_info.duration_resolution_constraints or {}).items()
@@ -555,6 +659,7 @@ class ConfigResolver:
             "resolutions": resolutions,
             "duration_resolution_constraints": duration_resolution_constraints,
             **_video_capability_fields(capabilities),
+            **_video_continuity_fields(video_caps),
             "endpoint": endpoint_key,
             "endpoint_family": endpoint_family,
             "source": source,

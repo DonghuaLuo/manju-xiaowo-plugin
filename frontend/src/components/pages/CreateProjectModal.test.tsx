@@ -252,6 +252,7 @@ describe("CreateProjectModal", () => {
         content_mode: "narration",
         aspect_ratio: "9:16",
         generation_mode: "storyboard",
+        video_continuity_policy: "auto",
         style_template_id: "live_premium_drama",
         style: "画风：真人电视剧风格，精品短剧画风，大师级构图",
         video_backend: null,
@@ -289,6 +290,9 @@ describe("CreateProjectModal", () => {
     expect(payload.generation_profiles?.video_final?.resolution).toBe("4K");
     expect(payload.generation_profiles?.video_draft?.resolution).toBe("720p");
     expect(payload.generation_profiles?.storyboard_draft?.resolution).toBe("1K");
+    expect(payload.shot_tier_profiles?.S?.retry_budget).toBe(1);
+    expect(payload.shot_tier_profiles?.A?.retry_budget).toBe(1);
+    expect(payload.shot_tier_profiles?.B?.retry_budget).toBe(1);
   });
 
   it("goes back from step 2 to step 1 preserving title", async () => {

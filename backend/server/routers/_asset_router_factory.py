@@ -25,6 +25,7 @@ from lib.i18n import Translator
 from lib.project_change_hints import project_change_source
 from lib.project_manager import ProjectManager
 from server.auth import CurrentUser
+from server.services.design_resource_usage import find_design_resource_usages
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,8 @@ def build_asset_router(
                     bucket = project.get(spec.bucket_key) or {}
                     if entry_name not in bucket:
                         raise KeyError(entry_name)
+                    if find_design_resource_usages(manager, project_name, project, spec.bucket_key, entry_name):
+                        raise HTTPException(status_code=409, detail="已应用，无法删除")
                     del bucket[entry_name]
 
                 with project_change_source("webui"):

@@ -60,7 +60,9 @@ calc = StatusCalculator(pm)
 # episode 字段白名单：只允许持久化合法的 on-disk 字段。
 # StatusCalculator 注入的统计字段（scenes_count / status / storyboards / videos 等）
 # 是读时计算值，禁止写回 project.json。
-EPISODE_PERSIST_FIELDS = {"title", "script_file", "generation_mode"}
+EPISODE_PERSIST_FIELDS = {"title", "script_file"}
+VideoContinuityPolicy = Literal["auto", "start_only", "end_frame", "reference_assisted"]
+GenerationMode = Literal["storyboard", "grid", "reference_video"]
 
 
 def get_project_manager() -> ProjectManager:
@@ -92,7 +94,7 @@ class CreateProjectRequest(BaseModel):
     default_duration: int | None = None
     episode_target_units: int | None = 1000
     source_language: Literal["zh", "en", "vi"] | None = "zh"
-    generation_mode: str | None = None
+    generation_mode: GenerationMode = "storyboard"
     # ===== 新增 =====
     style_template_id: str | None = None
     video_backend: str | None = None
@@ -105,6 +107,7 @@ class CreateProjectRequest(BaseModel):
     model_settings: dict[str, dict[str, str | None]] | None = None
     generation_profiles: dict[str, dict[str, Any | None]] | None = None
     shot_tier_profiles: dict[str, dict[str, Any | None]] | None = None
+    video_continuity_policy: VideoContinuityPolicy | None = None
 
 
 class EpisodePatch(BaseModel):
@@ -118,7 +121,7 @@ class EpisodePatch(BaseModel):
     episode: int
     title: str | None = None
     script_file: str | None = None
-    generation_mode: Literal["storyboard", "grid", "reference_video"] | None = None
+    generation_mode: GenerationMode | None = None
 
 
 class UpdateProjectRequest(BaseModel):
@@ -145,6 +148,7 @@ class UpdateProjectRequest(BaseModel):
     model_settings: dict[str, dict[str, str | None]] | None = None
     generation_profiles: dict[str, dict[str, Any | None]] | None = None
     shot_tier_profiles: dict[str, dict[str, Any | None]] | None = None
+    video_continuity_policy: VideoContinuityPolicy | None = None
 
 
 def _validate_episode_target_units(value: int | None) -> int | None:
@@ -548,13 +552,14 @@ async def create_project(
                 extras["generation_profiles"] = req.generation_profiles
             if req.shot_tier_profiles is not None:
                 extras["shot_tier_profiles"] = req.shot_tier_profiles
+            if req.video_continuity_policy is not None:
+                extras["video_continuity_policy"] = req.video_continuity_policy
             if req.source_language is not None:
                 extras["source_language"] = req.source_language
             if episode_target_units is not None:
                 extras["episode_target_units"] = episode_target_units
-            # generation_mode 并入 extras 一次性写入，避免 create 后再 load-save 的额外 RMW
-            if req.generation_mode is not None:
-                extras["generation_mode"] = req.generation_mode
+            # generation_mode 是项目级固定选择，创建时一次性写入。
+            extras["generation_mode"] = req.generation_mode
             with project_change_source("webui"):
                 project = manager.create_project_metadata(
                     project_name,
@@ -671,6 +676,11 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                     status_code=400,
                     detail=_t("project_id_not_editable"),
                 )
+            if "generation_mode" in req.model_fields_set:
+                raise HTTPException(
+                    status_code=400,
+                    detail=_t("project_generation_mode_not_editable"),
+                )
 
             # legacy image_backend 已退役（拆为 image_provider_t2i/i2i）；写路径直接拒绝，
             # 避免迁移后再写时被解析链忽略、静默落到全局默认的另一供应商。
@@ -707,11 +717,6 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                         project["video_generate_audio"] = req.video_generate_audio
                 if "aspect_ratio" in req.model_fields_set and req.aspect_ratio is not None:
                     project["aspect_ratio"] = req.aspect_ratio
-                if "generation_mode" in req.model_fields_set:
-                    if req.generation_mode is None:
-                        project.pop("generation_mode", None)
-                    else:
-                        project["generation_mode"] = req.generation_mode
                 if "default_duration" in req.model_fields_set:
                     if req.default_duration is None:
                         project.pop("default_duration", None)
@@ -783,15 +788,25 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                     else:
                         project["shot_tier_profiles"] = req.shot_tier_profiles
 
+                if "video_continuity_policy" in req.model_fields_set:
+                    if req.video_continuity_policy is None:
+                        project.pop("video_continuity_policy", None)
+                    else:
+                        project["video_continuity_policy"] = req.video_continuity_policy
+
                 if "episodes" in req.model_fields_set and req.episodes is not None:
                     # 合并 episodes：保留现有 episode 的完整数据，仅更新请求中显式提供的字段。
-                    # 使用 model_fields_set（而非 exclude_none）判断字段是否显式出现，使得
-                    # `generation_mode: null` 可用于清空集级覆盖、回退到项目级模式继承。
+                    # generation_mode 是项目级固定选择，分集不得覆盖，避免混合模式项目。
                     # 白名单同时拦截 StatusCalculator 注入的计算字段（scenes_count / status
                     # / storyboards / videos 等），防止写回 project.json。
                     existing_list = project.get("episodes", [])
                     patch_map: dict[int, EpisodePatch] = {}
                     for ep in req.episodes:
+                        if "generation_mode" in ep.model_fields_set:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=_t("project_generation_mode_not_editable"),
+                            )
                         patch_map[ep.episode] = ep  # 重复编号：后者覆盖前者
 
                     new_episodes: list[dict] = []

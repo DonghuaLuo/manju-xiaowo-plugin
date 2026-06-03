@@ -17,7 +17,9 @@ import type {
   DramaScene,
   ProjectData,
   GenerationQuality,
+  VideoContinuityPolicy,
 } from "@/types";
+import type { VideoContinuitySupport } from "@/utils/provider-models";
 
 type Segment = NarrationSegment | DramaScene;
 type GridTab = "preprocessing" | "grid_preview" | "units";
@@ -31,6 +33,8 @@ interface GridImageToVideoCanvasProps {
   scriptFile?: string;
   projectData: ProjectData | null;
   durationOptions?: number[];
+  videoContinuityPolicy?: VideoContinuityPolicy;
+  videoContinuitySupport?: VideoContinuitySupport | null;
   onUpdatePrompt?: (
     segmentId: string,
     fieldOrPatch: string | Record<string, unknown>,
@@ -65,6 +69,8 @@ export function GridImageToVideoCanvas({
   scriptFile,
   projectData,
   durationOptions,
+  videoContinuityPolicy,
+  videoContinuitySupport,
   onUpdatePrompt,
   onGenerateStoryboard,
   onGenerateVideo,
@@ -315,6 +321,9 @@ export function GridImageToVideoCanvas({
             generatingStoryboard={generatingStoryboard}
             generatingVideo={generatingVideo}
             durationOptions={durationOptions}
+            videoContinuityPolicy={videoContinuityPolicy}
+            videoContinuitySupport={videoContinuitySupport}
+            shotTierProfiles={projectData.shot_tier_profiles}
           />
         ) : null}
       </div>

@@ -328,7 +328,7 @@ describe("ProjectSettingsPage – style picker", () => {
 
     renderAt("/app/projects/demo/settings");
 
-    const referenceVideoRadio = await screen.findByRole("radio", { name: /参考生视频|Reference-to-Video/i });
+    const referenceVideoRadio = await screen.findByRole("radio", { name: /参考视频预览|Reference Video Preview/i });
     const storyboardRadio = screen.getByRole("radio", { name: /图生视频|Image-to-Video/i });
     expect(referenceVideoRadio).not.toBeChecked();
     expect(referenceVideoRadio).toBeDisabled();
@@ -349,7 +349,6 @@ describe("ProjectSettingsPage – style picker", () => {
     expect(payload).not.toHaveProperty("generation_mode");
   });
 });
-
 describe("ProjectSettingsPage – model_settings resolution", () => {
   beforeEach(() => {
     useAppStore.setState(useAppStore.getInitialState(), true);

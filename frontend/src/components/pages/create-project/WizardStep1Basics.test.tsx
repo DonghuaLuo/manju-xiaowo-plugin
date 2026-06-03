@@ -93,8 +93,8 @@ describe("WizardStep1Basics", () => {
         onCancel={() => {}}
       />,
     );
-    // click 宫格生视频 / Grid-to-Video
-    fireEvent.click(screen.getByText(/Grid-to-Video|宫格生视频/));
+    // click 宫格分镜草稿 / Grid Storyboard Draft
+    fireEvent.click(screen.getByText(/Grid Storyboard Draft|宫格分镜草稿/));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ generationMode: "grid" }),
     );
@@ -168,7 +168,7 @@ describe("WizardStep1Basics", () => {
         onCancel={() => {}}
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: /Reference-to-Video|参考生视频/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Reference Video Preview|参考视频预览/ }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ generationMode: "reference_video" }));
   });
 });

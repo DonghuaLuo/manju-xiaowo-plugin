@@ -32,9 +32,13 @@ from server.auth import CurrentUser
 from server.services.finalization import EpisodeFinalizationService, build_finalization_task_report
 from server.services.generation_route_resolver import compact_generation_payload, resolve_generation_route
 from server.services.generation_tasks import (
+    _END_FRAME_SKIP_TRANSITIONS,
     _collect_reference_images,
+    _item_reference_values,
+    _normalize_continuity_policy,
     _normalize_storyboard_prompt,
     _normalize_video_prompt,
+    _storyboard_path_for_item,
     resolve_video_prompt_policy,
 )
 
@@ -180,10 +184,83 @@ def _external_storyboard_text(prompt_text: str, references: list[dict[str, Any]]
 
 def _external_video_text(prompt_text: str, references: list[dict[str, Any]]) -> str:
     return (
-        "我会上传/粘贴下列参考图，请使用分镜图参考生成视频；如果包含“视频首帧”，请把它作为首帧，动作从这张图开始，保持主体、构图和风格一致。\n\n"
+        "我会上传/粘贴下列参考图，请使用分镜图参考生成视频；如果包含“视频首帧”，请把它作为首帧，动作从这张图开始，保持主体、构图和风格一致。"
+        "如果包含“下一张分镜图”，支持 end_image / last frame 的模型请把它作为尾帧；仅支持参考图的模型可作为过渡参考；不支持则忽略。\n\n"
         f"{_format_reference_lines(references)}\n\n"
         "视频生成提示词：\n"
         f"{prompt_text}"
+    )
+
+
+def _external_video_continuity_reference(
+    *,
+    project: dict,
+    project_path: Path,
+    items: list[dict],
+    id_field: str,
+    item_index: int | None,
+    current_item: dict,
+    resource_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    policy = _normalize_continuity_policy(project, {})
+    meta: dict[str, Any] = {
+        "requested_policy": policy,
+        "effective_policy": "start_only",
+        "start_storyboard_id": resource_id,
+    }
+
+    if policy == "start_only":
+        meta["skip_reason"] = "policy_start_only"
+        return None, meta
+    if item_index is None:
+        meta["skip_reason"] = "storyboard_item_not_found"
+        return None, meta
+
+    next_index = item_index + 1
+    if next_index >= len(items):
+        meta["skip_reason"] = "last_storyboard"
+        return None, meta
+
+    next_item = items[next_index]
+    next_id, next_storyboard = _storyboard_path_for_item(project_path, next_item, id_field)
+    if next_id:
+        meta["end_storyboard_id"] = next_id
+    if not next_storyboard or not next_storyboard.exists():
+        meta["skip_reason"] = "next_storyboard_missing"
+        return None, meta
+
+    transition_to_next = str(current_item.get("transition_to_next") or "cut").strip().lower()
+    meta["transition_to_next"] = transition_to_next
+    if policy == "auto":
+        if transition_to_next in _END_FRAME_SKIP_TRANSITIONS:
+            meta["skip_reason"] = f"transition_{transition_to_next}"
+            return None, meta
+        if bool(next_item.get("segment_break")):
+            meta["skip_reason"] = "next_segment_break"
+            return None, meta
+
+        current_scenes = _item_reference_values(current_item, "scenes")
+        next_scenes = _item_reference_values(next_item, "scenes")
+        if current_scenes and next_scenes and current_scenes.isdisjoint(next_scenes):
+            meta["skip_reason"] = "scene_changed"
+            return None, meta
+
+    if policy == "reference_assisted":
+        meta["effective_policy"] = "reference_assisted"
+        meta["external_suggested_use"] = "reference_image"
+        description = "外部生成时可作为下一镜头参考图，用于保持前后镜头过渡一致"
+    else:
+        meta["effective_policy"] = "end_frame"
+        meta["external_suggested_use"] = "end_image"
+        description = "外部生成时建议作为 end_image / last_frame 使用，用于衔接下一镜头"
+
+    return (
+        {
+            "image": next_storyboard,
+            "label": "下一张分镜图（视频尾帧/过渡参考）",
+            "description": description,
+        },
+        meta,
     )
 
 
@@ -424,7 +501,7 @@ async def get_external_generation_package(
             resolved = find_storyboard_item(items, id_field, segment_id)
             if resolved is None:
                 raise HTTPException(status_code=404, detail=_t("segment_not_found", id=segment_id))
-            target_item, _ = resolved
+            target_item, item_index = resolved
 
             storyboard_prompt = _normalize_storyboard_prompt(
                 target_item.get("image_prompt"),
@@ -484,6 +561,24 @@ async def get_external_generation_package(
                 )
                 if serialized_video_ref:
                     video_refs.append(serialized_video_ref)
+            raw_continuity_ref, continuity_meta = _external_video_continuity_reference(
+                project=project,
+                project_path=project_path,
+                items=items,
+                id_field=id_field,
+                item_index=item_index,
+                current_item=target_item,
+                resource_id=segment_id,
+            )
+            if raw_continuity_ref is not None:
+                serialized_continuity_ref = _serialize_reference(
+                    project_name=project_name,
+                    project_path=project_path,
+                    ref=raw_continuity_ref,
+                    labels={},
+                )
+                if serialized_continuity_ref:
+                    video_refs.append(serialized_continuity_ref)
 
             storyboard_refs = _with_external_reference_names(storyboard_refs)
             video_refs = _with_external_reference_names(video_refs)
@@ -501,6 +596,7 @@ async def get_external_generation_package(
                     "prompt": video_prompt,
                     "external_prompt": _external_video_text(video_prompt, video_refs),
                     "references": video_refs,
+                    "continuity": continuity_meta,
                 },
             }
 

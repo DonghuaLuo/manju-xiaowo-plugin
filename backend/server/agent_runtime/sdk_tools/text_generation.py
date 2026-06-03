@@ -144,11 +144,7 @@ def get_video_capabilities_tool(ctx: ToolContext):
 def _resolve_step1_path(project_path: Path, episode: int, project_data: dict[str, Any]) -> tuple[Path, str]:
     """Return (step1_md path, hint text for missing-file error)."""
     content_mode = project_data.get("content_mode", "narration")
-    episode_dict = next(
-        (ep for ep in (project_data.get("episodes") or []) if ep.get("episode") == episode),
-        {},
-    )
-    generation_mode = effective_mode(project=project_data, episode=episode_dict)
+    generation_mode = effective_mode(project=project_data, episode={})
     drafts_path = project_path / "drafts" / f"episode_{episode}"
     if generation_mode == "reference_video":
         return drafts_path / "step1_reference_units.md", "split-reference-video-units subagent (Step 1)"

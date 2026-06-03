@@ -639,14 +639,6 @@ def _get_step_files(content_mode: str, generation_mode: str | None = None) -> di
     return {1: "step1_normalized_script.md"}
 
 
-# step1 实际文件候选 —— 读取失败时用于 fallback 探测，兼容 episode 级 generation_mode 覆盖
-_STEP1_CANDIDATES = [
-    "step1_reference_units.md",
-    "step1_segments.md",
-    "step1_normalized_script.md",
-]
-
-
 def _get_step_title(filename: str, _t: Callable[..., str]) -> str:
     """获取步骤标题"""
     titles = {
@@ -660,8 +652,8 @@ def _get_step_title(filename: str, _t: Callable[..., str]) -> str:
 def _load_project_modes(project_name: str, episode: int) -> tuple[str, str | None]:
     """走 ProjectManager.load_project，派生 (content_mode, generation_mode)。
 
-    复用 load_project 以获得文件锁和 _migrate_legacy_style 迁移；generation_mode 的
-    episode→project→默认回退复用 lib.project_manager.effective_mode。
+    复用 load_project 以获得文件锁和 _migrate_legacy_style 迁移；generation_mode 是
+    项目级固定选择，分集不再覆盖。
     项目不存在时返回 ("drama", None)，由调用方走 content_mode-only 分支。
     """
     try:
@@ -669,25 +661,8 @@ def _load_project_modes(project_name: str, episode: int) -> tuple[str, str | Non
     except FileNotFoundError:
         return "drama", None
     content_mode = data.get("content_mode", "drama")
-    ep_dict = next(
-        (ep for ep in (data.get("episodes") or []) if ep.get("episode") == episode),
-        {},
-    )
-    return content_mode, effective_mode(project=data, episode=ep_dict)
-
-
-def _resolve_step1_path(drafts_dir: Path, step_num: int, primary: Path) -> Path:
-    """主路径不存在时在 _STEP1_CANDIDATES 里回落，兼容跨模式切换遗留文件。
-
-    step_num != 1 或主路径已存在：原样返回 primary；调用方自行 exists() 判定。
-    """
-    if step_num != 1 or primary.exists():
-        return primary
-    for candidate in _STEP1_CANDIDATES:
-        alt = drafts_dir / candidate
-        if alt.exists():
-            return alt
-    return primary
+    _ = episode
+    return content_mode, effective_mode(project=data, episode={})
 
 
 @router.get("/projects/{project_name}/drafts/{episode}/step{step_num}")
@@ -704,7 +679,7 @@ async def get_draft_content(project_name: str, episode: int, step_num: int, _use
                 raise HTTPException(status_code=400, detail=_t("invalid_step_num", step_num=step_num))
 
             drafts_dir = project_dir / "drafts" / f"episode_{episode}"
-            draft_path = _resolve_step1_path(drafts_dir, step_num, drafts_dir / step_files[step_num])
+            draft_path = drafts_dir / step_files[step_num]
 
             if not draft_path.exists():
                 raise HTTPException(status_code=404, detail=_t("draft_file_not_found"))
@@ -741,9 +716,7 @@ async def update_draft_content(
             drafts_dir = project_dir / "drafts" / f"episode_{episode}"
             drafts_dir.mkdir(parents=True, exist_ok=True)
 
-            # 写入始终落到当前模式的目标文件；fallback 仅用于读取/删除（兼容跨模式切换的旧 step1）。
-            # 若写入 fallback 到老文件，切模式后后续 subagent 读 step_files[step_num] 仍为空，
-            # 导致"前端保存成功但生成报缺少 step1"。
+            # 写入始终落到当前项目模式的目标文件。
             draft_path = drafts_dir / step_files[step_num]
             is_new = not draft_path.exists()
             draft_path.write_text(content, encoding="utf-8")
@@ -790,7 +763,7 @@ async def delete_draft(project_name: str, episode: int, step_num: int, _user: Cu
                 raise HTTPException(status_code=400, detail=_t("invalid_step_num", step_num=step_num))
 
             drafts_dir = project_dir / "drafts" / f"episode_{episode}"
-            draft_path = _resolve_step1_path(drafts_dir, step_num, drafts_dir / step_files[step_num])
+            draft_path = drafts_dir / step_files[step_num]
 
             if draft_path.exists():
                 draft_path.unlink()

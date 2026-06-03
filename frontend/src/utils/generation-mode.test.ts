@@ -18,9 +18,9 @@ describe("normalizeMode", () => {
 });
 
 describe("effectiveMode", () => {
-  it("prefers episode.generation_mode over project.generation_mode", () => {
+  it("ignores episode.generation_mode because project mode is fixed", () => {
     expect(effectiveMode({ generation_mode: "grid" }, { generation_mode: "reference_video" }))
-      .toBe("reference_video");
+      .toBe("grid");
   });
   it("falls back to project mode if episode has none", () => {
     expect(effectiveMode({ generation_mode: "reference_video" }, {})).toBe("reference_video");
@@ -28,9 +28,8 @@ describe("effectiveMode", () => {
   it("falls back to 'storyboard' when both missing", () => {
     expect(effectiveMode({}, {})).toBe("storyboard");
   });
-  it("normalizes legacy 'single' on both levels", () => {
+  it("normalizes legacy 'single' at project level", () => {
     expect(effectiveMode({ generation_mode: "single" }, {})).toBe("storyboard");
-    expect(effectiveMode({}, { generation_mode: "single" })).toBe("storyboard");
   });
   it("returns 'storyboard' when both arguments are null or undefined", () => {
     expect(effectiveMode(null, null)).toBe("storyboard");

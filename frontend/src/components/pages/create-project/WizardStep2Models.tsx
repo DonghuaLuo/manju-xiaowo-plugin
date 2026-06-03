@@ -9,10 +9,14 @@ import {
   createDefaultGenerationProfiles,
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
+import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
+import type { GenerationMode } from "@/utils/generation-mode";
+import { lookupVideoContinuitySupport } from "@/utils/provider-models";
 import type {
   GenerationProfiles,
   ImageGenerationProfile,
   ProviderInfo,
+  VideoContinuityPolicy,
   VideoGenerationProfile,
 } from "@/types";
 import type { CustomProviderInfo } from "@/types/custom-provider";
@@ -43,6 +47,9 @@ export interface WizardStep2ModelsProps {
   onGenerationProfilesExpandedChange: (next: boolean) => void;
   generationProfiles: GenerationProfiles;
   onGenerationProfilesChange: (next: GenerationProfiles) => void;
+  videoContinuityPolicy: VideoContinuityPolicy;
+  onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
+  generationMode?: GenerationMode;
   onBack: () => void;
   onNext: () => void;
   onCancel: () => void;
@@ -57,6 +64,9 @@ export function WizardStep2Models({
   onGenerationProfilesExpandedChange,
   generationProfiles,
   onGenerationProfilesChange,
+  videoContinuityPolicy,
+  onVideoContinuityPolicyChange,
+  generationMode,
   onBack,
   onNext,
   onCancel,
@@ -72,6 +82,13 @@ export function WizardStep2Models({
   const normalizedGenerationProfiles = normalizeGenerationProfiles(
     generationProfiles,
     defaultGenerationProfiles,
+  );
+  const effectiveVideoBackend = value.videoBackend || data?.globalDefaults.video || "";
+  const referenceVideoUnsupported = Boolean(
+    data &&
+      generationMode === "reference_video" &&
+      effectiveVideoBackend &&
+      !lookupVideoContinuitySupport(effectiveVideoBackend, data.customProviders).referenceImages,
   );
 
   const updateImageProfile = (
@@ -142,12 +159,25 @@ export function WizardStep2Models({
             }}
             globalDefaults={data.globalDefaults}
           />
+          {referenceVideoUnsupported ? (
+            <div
+              role="alert"
+              className="rounded-[8px] border border-warm/35 bg-warm/10 px-3 py-2.5 text-[12.5px] leading-[1.55] text-warm"
+            >
+              {t("dashboard:reference_video_model_requires_reference_images", {
+                defaultValue:
+                  "参考视频预览模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格模式。",
+              })}
+            </div>
+          ) : null}
           <GenerationProfilesEditor
             expanded={generationProfilesExpanded}
             onExpandedChange={onGenerationProfilesExpandedChange}
             profiles={normalizedGenerationProfiles}
             onUpdateImage={updateImageProfile}
             onUpdateVideo={updateVideoProfile}
+            videoContinuityPolicy={videoContinuityPolicy}
+            onVideoContinuityPolicyChange={onVideoContinuityPolicyChange}
           />
         </>
       )}
@@ -172,7 +202,7 @@ export function WizardStep2Models({
           <button
             type="button"
             onClick={onNext}
-            disabled={loading}
+            disabled={loading || referenceVideoUnsupported}
             className={ACCENT_BTN_CLS}
             style={ACCENT_BUTTON_STYLE}
           >
@@ -201,12 +231,16 @@ function GenerationProfilesEditor({
   profiles,
   onUpdateImage,
   onUpdateVideo,
+  videoContinuityPolicy,
+  onVideoContinuityPolicyChange,
 }: {
   expanded: boolean;
   onExpandedChange: (next: boolean) => void;
   profiles: GenerationProfiles;
   onUpdateImage: (key: ImageProfileKey, patch: Partial<ImageGenerationProfile>) => void;
   onUpdateVideo: (key: VideoProfileKey, patch: Partial<VideoGenerationProfile>) => void;
+  videoContinuityPolicy: VideoContinuityPolicy;
+  onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
 }) {
   const { t } = useTranslation(["dashboard", "templates"]);
   return (
@@ -243,6 +277,33 @@ function GenerationProfilesEditor({
 
       {expanded && (
         <div id="create-project-generation-profiles-panel" className="mt-4 space-y-4 border-t border-hairline-soft pt-4">
+          <div className="grid gap-3 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-text">
+                {t("dashboard:video_continuity_policy_label")}
+              </div>
+              <p className="mt-1 text-[12px] leading-[1.5] text-text-3">
+                {t(`dashboard:video_continuity_policy_${videoContinuityPolicy}_hint`)}
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-1.5 block text-[11px] text-text-3">
+                {t("dashboard:video_continuity_policy_label")}
+              </span>
+              <SelectMenu
+                value={videoContinuityPolicy}
+                options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
+                  value: policy,
+                  label: t(`dashboard:video_continuity_policy_${policy}`),
+                }))}
+                onChange={(next) => onVideoContinuityPolicyChange(normalizeVideoContinuityPolicy(next))}
+                ariaLabel={t("dashboard:video_continuity_policy_label")}
+                panelLabel={t("dashboard:video_continuity_policy_label")}
+                className={PROFILE_INPUT_CLS}
+              />
+            </label>
+          </div>
+
           {([
             ["asset", t("dashboard:generation_profile_asset")],
             ["storyboard_draft", t("dashboard:generation_profile_storyboard_draft")],

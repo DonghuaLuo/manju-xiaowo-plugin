@@ -17,6 +17,10 @@ import { pickDesktopFile } from "@/utils/desktop-file";
 import { downloadProjectVideoWithDialog } from "@/utils/video-export";
 import type { CostBreakdown, GenerationQuality } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
+import {
+  videoContinuityMetadataToPlan,
+  type ShotVideoContinuityPlan,
+} from "@/utils/video-continuity";
 
 type MediaKind = "storyboard" | "video";
 type ArrayItem<T> = T extends Array<infer Item> ? Item : T;
@@ -53,6 +57,8 @@ interface MediaCardProps {
   generating?: boolean;
   /** 估算费用（按币种 breakdown，例如 {USD: 0.12} 或 {CNY: 5.25}） */
   estimatedCost?: CostBreakdown;
+  /** 未生成时展示的预计分镜视频连续性策略 */
+  expectedVideoContinuity?: ShotVideoContinuityPlan;
   /** 触发生成 */
   onGenerate?: (quality: GenerationQuality) => void;
   /** 版本恢复回调 */
@@ -137,6 +143,24 @@ function currentVersionBadges(
   ].filter((badge): badge is string => Boolean(badge));
 }
 
+function videoContinuityBadge(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  plan: ShotVideoContinuityPlan | null,
+  source: "actual" | "expected",
+): string | null {
+  if (!plan) return null;
+  return t("media_video_continuity_badge", {
+    defaultValue: "{{source}}：{{policy}}",
+    source:
+      source === "actual"
+        ? t("media_video_continuity_actual", { defaultValue: "实际" })
+        : t("media_video_continuity_expected", { defaultValue: "预计" }),
+    policy: t(`media_video_continuity_${plan.effectivePolicy}`, {
+      defaultValue: plan.effectivePolicy,
+    }),
+  });
+}
+
 function qualityDimensionsForKind(kind: MediaKind): Array<{ key: string; label: string }> {
   return kind === "video"
     ? [
@@ -165,6 +189,7 @@ export function MediaCard({
   generateDisabledHint,
   generating,
   estimatedCost,
+  expectedVideoContinuity,
   onGenerate,
   onRestore,
   onUploaded,
@@ -220,7 +245,17 @@ export function MediaCard({
     qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.rating : null;
   const effectiveQualityDimensions =
     qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.dimensions : {};
-  const metaBadges = currentVersionBadges(t, kind, effectiveVersionInfo);
+  const actualVideoContinuity = videoContinuityMetadataToPlan(effectiveVersionInfo?.video_continuity);
+  const continuityPlan = kind === "video"
+    ? actualVideoContinuity ?? expectedVideoContinuity ?? null
+    : null;
+  const continuityBadge = kind === "video"
+    ? videoContinuityBadge(t, continuityPlan, actualVideoContinuity ? "actual" : "expected")
+    : null;
+  const metaBadges = [
+    ...currentVersionBadges(t, kind, effectiveVersionInfo),
+    continuityBadge,
+  ].filter((badge): badge is string => Boolean(badge));
   const qualityDimensions = qualityDimensionsForKind(kind);
   const dimensionHint = t("media_quality_dimension_hint", {
     defaultValue: "可选细项，不选不参与维度统计。",

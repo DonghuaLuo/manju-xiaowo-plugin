@@ -20,6 +20,9 @@ import type {
   Dialogue,
   GenerationQuality,
   ShotTier,
+  ShotTierProfile,
+  TransitionType,
+  VideoContinuityPolicy,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
 import { ImagePromptEditor } from "./ImagePromptEditor";
@@ -42,6 +45,9 @@ import { copyText } from "@/utils/clipboard";
 import { errMsg } from "@/utils/async";
 import { pickDesktopDirectory } from "@/utils/desktop-file";
 import { exportExternalGenerationPackage } from "@/utils/external-generation-export";
+import { resolveExpectedShotVideoContinuity } from "@/utils/video-continuity";
+import { normalizeShotTierProfiles } from "@/utils/generation-profiles";
+import type { VideoContinuitySupport } from "@/utils/provider-models";
 
 type Segment = NarrationSegment | DramaScene;
 type ImagePromptValue = ImagePrompt | string;
@@ -49,6 +55,7 @@ type VideoPromptValue = VideoPrompt | string;
 
 interface ShotDetailProps {
   segment: Segment;
+  nextSegment?: Segment;
   segmentId: string;
   contentMode: "narration" | "drama";
   aspectRatio: "9:16" | "16:9";
@@ -72,6 +79,9 @@ interface ShotDetailProps {
   generatingStoryboard?: boolean;
   generatingVideo?: boolean;
   durationOptions?: number[];
+  videoContinuityPolicy?: VideoContinuityPolicy;
+  videoContinuitySupport?: VideoContinuitySupport | null;
+  shotTierProfiles?: Partial<Record<ShotTier, ShotTierProfile>>;
 }
 
 function getNovelText(seg: Segment, mode: "narration" | "drama"): string {
@@ -96,6 +106,7 @@ interface DurationPillProps {
 }
 
 const SHOT_TIERS: ShotTier[] = ["S", "A", "B"];
+const TRANSITION_TYPES: TransitionType[] = ["cut", "fade", "dissolve"];
 
 function isShotTier(value: unknown): value is ShotTier {
   return value === "S" || value === "A" || value === "B";
@@ -185,6 +196,96 @@ function ShotTierPill({
               </button>
             </TooltipTrigger>
             <TooltipContent side="top">{tierHints[candidate]}</TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+function TransitionPill({
+  value,
+  segmentId,
+  onUpdatePrompt,
+}: {
+  value: TransitionType | undefined;
+  segmentId: string;
+  onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
+}) {
+  const { t } = useTranslation("dashboard");
+  const editable = !!onUpdatePrompt;
+  const transition = TRANSITION_TYPES.includes(value as TransitionType) ? value as TransitionType : "cut";
+  const label = t("transition_to_next_label", { defaultValue: "转场" });
+  const labels: Record<TransitionType, string> = {
+    cut: t("transition_cut", { defaultValue: "硬切" }),
+    fade: t("transition_fade", { defaultValue: "淡入淡出" }),
+    dissolve: t("transition_dissolve", { defaultValue: "溶解" }),
+  };
+  const hints: Record<TransitionType, string> = {
+    cut: t("transition_cut_hint", {
+      defaultValue: "适合同一场景内的连续镜头，会优先保留首尾帧衔接机会。",
+    }),
+    fade: t("transition_fade_hint", {
+      defaultValue: "适合跨场景或时间跳转，会让视频生成回退为仅首帧。",
+    }),
+    dissolve: t("transition_dissolve_hint", {
+      defaultValue: "适合柔和过渡或回忆感镜头，会让视频生成回退为仅首帧。",
+    }),
+  };
+
+  if (!editable) {
+    return (
+      <span
+        className="inline-flex items-center rounded-md px-2 py-[3px] text-[11.5px] font-semibold"
+        title={`${label} · ${hints[transition]}`}
+        aria-label={`${label} · ${hints[transition]}`}
+        style={{
+          background: "oklch(0.22 0.011 265 / 0.6)",
+          border: "1px solid var(--color-hairline-soft)",
+          color: "var(--color-text-2)",
+        }}
+      >
+        {labels[transition]}
+      </span>
+    );
+  }
+
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-md p-0.5"
+      role="radiogroup"
+      aria-label={label}
+      style={{
+        background: "oklch(0.22 0.011 265 / 0.6)",
+        border: "1px solid var(--color-hairline-soft)",
+      }}
+    >
+      {TRANSITION_TYPES.map((candidate) => {
+        const active = candidate === transition;
+        return (
+          <Tooltip key={candidate}>
+            <TooltipTrigger>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={active}
+                aria-label={`${label} · ${labels[candidate]}`}
+                onClick={() => {
+                  if (!active) void onUpdatePrompt?.(segmentId, "transition_to_next", candidate);
+                }}
+                className="rounded px-2 py-0.5 text-[11px] font-semibold transition-colors focus-ring"
+                style={{
+                  minWidth: candidate === "cut" ? 34 : 46,
+                  color: active ? "oklch(0.14 0 0)" : "var(--color-text-3)",
+                  background: active
+                    ? "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))"
+                    : "transparent",
+                }}
+              >
+                {labels[candidate]}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{hints[candidate]}</TooltipContent>
           </Tooltip>
         );
       })}
@@ -376,6 +477,7 @@ function DurationPill({
 
 export function ShotDetail({
   segment,
+  nextSegment,
   segmentId,
   contentMode,
   aspectRatio,
@@ -394,13 +496,32 @@ export function ShotDetail({
   generatingStoryboard,
   generatingVideo,
   durationOptions = [],
+  videoContinuityPolicy,
+  videoContinuitySupport,
+  shotTierProfiles,
 }: ShotDetailProps) {
   const { t } = useTranslation("dashboard");
   const status = statusFromAssets(segment.generated_assets?.status);
   const novelText = getNovelText(segment, contentMode);
   const shotTierExplicit = isShotTier(segment.shot_tier);
   const shotTier = normalizeShotTier(segment.shot_tier);
+  const shotTierProfile = useMemo(
+    () => normalizeShotTierProfiles(shotTierProfiles)[shotTier],
+    [shotTier, shotTierProfiles],
+  );
+  const effectiveVideoContinuityPolicy =
+    shotTierProfile.video_continuity_policy ?? videoContinuityPolicy;
   const segCost = useCostStore((s) => s.getSegmentCost(segmentId));
+  const expectedVideoContinuity = useMemo(
+    () =>
+      resolveExpectedShotVideoContinuity({
+        policy: effectiveVideoContinuityPolicy,
+        support: videoContinuitySupport,
+        currentSegment: segment,
+        nextSegment,
+      }),
+    [effectiveVideoContinuityPolicy, nextSegment, segment, videoContinuitySupport],
+  );
 
   const ip = segment.image_prompt;
   const vp = segment.video_prompt;
@@ -901,6 +1022,7 @@ export function ShotDetail({
         generateDisabled={!hasStoryboard || dirty || saving}
         generateDisabledHint={dirty ? dirtyHint : undefined}
         estimatedCost={vidEstimate ?? undefined}
+        expectedVideoContinuity={expectedVideoContinuity}
         onGenerate={(quality) => onGenerateVideo?.(segmentId, quality)}
         onRestore={onRestoreVideo}
         onUploaded={onRestoreVideo}
@@ -948,6 +1070,13 @@ export function ShotDetail({
           segmentId={segmentId}
           onUpdatePrompt={onUpdatePrompt}
         />
+        {nextSegment ? (
+          <TransitionPill
+            value={segment.transition_to_next}
+            segmentId={segmentId}
+            onUpdatePrompt={onUpdatePrompt}
+          />
+        ) : null}
         <StatusBadge status={status} />
         <span className="flex-1" />
 

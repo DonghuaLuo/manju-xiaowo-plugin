@@ -1,7 +1,14 @@
 import { useEffect, useMemo, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
-import { lookupSupportedDurations, lookupResolutions } from "@/utils/provider-models";
+import {
+  lookupSupportedDurations,
+  lookupResolutions,
+  lookupVideoContinuityCapability,
+  capabilityFromVideoContinuitySupport,
+  type VideoContinuityCapability,
+  type VideoContinuitySupport,
+} from "@/utils/provider-models";
 import { isContinuousIntegerRange } from "@/utils/duration_format";
 import { ResolutionPicker } from "./ResolutionPicker";
 import { ImageModelDualSelect } from "./ImageModelDualSelect";
@@ -49,6 +56,7 @@ export interface ModelConfigSectionProps {
     text?: boolean;
     duration?: boolean;
   };
+  videoContinuitySupport?: VideoContinuitySupport | null;
 }
 
 interface ChannelCardProps {
@@ -79,6 +87,7 @@ export function ModelConfigSection({
   customProviders = EMPTY_CUSTOM_PROVIDERS,
   globalDefaults,
   enable,
+  videoContinuitySupport,
 }: ModelConfigSectionProps) {
   const { t } = useTranslation("templates");
 
@@ -94,6 +103,13 @@ export function ModelConfigSection({
   const showDuration = enable?.duration !== false;
 
   const effectiveVideoBackend = value.videoBackend || globalDefaults.video || "";
+  const videoContinuityCapability = useMemo<VideoContinuityCapability>(
+    () =>
+      videoContinuitySupport
+        ? capabilityFromVideoContinuitySupport(videoContinuitySupport)
+        : lookupVideoContinuityCapability(effectiveVideoBackend, customProviders),
+    [effectiveVideoBackend, customProviders, videoContinuitySupport],
+  );
 
   const supportedDurations = useMemo<readonly number[] | null>(() => {
     if (!effectiveVideoBackend) return null;
@@ -167,6 +183,16 @@ export function ModelConfigSection({
             fallbackValue={globalDefaults.video || undefined}
             aria-label={t("model_video")}
           />
+          {effectiveVideoBackend && (
+            <div className="mt-2 rounded-[8px] border border-hairline-soft bg-bg-grad-a/45 px-3 py-2">
+              <div className="text-[12px] font-medium text-text-2">
+                {t(`video_continuity_${videoContinuityCapability}`)}
+              </div>
+              <div className="mt-1 text-[11.5px] leading-[1.45] text-text-4">
+                {t(`video_continuity_${videoContinuityCapability}_hint`)}
+              </div>
+            </div>
+          )}
 
           {renderResolutionField(effectiveVideoBackend, value.videoResolution, (v) =>
             onChange({ ...value, videoResolution: v }),

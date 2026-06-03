@@ -298,6 +298,7 @@ class MediaGenerator:
         aspect_ratio: str = "9:16",
         duration_seconds: str | int = "8",
         resolution: str | None = None,
+        allow_end_image_reference_fallback: bool = False,
         **version_metadata,
     ) -> tuple[Path, int, Any, str | None]:
         """
@@ -329,6 +330,7 @@ class MediaGenerator:
                 aspect_ratio=aspect_ratio,
                 duration_seconds=duration_seconds,
                 resolution=resolution,
+                allow_end_image_reference_fallback=allow_end_image_reference_fallback,
                 **version_metadata,
             )
         )
@@ -345,6 +347,7 @@ class MediaGenerator:
         duration_seconds: str | int = "8",
         resolution: str | None = None,
         task_id: str | None = None,
+        allow_end_image_reference_fallback: bool = False,
         **version_metadata,
     ) -> tuple[Path, int, Any, str | None]:
         """
@@ -463,7 +466,9 @@ class MediaGenerator:
 
             from lib.video_backends.base import VideoGenerationRequest
 
-            # Three-level fallback based on backend video capabilities
+            # end_image is only a real continuity control when the backend supports last_frame.
+            # Reference-image fallback must be explicit; otherwise users may believe the clip
+            # will land on the next storyboard when the provider can only treat it as context.
             actual_end_image = None
             actual_reference_images = reference_images
             caps = self._video_backend.video_capabilities
@@ -471,11 +476,16 @@ class MediaGenerator:
             if end_image and self._video_backend:
                 if caps.last_frame:
                     actual_end_image = end_image  # first_last mode
-                elif caps.reference_images:
+                elif caps.reference_images and allow_end_image_reference_fallback:
                     # Fallback: pass end_image as reference image
                     actual_reference_images = (actual_reference_images or []) + [end_image]
                     logger.info(
                         "Video backend %s does not support last_frame, falling back to reference_images",
+                        self._video_backend.name,
+                    )
+                elif caps.reference_images:
+                    logger.info(
+                        "Video backend %s does not support last_frame; end_image reference fallback disabled",
                         self._video_backend.name,
                     )
                 else:

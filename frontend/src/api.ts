@@ -43,6 +43,7 @@ import type {
   TransitionType,
   GenerationProfiles,
   GenerationQuality,
+  VideoContinuityPolicy,
 } from "@/types";
 import type { GenerationMode } from "@/utils/generation-mode";
 import type { StyleCategory } from "@/data/style-templates";
@@ -114,6 +115,22 @@ interface ProviderInputImageMetadata {
   jpeg_quality?: number | null;
 }
 
+export interface VideoContinuityMetadata {
+  requested_policy?: VideoContinuityPolicy | string;
+  effective_policy?: "start_only" | "end_frame" | "reference_assisted" | string;
+  start_storyboard_id?: string;
+  end_storyboard_id?: string;
+  submitted_end_image?: string;
+  submitted_reference_images?: string[];
+  skip_reason?: string;
+  provider_supports_end_image?: boolean;
+  provider_supports_reference_images?: boolean;
+  provider_max_reference_images?: number | null;
+  provider?: string;
+  model?: string;
+  transition_to_next?: string;
+}
+
 export interface VersionInfo {
   version: number;
   file?: string;
@@ -151,6 +168,7 @@ export interface VersionInfo {
     ProviderInputImageMetadata | ProviderInputImageMetadata[] | null | undefined
   >;
   provider_input_payload?: Record<string, unknown> | null;
+  video_continuity?: VideoContinuityMetadata | null;
   source_storyboard_generation_quality?: string;
   source_version?: number | string | null;
 }
@@ -292,6 +310,7 @@ export interface CreateProjectPayload {
   model_settings?: Record<string, { resolution?: string | null }>;
   generation_profiles?: GenerationProfiles;
   shot_tier_profiles?: ProjectData["shot_tier_profiles"];
+  video_continuity_policy?: VideoContinuityPolicy | null;
 }
 
 export interface GenerationRequestOptions {
@@ -341,6 +360,34 @@ export interface GenerationRoutePreviewItem {
 
 export interface GenerationRoutePreviewResponse {
   routes: GenerationRoutePreviewItem[];
+}
+
+export interface VideoCapabilitiesResponse {
+  provider_id: string;
+  model: string;
+  supported_durations: number[];
+  max_duration: number;
+  max_reference_images: number | null;
+  resolutions?: string[];
+  duration_resolution_constraints?: Record<string, number[]>;
+  capabilities?: string[];
+  supports_generate_audio?: boolean;
+  supports_seed?: boolean;
+  supports_service_tier?: boolean;
+  supports_start_image?: boolean;
+  supports_end_image?: boolean;
+  supports_reference_images?: boolean;
+  supports_first_frame?: boolean;
+  supports_last_frame?: boolean;
+  video_continuity_capabilities?: Array<"start_image" | "end_image" | "reference_images">;
+  recommended_continuity_policy?: "end_frame" | "reference_assisted" | "start_only";
+  service_tiers?: string[];
+  endpoint?: string | null;
+  endpoint_family?: string | null;
+  source: "registry" | "custom";
+  default_duration?: number | null;
+  content_mode?: string | null;
+  generation_mode?: string | null;
 }
 
 export interface QualityRatingRequest {
@@ -1030,26 +1077,7 @@ class API {
   }
 
   /** 三级解析（项目 > 系统设置 > 系统默认）后的视频模型能力。 */
-  static async getVideoCapabilities(name: string): Promise<{
-    provider_id: string;
-    model: string;
-    supported_durations: number[];
-    max_duration: number;
-    max_reference_images: number | null;
-    resolutions?: string[];
-    duration_resolution_constraints?: Record<string, number[]>;
-    capabilities?: string[];
-    supports_generate_audio?: boolean;
-    supports_seed?: boolean;
-    supports_service_tier?: boolean;
-    service_tiers?: string[];
-    endpoint?: string | null;
-    endpoint_family?: string | null;
-    source: "registry" | "custom";
-    default_duration?: number | null;
-    content_mode?: string | null;
-    generation_mode?: string | null;
-  }> {
+  static async getVideoCapabilities(name: string): Promise<VideoCapabilitiesResponse> {
     return this.request(`/projects/${encodeURIComponent(name)}/video-capabilities`);
   }
 

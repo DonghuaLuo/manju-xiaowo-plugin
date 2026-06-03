@@ -14,7 +14,9 @@ import type {
   DramaScene,
   ProjectData,
   GenerationQuality,
+  VideoContinuityPolicy,
 } from "@/types";
+import type { VideoContinuitySupport } from "@/utils/provider-models";
 
 type Segment = NarrationSegment | DramaScene;
 
@@ -43,6 +45,8 @@ interface TimelineCanvasProps {
     quality?: GenerationQuality,
   ) => void;
   durationOptions?: number[];
+  videoContinuityPolicy?: VideoContinuityPolicy;
+  videoContinuitySupport?: VideoContinuitySupport | null;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
 }
@@ -59,6 +63,8 @@ export function TimelineCanvas({
   onUpdatePrompt,
   onGenerateStoryboard,
   onGenerateVideo,
+  videoContinuityPolicy,
+  videoContinuitySupport,
   onRestoreStoryboard,
   onRestoreVideo,
 }: TimelineCanvasProps) {
@@ -279,6 +285,9 @@ export function TimelineCanvas({
             generatingStoryboard={generatingStoryboard}
             generatingVideo={generatingVideo}
             durationOptions={durationOptions}
+            videoContinuityPolicy={videoContinuityPolicy}
+            videoContinuitySupport={videoContinuitySupport}
+            shotTierProfiles={projectData.shot_tier_profiles}
           />
         ) : null}
       </div>

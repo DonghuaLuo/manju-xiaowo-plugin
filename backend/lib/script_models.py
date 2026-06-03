@@ -138,8 +138,8 @@ class NarrationSegment(BaseModel):
     props: list[str] = Field(default_factory=list, description="出场道具名称列表")
     image_prompt: ImagePrompt = Field(description="分镜图生成提示词")
     video_prompt: VideoPrompt = Field(description="视频生成提示词")
-    # transition_to_next 由 _add_metadata default + 用户 PATCH 路径(projects.py UpdateSegmentRequest)管理;
-    # LLM 无 prompt 引导,隐藏避免乱填污染剪映/compose-video 合成
+    # transition_to_next 由 _add_metadata 基于 segment_break 确定默认值，并由用户 PATCH 路径管理；
+    # LLM 无 prompt 引导，隐藏避免乱填污染剪映/compose-video 合成。
     transition_to_next: SkipJsonSchema[TransitionType] = Field(default="cut", description="转场类型")
     # 以下字段对 LLM 隐藏（SkipJsonSchema）：note 是人工备注、generated_assets 是 post-LLM 运行时状态。
     # 仍保留在 Pydantic 模型里以便存储 / 校验，但不出现在 response_schema 中，避免 LLM 填污染数据。

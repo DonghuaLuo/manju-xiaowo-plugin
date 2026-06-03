@@ -125,13 +125,24 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
             "label": "hero",
             "retry_budget": 1,
             "reference_image_policy": "full_context",
+            "video_continuity_policy": "auto",
             "prefer_final_storyboard_source": True,
-            "profiles": {},
+            "profiles": {
+                "storyboard_final": {
+                    "resolution": "2K",
+                },
+                "video_final": {
+                    "resolution": "1080p",
+                    "generate_audio": True,
+                    "service_tier": "default",
+                },
+            },
         },
         "A": {
             "label": "standard",
             "retry_budget": 1,
             "reference_image_policy": "balanced",
+            "video_continuity_policy": "auto",
             "prefer_final_storyboard_source": True,
             "profiles": {},
         },
@@ -139,8 +150,18 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
             "label": "utility",
             "retry_budget": 1,
             "reference_image_policy": "lean",
+            "video_continuity_policy": "start_only",
             "prefer_final_storyboard_source": False,
-            "profiles": {},
+            "profiles": {
+                "storyboard_final": {
+                    "resolution": "1K",
+                },
+                "video_final": {
+                    "resolution": "720p",
+                    "generate_audio": False,
+                    "service_tier": "default",
+                },
+            },
         },
     }
 

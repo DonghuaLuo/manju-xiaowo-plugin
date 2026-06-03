@@ -9,6 +9,8 @@
 
 import type { ShotTier } from "./script";
 
+export type VideoContinuityPolicy = "auto" | "start_only" | "end_frame" | "reference_assisted";
+
 export interface ProjectOverview {
   synopsis: string;
   genre: string;
@@ -93,11 +95,6 @@ export interface EpisodeMeta {
   videos?: ProgressCategory;
   /** Injected by StatusCalculator at read time (reference_video mode only) */
   units_count?: number;
-  /**
-   * Optional episode-level override; falls back to project.generation_mode.
-   * Never "single" — legacy value only exists at project level.
-   */
-  generation_mode?: "storyboard" | "grid" | "reference_video";
 }
 
 export interface ModelSettingEntry {
@@ -135,6 +132,7 @@ export interface ShotTierProfile {
   label?: string | null;
   retry_budget?: number | null;
   reference_image_policy?: string | null;
+  video_continuity_policy?: VideoContinuityPolicy | null;
   prefer_final_storyboard_source?: boolean | null;
   profiles?: Partial<Record<keyof GenerationProfiles, ImageGenerationProfile | VideoGenerationProfile>>;
 }
@@ -171,6 +169,7 @@ export interface ProjectData {
   model_settings?: Record<string, ModelSettingEntry>;
   generation_profiles?: GenerationProfiles;
   shot_tier_profiles?: Partial<Record<ShotTier, ShotTierProfile>>;
+  video_continuity_policy?: VideoContinuityPolicy | null;
   /** Legacy field: keyed by model_id only (before composite key refactor). Read-only at UI layer. */
   video_model_settings?: Record<string, { resolution?: string | null }>;
   metadata?: {

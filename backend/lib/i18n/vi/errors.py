@@ -96,6 +96,7 @@ MESSAGES = {
     # Projects
     "unknown_style_template": "Mẫu phong cách không xác định: {template_id}",
     "project_id_not_editable": "content_mode không thể chỉnh sửa sau khi tạo dự án",
+    "project_generation_mode_not_editable": "generation_mode không thể chỉnh sửa sau khi tạo dự án",
     "project_deleted": "Đã xóa dự án '{name}'",
     "scene_updated": "Đã cập nhật cảnh '{scene_id}'",
     "segment_updated": "Đã cập nhật đoạn '{segment_id}'",

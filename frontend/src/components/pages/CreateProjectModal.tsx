@@ -12,13 +12,18 @@ import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates"
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
-import { createDefaultGenerationProfiles, normalizeGenerationProfiles } from "@/utils/generation-profiles";
+import {
+  createDefaultGenerationProfiles,
+  createDefaultShotTierProfiles,
+  normalizeGenerationProfiles,
+} from "@/utils/generation-profiles";
+import { lookupVideoContinuitySupport } from "@/utils/provider-models";
 import { WizardStep1Basics, type WizardStep1Value } from "./create-project/WizardStep1Basics";
 import { WizardStep2Models, type WizardStep2Data } from "./create-project/WizardStep2Models";
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { GenerationProfiles } from "@/types";
+import type { GenerationProfiles, VideoContinuityPolicy } from "@/types";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -168,6 +173,7 @@ export function CreateProjectModal() {
   const [generationProfilesExpanded, setGenerationProfilesExpanded] = useState(false);
   const [generationProfilesCustomized, setGenerationProfilesCustomized] = useState(false);
   const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>({});
+  const [videoContinuityPolicy, setVideoContinuityPolicy] = useState<VideoContinuityPolicy>("auto");
 
   const [style, setStyle] = useState<WizardStep3Value>({
     mode: "template",
@@ -299,6 +305,21 @@ export function CreateProjectModal() {
       // resolution 的 model_settings key 用 effective backend（项目覆盖 ‖ 全局默认），
       // 否则用户在"跟随全局默认"路径下选的分辨率会丢失。
       const effectiveVideo = models.videoBackend || step2Data?.globalDefaults.video || "";
+      if (
+        basics.generationMode === "reference_video" &&
+        effectiveVideo &&
+        step2Data &&
+        !lookupVideoContinuitySupport(effectiveVideo, step2Data.customProviders).referenceImages
+      ) {
+        useAppStore.getState().pushToast(
+          t("dashboard:reference_video_model_requires_reference_images", {
+            defaultValue:
+              "参考视频预览模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格模式。",
+          }),
+          "error",
+        );
+        return;
+      }
       const effectiveImageT2I = models.imageBackendT2I || step2Data?.globalDefaults.imageT2I || "";
       const modelSettings: Record<string, { resolution: string }> = {};
       if (effectiveVideo && models.videoResolution) {
@@ -322,6 +343,7 @@ export function CreateProjectModal() {
         content_mode: basics.contentMode,
         aspect_ratio: basics.aspectRatio,
         generation_mode: basics.generationMode,
+        video_continuity_policy: videoContinuityPolicy,
         default_duration: models.defaultDuration,
         style_template_id: style.mode === "template" ? style.templateId : null,
         video_backend: models.videoBackend || null,
@@ -331,6 +353,7 @@ export function CreateProjectModal() {
         text_backend_overview: models.textBackendOverview || null,
         text_backend_style: models.textBackendStyle || null,
         generation_profiles: savedGenerationProfiles,
+        shot_tier_profiles: createDefaultShotTierProfiles(),
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
       });
 
@@ -486,6 +509,9 @@ export function CreateProjectModal() {
               onGenerationProfilesExpandedChange={setGenerationProfilesExpanded}
               generationProfiles={generationProfiles}
               onGenerationProfilesChange={handleGenerationProfilesChange}
+              videoContinuityPolicy={videoContinuityPolicy}
+              onVideoContinuityPolicyChange={setVideoContinuityPolicy}
+              generationMode={basics.generationMode}
             />
           )}
           {step === 3 && (

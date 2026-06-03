@@ -71,13 +71,12 @@ _UNSET = _Unset()
 
 
 def effective_mode(*, project: dict, episode: dict) -> str:
-    """按 episode → project → 默认 storyboard 回退解析 generation_mode。
+    """按 project → 默认 storyboard 回退解析 generation_mode。
 
-    未知值一律回退到默认，兼容脏数据。
+    生成模式是项目级固定选择；episode 参数保留给旧调用签名，但不再允许分集覆盖。
+    未知值一律回退到默认，避免脏数据把页面路由打空。
     """
-    ep_mode = episode.get("generation_mode")
-    if ep_mode in _VALID_GENERATION_MODES:
-        return ep_mode
+    _ = episode
     proj_mode = project.get("generation_mode")
     if proj_mode in _VALID_GENERATION_MODES:
         return proj_mode
@@ -132,6 +131,7 @@ class ProjectManager:
         "props",
         "storyboards",
         "videos",
+        "reference_videos",
         "thumbnails",
         "output",
         "grids",
@@ -983,6 +983,15 @@ class ProjectManager:
         assets["status"] = status
         return status
 
+    @staticmethod
+    def _apply_generated_asset_update(assets: dict, asset_type: str, asset_path: Any) -> None:
+        """Apply a generated asset update and invalidate stale videos when the storyboard changes."""
+        if asset_type == "storyboard_image":
+            assets["video_clip"] = None
+            assets["video_thumbnail"] = None
+            assets["video_uri"] = None
+        assets[asset_type] = asset_path
+
     def normalize_script(self, project_name: str, script_filename: str, save: bool = True) -> dict:
         """
         补全现有 script.json 中缺失的字段
@@ -1131,7 +1140,7 @@ class ProjectManager:
                         if key not in assets:
                             assets[key] = default_value
 
-                    assets[asset_type] = asset_path
+                    self._apply_generated_asset_update(assets, asset_type, asset_path)
 
                     # 使用 update_scene_status 更新状态
                     self.update_scene_status(item)
@@ -1185,7 +1194,7 @@ class ProjectManager:
                     if key not in assets:
                         assets[key] = default_value
 
-                assets[asset_type] = asset_path
+                self._apply_generated_asset_update(assets, asset_type, asset_path)
                 self.update_scene_status(item)
 
             if missing:

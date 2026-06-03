@@ -61,6 +61,8 @@ const generationProfileProps = {
   onGenerationProfilesExpandedChange: vi.fn(),
   generationProfiles: createDefaultGenerationProfiles(),
   onGenerationProfilesChange: vi.fn(),
+  videoContinuityPolicy: "auto" as const,
+  onVideoContinuityPolicyChange: vi.fn(),
 };
 
 describe("WizardStep2Models", () => {
@@ -133,6 +135,28 @@ describe("WizardStep2Models", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /下一步|Next/i }));
     expect(onNext).toHaveBeenCalledOnce();
+  });
+
+  it("blocks reference_video mode when the selected video model lacks reference image support", () => {
+    const onNext = vi.fn();
+    render(
+      <WizardStep2Models
+        value={baseValue}
+        onChange={() => {}}
+        {...generationProfileProps}
+        generationMode="reference_video"
+        onBack={() => {}}
+        onNext={onNext}
+        onCancel={() => {}}
+        data={mockData}
+        error={null}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/参考视频预览模式需要|Reference/i);
+    const next = screen.getByRole("button", { name: /下一步|Next/i });
+    expect(next).toBeDisabled();
+    fireEvent.click(next);
+    expect(onNext).not.toHaveBeenCalled();
   });
 
   it("calls onCancel when cancel button is clicked", () => {

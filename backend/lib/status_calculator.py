@@ -97,7 +97,7 @@ class StatusCalculator:
             "units_count": total,
             "status": status,
             "duration_seconds": sum(u.get("duration_seconds", 0) for u in units),
-            "storyboards": {"total": total, "completed": 0},
+            "storyboards": {"total": 0, "completed": 0},
             "videos": {"total": total, "completed": video_done},
         }
 
@@ -119,6 +119,7 @@ class StatusCalculator:
         script_file: str,
         *,
         content_mode: str = "narration",
+        generation_mode: str = "storyboard",
         preloaded_scripts: dict[str, dict] | None = None,
     ) -> tuple:
         """加载单集剧本，返回 (script_status, script|None)，避免重复读取文件。
@@ -138,7 +139,10 @@ class StatusCalculator:
                 safe_num = int(episode_num)
             except (ValueError, TypeError):
                 return "none", None
-            draft_filename = "step1_segments.md" if content_mode == "narration" else "step1_normalized_script.md"
+            if generation_mode == "reference_video":
+                draft_filename = "step1_reference_units.md"
+            else:
+                draft_filename = "step1_segments.md" if content_mode == "narration" else "step1_normalized_script.md"
             draft_file = project_dir / f"drafts/episode_{safe_num}/{draft_filename}"
             return ("segmented" if draft_file.exists() else "none"), None
         except ValueError as e:
@@ -235,6 +239,7 @@ class StatusCalculator:
         跳过 pm.load_script；未命中仍走磁盘加载 + 草稿探测的既有兜底路径。
         """
         content_mode = project.get("content_mode", "narration")
+        generation_mode = project.get("generation_mode", "storyboard")
         episodes_stats = []
         for ep in project.get("episodes", []):
             script_file = ep.get("script_file", "")
@@ -246,6 +251,7 @@ class StatusCalculator:
                     episode_num,
                     script_file,
                     content_mode=content_mode,
+                    generation_mode=generation_mode,
                     preloaded_scripts=preloaded_scripts,
                 )
             else:

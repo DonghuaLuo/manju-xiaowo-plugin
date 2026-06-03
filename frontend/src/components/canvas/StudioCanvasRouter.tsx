@@ -14,10 +14,18 @@ import { ScenesPage } from "./lorebook/ScenesPage";
 import { PropsPage } from "./lorebook/PropsPage";
 import { ReferenceVideoCanvas } from "./reference/ReferenceVideoCanvas";
 import { GridImageToVideoCanvas } from "./grid/GridImageToVideoCanvas";
-import { API } from "@/api";
+import { API, type VideoCapabilitiesResponse } from "@/api";
 import { buildEntityRevisionKey } from "@/utils/project-changes";
-import { getProviderModels, getCustomProviderModels, lookupSupportedDurations } from "@/utils/provider-models";
+import {
+  getProviderModels,
+  getCustomProviderModels,
+  lookupSupportedDurations,
+  lookupVideoContinuitySupport,
+  videoContinuitySupportFromCapabilities,
+  type VideoContinuitySupport,
+} from "@/utils/provider-models";
 import { effectiveMode } from "@/utils/generation-mode";
+import { normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import type { Scene, Prop, CustomProviderInfo, ProviderInfo, GenerationQuality } from "@/types";
 import type { EpisodeScript } from "@/types/script";
@@ -71,9 +79,8 @@ export function StudioCanvasRouter() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [globalVideoBackend, setGlobalVideoBackend] = useState("");
-  const [resolvedDurationOptions, setResolvedDurationOptions] = useState<
-    number[] | undefined
-  >(undefined);
+  const [resolvedVideoCapabilities, setResolvedVideoCapabilities] =
+    useState<VideoCapabilitiesResponse | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -98,34 +105,42 @@ export function StudioCanvasRouter() {
   }, [providers, customProviders, globalVideoBackend, currentProjectData?.video_backend]);
 
   useEffect(() => {
-    // 依赖变化时清理旧的 resolved 选项；本地 lookup 有结果或缺项目名时同步清零，
-    // 否则在异步拉取新项目的 /video-capabilities 之前先 reset 以避免沿用旧值。
-    if (localDurationOptions !== undefined) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResolvedDurationOptions(undefined);
-      return;
-    }
     if (!currentProjectName) {
-      setResolvedDurationOptions(undefined);
+      setResolvedVideoCapabilities(null);
       return;
     }
-    setResolvedDurationOptions(undefined);
+    setResolvedVideoCapabilities(null);
     let disposed = false;
     API.getVideoCapabilities(currentProjectName)
       .then((caps) => {
         if (disposed) return;
-        setResolvedDurationOptions(caps.supported_durations);
+        setResolvedVideoCapabilities(caps);
       })
       .catch(() => {
         if (disposed) return;
-        setResolvedDurationOptions(undefined);
+        setResolvedVideoCapabilities(null);
       });
     return () => {
       disposed = true;
     };
-  }, [currentProjectName, localDurationOptions]);
+  }, [currentProjectName]);
 
-  const durationOptions = localDurationOptions ?? resolvedDurationOptions;
+  const durationOptions = localDurationOptions ?? resolvedVideoCapabilities?.supported_durations;
+  const effectiveVideoBackend = currentProjectData?.video_backend || globalVideoBackend || "";
+  const videoContinuitySupport = useMemo<VideoContinuitySupport | null>(() => {
+    if (!effectiveVideoBackend) return null;
+    const capsBackend = resolvedVideoCapabilities
+      ? `${resolvedVideoCapabilities.provider_id}/${resolvedVideoCapabilities.model}`
+      : "";
+    const capsSupport = videoContinuitySupportFromCapabilities(resolvedVideoCapabilities);
+    if (capsSupport && capsBackend === effectiveVideoBackend) {
+      return capsSupport;
+    }
+    return lookupVideoContinuitySupport(effectiveVideoBackend, customProviders);
+  }, [customProviders, effectiveVideoBackend, resolvedVideoCapabilities]);
+  const videoContinuityPolicy = normalizeVideoContinuityPolicy(
+    currentProjectData?.video_continuity_policy,
+  );
 
   // 从任务队列派生 loading 状态（替代本地 state）
   const tasks = useTasksStore((s) => s.tasks);
@@ -556,6 +571,8 @@ export function StudioCanvasRouter() {
                     scriptFile={scriptFile ?? undefined}
                     projectData={currentProjectData}
                     durationOptions={durationOptions}
+                    videoContinuityPolicy={videoContinuityPolicy}
+                    videoContinuitySupport={videoContinuitySupport}
                     onUpdatePrompt={handleUpdatePrompt}
                     onGenerateStoryboard={voidPromise(handleGenerateStoryboard)}
                     onGenerateVideo={voidPromise(handleGenerateVideo)}
@@ -577,6 +594,8 @@ export function StudioCanvasRouter() {
                     scriptFile={scriptFile ?? undefined}
                     projectData={currentProjectData}
                     durationOptions={durationOptions}
+                    videoContinuityPolicy={videoContinuityPolicy}
+                    videoContinuitySupport={videoContinuitySupport}
                     onUpdatePrompt={handleUpdatePrompt}
                     onGenerateStoryboard={voidPromise(handleGenerateStoryboard)}
                     onGenerateVideo={voidPromise(handleGenerateVideo)}

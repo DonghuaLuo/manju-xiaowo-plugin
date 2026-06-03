@@ -24,10 +24,11 @@ export function normalizeMode(value: unknown): GenerationMode {
 
 export function effectiveMode(
   project: { generation_mode?: string | null } | null | undefined,
-  episode: { generation_mode?: string | null } | null | undefined,
+  episode?: unknown,
 ): GenerationMode {
-  const ep = episode?.generation_mode;
-  if (typeof ep === "string" && RECOGNIZED.has(ep)) return normalizeMode(ep);
+  // Generation mode is fixed at project creation. The episode argument stays
+  // in the signature so existing route calls do not need extra adapter code.
+  void episode;
   const proj = project?.generation_mode;
   if (typeof proj === "string" && RECOGNIZED.has(proj)) return normalizeMode(proj);
   return "storyboard";

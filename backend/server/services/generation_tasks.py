@@ -81,6 +81,9 @@ _PROVIDER_ID_TO_BACKEND: dict[str, str] = {
     PROVIDER_DASHSCOPE: PROVIDER_DASHSCOPE,
 }
 
+_VIDEO_CONTINUITY_POLICIES = {"auto", "start_only", "end_frame", "reference_assisted"}
+_END_FRAME_SKIP_TRANSITIONS = {"fade", "dissolve"}
+
 
 def get_project_manager() -> ProjectManager:
     return pm
@@ -895,6 +898,131 @@ def _apply_reference_image_policy(
     }
 
 
+def _normalize_continuity_policy(project: dict, payload: dict[str, Any]) -> str:
+    raw = payload.get("video_continuity_policy")
+    if raw is None:
+        raw = payload.get("continuity_policy")
+    if raw is None:
+        raw = project.get("video_continuity_policy")
+    if raw is None:
+        raw = project.get("continuity_policy")
+    policy = str(raw or "auto").strip().lower()
+    return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
+
+
+def _item_reference_values(item: dict, field: str) -> set[str]:
+    value = item.get(field)
+    if not isinstance(value, list):
+        return set()
+    return {str(v).strip() for v in value if str(v).strip()}
+
+
+def _storyboard_path_for_item(project_path: Path, item: dict, id_field: str) -> tuple[str | None, Path | None]:
+    resource_id = str(item.get(id_field) or "").strip()
+    if not resource_id:
+        return None, None
+    assets = item.get("generated_assets")
+    storyboard_rel = assets.get("storyboard_image") if isinstance(assets, dict) else None
+    storyboard_file = (
+        project_path / storyboard_rel
+        if storyboard_rel
+        else project_path / "storyboards" / f"scene_{resource_id}.png"
+    )
+    return resource_id, storyboard_file
+
+
+def _video_backend_caps(generator: Any) -> tuple[Any | None, bool, bool, str | None, str | None]:
+    backend = getattr(generator, "_video_backend", None)
+    caps = getattr(backend, "video_capabilities", None) if backend is not None else None
+    supports_end_image = bool(getattr(caps, "last_frame", False))
+    supports_reference_images = bool(getattr(caps, "reference_images", False))
+    provider = getattr(backend, "name", None)
+    model = getattr(backend, "model", None)
+    return caps, supports_end_image, supports_reference_images, provider, model
+
+
+def _resolve_video_end_image(
+    *,
+    project: dict,
+    project_path: Path,
+    items: list[dict],
+    id_field: str,
+    char_field: str,
+    item_index: int | None,
+    current_item: dict,
+    resource_id: str,
+    generator: Any,
+    payload: dict[str, Any],
+) -> tuple[Path | None, list[Path] | None, dict[str, Any]]:
+    policy = _normalize_continuity_policy(project, payload)
+    caps, supports_end_image, supports_reference_images, provider, model = _video_backend_caps(generator)
+    meta: dict[str, Any] = {
+        "requested_policy": policy,
+        "effective_policy": "start_only",
+        "start_storyboard_id": resource_id,
+        "provider_supports_end_image": supports_end_image,
+        "provider_supports_reference_images": supports_reference_images,
+    }
+    max_reference_images = getattr(caps, "max_reference_images", None)
+    if max_reference_images is not None:
+        meta["provider_max_reference_images"] = max_reference_images
+    if provider:
+        meta["provider"] = provider
+    if model:
+        meta["model"] = model
+
+    if policy == "start_only":
+        meta["skip_reason"] = "policy_start_only"
+        return None, None, meta
+    if item_index is None:
+        meta["skip_reason"] = "storyboard_item_not_found"
+        return None, None, meta
+    next_index = item_index + 1
+    if next_index >= len(items):
+        meta["skip_reason"] = "last_storyboard"
+        return None, None, meta
+
+    next_item = items[next_index]
+    next_id, next_storyboard = _storyboard_path_for_item(project_path, next_item, id_field)
+    if next_id:
+        meta["end_storyboard_id"] = next_id
+    if not next_storyboard or not next_storyboard.exists():
+        meta["skip_reason"] = "next_storyboard_missing"
+        return None, None, meta
+
+    transition_to_next = str(current_item.get("transition_to_next") or "cut").strip().lower()
+    meta["transition_to_next"] = transition_to_next
+    if policy == "auto":
+        if transition_to_next in _END_FRAME_SKIP_TRANSITIONS:
+            meta["skip_reason"] = f"transition_{transition_to_next}"
+            return None, None, meta
+        if bool(next_item.get("segment_break")):
+            meta["skip_reason"] = "next_segment_break"
+            return None, None, meta
+
+        current_scenes = _item_reference_values(current_item, "scenes")
+        next_scenes = _item_reference_values(next_item, "scenes")
+        if current_scenes and next_scenes and current_scenes.isdisjoint(next_scenes):
+            meta["skip_reason"] = "scene_changed"
+            return None, None, meta
+
+    if policy == "reference_assisted":
+        if not supports_reference_images:
+            meta["skip_reason"] = "provider_no_reference_images"
+            return None, None, meta
+        meta["effective_policy"] = "reference_assisted"
+        meta["submitted_reference_images"] = [str(next_storyboard)]
+        return None, [next_storyboard], meta
+
+    if not supports_end_image:
+        meta["skip_reason"] = "provider_no_end_image"
+        return None, None, meta
+
+    meta["effective_policy"] = "end_frame"
+    meta["submitted_end_image"] = str(next_storyboard)
+    return next_storyboard, None, meta
+
+
 def _resolve_script_episode(project_name: str, script_file: str | None) -> int | None:
     if not script_file:
         return None
@@ -1208,9 +1336,10 @@ async def execute_video_task(
         _items, _id_field, _char_field, _, _ = get_storyboard_items(_script)
         _resolved = find_storyboard_item(_items, _id_field, resource_id)
         _item = _resolved[0] if _resolved else {}
-        return _project, _project_path, _item, _char_field
+        _item_index = _resolved[1] if _resolved else None
+        return _project, _project_path, _items, _id_field, _item, _item_index, _char_field
 
-    project, project_path, item, char_field = await asyncio.to_thread(_load)
+    project, project_path, items, id_field, item, item_index, char_field = await asyncio.to_thread(_load)
     route_payload = _payload_with_shot_tier(payload, item)
     route = await _maybe_resolve_generation_route(
         project_name=project_name,
@@ -1219,6 +1348,11 @@ async def execute_video_task(
         task_kind="video",
     )
     effective_payload = route.effective_payload if route else payload
+    if route is not None and route.shot_tier_strategy.get("video_continuity_policy"):
+        effective_payload = {
+            **effective_payload,
+            "video_continuity_policy": route.shot_tier_strategy["video_continuity_policy"],
+        }
     generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id)
 
     # 优先读取 generated_assets.storyboard_image，回退默认路径。
@@ -1333,7 +1467,19 @@ async def execute_video_task(
     # 此处不预先 int() 截断，避免把非整数秒静默修正成「碰巧合法」的值。
     assert_duration_supported(duration_seconds, supported_durations)
 
-    end_image = None  # 宫格模式不再使用首尾帧，统一走普通图生视频
+    end_image, continuity_reference_images, continuity_meta = _resolve_video_end_image(
+        project=project,
+        project_path=project_path,
+        items=items,
+        id_field=id_field,
+        char_field=char_field,
+        item_index=item_index,
+        current_item=item,
+        resource_id=resource_id,
+        generator=generator,
+        payload=effective_payload,
+    )
+    version_metadata["video_continuity"] = continuity_meta
 
     _, version, _, video_uri = await generator.generate_video_async(
         prompt=prompt_text,
@@ -1341,6 +1487,8 @@ async def execute_video_task(
         resource_id=resource_id,
         start_image=storyboard_file,
         end_image=end_image,
+        reference_images=continuity_reference_images,
+        allow_end_image_reference_fallback=False,
         aspect_ratio=aspect_ratio,
         duration_seconds=duration_seconds,
         resolution=resolution,
