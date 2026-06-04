@@ -35,6 +35,8 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 // ---------------------------------------------------------------------------
 
 const MAX_TEXTAREA_HEIGHT_VH = 50;
+const INPUT_SHELL_INTERACTIVE_SELECTOR =
+  "button,a,input,textarea,select,[role='button'],[role='option'],[role='menuitem'],[tabindex]:not([tabindex='-1'])";
 
 // ---------------------------------------------------------------------------
 // SessionSelector — 会话下拉选择器
@@ -442,6 +444,20 @@ export function AgentCopilot() {
     textareaRef.current?.focus();
   }, [localInput]);
 
+  const handleInputShellMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (inputDisabled) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement
+      && target !== e.currentTarget
+      && target.closest(INPUT_SHELL_INTERACTIVE_SELECTOR)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    textareaRef.current?.focus();
+  }, [inputDisabled]);
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -647,7 +663,7 @@ export function AgentCopilot() {
         )}
 
         <div
-          className="relative min-h-[76px] rounded-lg pb-10 pl-3 pr-0 pt-2 transition-colors"
+          className="relative mb-[5px] min-h-[76px] rounded-lg pb-10 pl-3 pr-0 pt-2 transition-colors"
           style={{
             background: isDragOver
               ? "var(--color-accent-dim)"
@@ -672,6 +688,7 @@ export function AgentCopilot() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onMouseDown={handleInputShellMouseDown}
         >
           {showSlashMenu && (
             <SlashCommandMenu

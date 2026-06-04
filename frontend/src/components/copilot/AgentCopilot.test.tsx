@@ -123,6 +123,18 @@ describe("AgentCopilot", () => {
     expect(document.querySelector(`.${UI_LAYERS.assistantLocalPopover}`)).toBeTruthy();
   });
 
+  it("focuses the textarea when the visual input shell is clicked", () => {
+    render(<AgentCopilot />);
+
+    const textarea = screen.getByLabelText("助手输入");
+    const inputShell = textarea.parentElement;
+    expect(inputShell).not.toBeNull();
+
+    fireEvent.mouseDown(inputShell!);
+
+    expect(textarea).toHaveFocus();
+  });
+
   it("does not send when Enter is used to confirm an IME composition", () => {
     render(<AgentCopilot />);
 
