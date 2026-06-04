@@ -115,6 +115,14 @@ def get_video_capabilities_tool(ctx: ToolContext):
                 "videos": "draft",
                 "reference_videos": "draft",
             }
+            payload["quality_labels"] = {
+                "draft": "快速版（批量/Agent 自动生成默认）",
+                "final": "精修版（仅用户明确指定的单镜头精修）",
+            }
+            payload["agent_generation_policy"] = (
+                "角色/场景/道具和宫格图默认走高质量母资产；分镜、视频、参考视频的批量与 Agent 自动生成默认走快速版。"
+                "合并成片只使用已生成视频片段，缺视频时应提示缺失并停止，不得自动补生成或自动精修。"
+            )
             payload["quality_recommendations"] = await _build_video_quality_recommendations(
                 project_name=ctx.project_name,
                 project=project,

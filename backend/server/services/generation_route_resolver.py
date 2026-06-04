@@ -1,4 +1,4 @@
-"""Resolve draft/final generation routes without breaking legacy settings."""
+"""Resolve quick/refined generation routes without breaking legacy draft/final settings."""
 
 from __future__ import annotations
 
@@ -30,6 +30,50 @@ ROUTE_TRIGGER_KEYS = frozenset(
         "shot_tier",
     }
 )
+
+
+def _display_provider_model(provider_id: str, model_id: str) -> tuple[str, str]:
+    meta = PROVIDER_REGISTRY.get(provider_id)
+    provider_name = meta.display_name if meta else provider_id
+    model_info = meta.models.get(model_id) if meta else None
+    if model_info and model_info.display_name != model_id:
+        model_name = f"{model_info.display_name} ({model_id})"
+    else:
+        model_name = model_id
+    return provider_name, model_name
+
+
+def _reference_video_model_hint(provider_id: str, model_id: str) -> str:
+    provider = provider_id.lower()
+    model = model_id.lower()
+    if provider in {"ark", "ark-agent-plan"}:
+        if "seedance-2" in model or "seedance2" in model:
+            return "请确认当前火山方舟端点选择的是 Seedance 2.0 系列，并且没有被自定义端点配置覆盖。"
+        return "火山方舟的 Seedance 1.x / 1.5 模型更适合文生、图生或首尾帧视频；参考视频请切换到 Seedance 2.0 或 Seedance 2.0 Fast。"
+    if provider == "dashscope":
+        return "阿里百炼的 t2v / i2v 模型不接收参考图；参考视频请切换到 happyhorse-1.0-r2v 或 wan2.7-r2v。"
+    if provider == "vidu":
+        return "Vidu 需要使用 reference2video 能力的模型；请切换到 Vidu Q3 Turbo、Vidu Q3 Reference、Vidu Q3 Mix、Vidu Q2 / Q2 Pro 或 Vidu 2.0。"
+    if provider == "newapi":
+        return "NewAPI 视频端点当前按不支持参考图处理；请改用支持 reference_images 的视频供应商，或用自定义供应商声明可用的参考图上限。"
+    if provider not in PROVIDER_REGISTRY:
+        return "自定义供应商当前声明的参考图上限为 0；请确认端点真的支持 reference_images / reference2video，并把 video_max_reference_images 设为大于 0。"
+    return "请切换到支持参考图的视频模型，例如火山方舟 Seedance 2.0、Gemini Veo 3.1、Vidu reference2video、OpenAI Sora 2、Grok 视频或阿里百炼 r2v 模型。"
+
+
+def _reference_video_requires_reference_images_message(
+    provider_id: str,
+    model_id: str,
+    max_reference_images: int | None,
+) -> str:
+    provider_name, model_name = _display_provider_model(provider_id, model_id)
+    limit = "未知" if max_reference_images is None else f"{max_reference_images} 张"
+    hint = _reference_video_model_hint(provider_id, model_id)
+    return (
+        "参考视频模式需要能接收角色、场景、道具参考图的视频模型。"
+        f"当前选择：{provider_name} / {model_name}，参考图上限为 {limit}，不能用于参考视频。"
+        f"{hint}"
+    )
 
 
 @dataclass(frozen=True)
@@ -191,7 +235,11 @@ def normalize_generation_quality(raw: object) -> GenerationQuality | None:
     if not isinstance(raw, str):
         return None
     value = raw.strip().lower()
-    if value in {"draft", "final", "custom"}:
+    if value in {"draft", "fast", "quick", "快速", "快速版"}:
+        return "draft"
+    if value in {"final", "refined", "refine", "polish", "精修", "精修版"}:
+        return "final"
+    if value == "custom":
         return value  # type: ignore[return-value]
     return None
 
@@ -715,8 +763,11 @@ async def _resolve_video_route(
 
     if task_kind == "reference_video" and max_reference_images == 0:
         raise ValueError(
-            f"reference_video requires a video model with reference image support, "
-            f"but {resolved.provider_id}/{resolved.model_id} supports 0 reference images"
+            _reference_video_requires_reference_images_message(
+                resolved.provider_id,
+                resolved.model_id,
+                max_reference_images,
+            )
         )
 
     resolution = _payload_resolution(payload, profile)

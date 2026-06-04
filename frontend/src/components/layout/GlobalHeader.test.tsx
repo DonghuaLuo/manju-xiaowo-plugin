@@ -42,6 +42,7 @@ vi.mock("./ExportScopeDialog", () => ({
   ExportScopeDialog: ({
     open,
     onSelect,
+    onJianyingExport,
   }: {
     open: boolean;
     onClose: () => void;
@@ -58,6 +59,12 @@ vi.mock("./ExportScopeDialog", () => ({
         </button>
         <button data-testid="scope-full" onClick={() => onSelect("full")}>
           全部数据
+        </button>
+        <button
+          data-testid="scope-jianying"
+          onClick={() => onJianyingExport?.(1, "C:\\Jianying\\Drafts", "6")}
+        >
+          剪映草稿
         </button>
       </div>
     ) : null,
@@ -261,6 +268,74 @@ describe("GlobalHeader", () => {
     });
     expect(PluginSDK.shell.open).not.toHaveBeenCalled();
     expect(PluginSDK.dialog.ask).not.toHaveBeenCalled();
+  });
+
+  it("warns when a Jianying draft export skips ungenerated shots", async () => {
+    vi.spyOn(API, "getUsageStats").mockResolvedValue({
+      total_cost: 0,
+      image_count: 0,
+      video_count: 0,
+      failed_count: 0,
+      total_count: 0,
+    });
+    vi.spyOn(API, "startJianyingDraftExport").mockResolvedValue({
+      taskId: "jianying-task-1",
+      status: "queued",
+      draftPath: "C:\\Jianying\\Drafts",
+    });
+    vi.spyOn(API, "getExportTaskStatus").mockResolvedValue({
+      taskId: "jianying-task-1",
+      kind: "jianying_draft",
+      status: "completed",
+      projectName: "demo",
+      episode: 1,
+      draftPath: "C:\\Jianying\\Drafts",
+      draftDir: "C:\\Jianying\\Drafts\\demo_第1集",
+      summary: {
+        episode: 1,
+        total_count: 5,
+        exported_count: 3,
+        missing_count: 2,
+        exported_ids: ["S1", "S2", "S4"],
+        missing_ids: ["S3", "S5"],
+      },
+    });
+
+    useProjectsStore.setState({
+      currentProjectName: "demo",
+      currentProjectData: {
+        title: "导出项目",
+        content_mode: "narration",
+        style: "Anime",
+        episodes: [{ episode: 1, title: "第一集", script_file: "episode_1.json" }],
+        characters: {},
+        scenes: {},
+        props: {},
+      },
+    });
+
+    renderHeader();
+    screen.getByRole("button", { name: "导出当前项目 ZIP" }).click();
+    const jianyingBtn = await screen.findByTestId("scope-jianying");
+    jianyingBtn.click();
+
+    await waitFor(() => {
+      expect(API.startJianyingDraftExport).toHaveBeenCalledWith(
+        "demo",
+        1,
+        "C:\\Jianying\\Drafts",
+        "6",
+      );
+    });
+    await waitFor(() => {
+      expect(API.getExportTaskStatus).toHaveBeenCalledWith("jianying-task-1");
+    });
+    await waitFor(() => {
+      const notification = useAppStore.getState().workspaceNotifications[0];
+      expect(notification?.tone).toBe("warning");
+      expect(notification?.text).toContain("已导出 3 个视频，跳过 2 个未生成镜头");
+      expect(notification?.text).toContain("未生成镜头：S3、S5");
+    });
   });
 
   it("renders asset library button", async () => {

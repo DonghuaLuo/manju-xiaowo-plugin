@@ -6,7 +6,7 @@ import json
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from claude_agent_sdk import tool
 
@@ -24,9 +24,22 @@ from lib.storyboard_sequence import (
 from server.agent_runtime.sdk_tools._context import ToolContext, tool_error, validate_script_filename
 from server.agent_runtime.sdk_tools._generation_quality import (
     QUALITY_SCHEMA,
+    is_current_refined,
     normalize_quality,
     route_summary,
 )
+
+StoryboardSelectionMode = Literal["missing", "selected", "current_unrefined", "current_all"]
+
+SELECTION_MODE_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": ["missing", "selected", "current_unrefined", "current_all"],
+    "description": (
+        "分镜选择范围；missing=只生成缺失分镜（默认，快速版批量补图），"
+        "selected=仅处理 segment_ids 指定项，current_unrefined=只精修当前未精修的已有分镜，"
+        "current_all=当前已有分镜全量重精修（包括已精修项）。历史版本不参与判断。"
+    ),
+}
 
 
 class _FailureRecorder:
@@ -87,13 +100,105 @@ def _build_prompt(
     return f"{style_prefix}{image_prompt}"
 
 
-def _select_items(items: list[dict[str, Any]], id_field: str, segment_ids: list[str] | None) -> list[dict[str, Any]]:
-    # ``None`` 和 ``[]`` 含义不同：``None`` = "不传过滤，默认扫所有缺图项"；
-    # ``[]`` = "显式空选择，应当返回空列表交由 handler 报错"。
-    if segment_ids is not None:
+def _has_storyboard_source(project_dir: Path, item: dict[str, Any]) -> bool:
+    rel = (item.get("generated_assets") or {}).get("storyboard_image")
+    if not isinstance(rel, str) or not rel.strip():
+        return False
+    try:
+        project_root = project_dir.resolve()
+        path = (project_dir / rel).resolve()
+        if not path.is_relative_to(project_root):
+            return False
+    except Exception:
+        return False
+    return path.is_file()
+
+
+def _normalize_selection_mode(args: dict[str, Any], segment_ids: list[str] | None) -> StoryboardSelectionMode:
+    raw_mode = args.get("selection_mode")
+    if raw_mode is None:
+        return "selected" if segment_ids is not None else "missing"
+    if not isinstance(raw_mode, str):
+        raise TypeError("selection_mode 必须是字符串")
+    value = raw_mode.strip()
+    if value in {"missing", "selected", "current_unrefined", "current_all"}:
+        return value  # type: ignore[return-value]
+    raise ValueError("selection_mode 必须是 missing、selected、current_unrefined 或 current_all")
+
+
+def _resolve_selection(
+    *,
+    items: list[dict[str, Any]],
+    id_field: str,
+    segment_ids: list[str] | None,
+    selection_mode: StoryboardSelectionMode,
+    quality: str,
+    quality_explicit: bool,
+    selection_mode_explicit: bool,
+    project_dir: Path,
+) -> list[dict[str, Any]]:
+    if quality == "final" and not (quality_explicit and selection_mode_explicit):
+        raise ValueError(
+            "精修分镜必须显式传 quality='final'，并显式传 "
+            "selection_mode='selected'、selection_mode='current_unrefined' 或 selection_mode='current_all'"
+        )
+    if quality == "final" and selection_mode == "missing":
+        raise ValueError("精修分镜不能使用 selection_mode='missing'；请改用 selected、current_unrefined 或 current_all")
+    if selection_mode in {"current_unrefined", "current_all"} and quality != "final":
+        raise ValueError(f"selection_mode='{selection_mode}' 只用于精修；请同时传 quality='final'")
+    if selection_mode != "selected" and segment_ids is not None:
+        raise ValueError("只有 selection_mode='selected' 时才允许传 segment_ids")
+
+    if selection_mode == "missing":
+        return [item for item in items if not _has_storyboard_source(project_dir, item)]
+
+    if selection_mode == "selected":
+        if segment_ids is None or len(segment_ids) == 0:
+            raise ValueError("selection_mode='selected' 必须传非空 segment_ids")
         wanted = {str(s) for s in segment_ids}
-        return [item for item in items if str(item.get(id_field)) in wanted]
-    return [item for item in items if not item.get("generated_assets", {}).get("storyboard_image")]
+        existing = {str(item.get(id_field)) for item in items}
+        missing_ids = [str(item_id) for item_id in segment_ids if str(item_id) not in existing]
+        if missing_ids:
+            raise ValueError(f"以下片段/场景 ID 不存在：{missing_ids}")
+        selected = [item for item in items if str(item.get(id_field)) in wanted]
+        if quality == "final":
+            missing_source = [
+                str(item.get(id_field)) for item in selected if not _has_storyboard_source(project_dir, item)
+            ]
+            if missing_source:
+                raise ValueError(f"精修要求已有分镜文件；以下 ID 缺少可精修源图：{missing_source}")
+        return selected
+
+    existing = [item for item in items if _has_storyboard_source(project_dir, item)]
+    if selection_mode == "current_all":
+        return existing
+    return [
+        item
+        for item in existing
+        if not is_current_refined(project_dir, "storyboards", str(item.get(id_field) or ""))
+    ]
+
+
+def _missing_requested_ids(items: list[dict[str, Any]], id_field: str, segment_ids: list[str] | None) -> list[str]:
+    if segment_ids is None:
+        return []
+    existing = {str(item.get(id_field)) for item in items}
+    return [str(item_id) for item_id in segment_ids if str(item_id) not in existing]
+
+
+def _selection_empty_text(
+    *,
+    selection_mode: StoryboardSelectionMode,
+    segment_ids: list[str] | None,
+    missing_ids: list[str],
+) -> str:
+    if selection_mode == "selected":
+        return f"❌ 没有找到匹配的片段/场景：segment_ids={segment_ids}" if missing_ids else "❌ 没有选中任何片段/场景"
+    if selection_mode == "current_unrefined":
+        return "✨ 当前没有未精修的已有分镜图"
+    if selection_mode == "current_all":
+        return "✨ 没有可精修的当前分镜图；请先生成快速版分镜"
+    return "✨ 所有片段的分镜图都已生成"
 
 
 def _build_specs(
@@ -129,7 +234,8 @@ def generate_storyboards_tool(ctx: ToolContext):
     @tool(
         "generate_storyboards",
         "为 narration/drama 模式剧本生成分镜图。"
-        "script 为剧本文件名（如 episode_1.json）；segment_ids 指定要重生的片段/场景 ID 列表（不传则生成所有缺图项）。",
+        "script 为剧本文件名（如 episode_1.json）；默认只生成缺失分镜。"
+        "精修必须显式传 quality='final' 与明确的 selection_mode。",
         {
             "type": "object",
             "properties": {
@@ -140,11 +246,14 @@ def generate_storyboards_tool(ctx: ToolContext):
                 "segment_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "片段或场景 ID 列表；不传则扫描所有缺分镜图的项",
+                    "description": "片段或场景 ID 列表；仅 selection_mode='selected' 时允许传",
+                },
+                "selection_mode": {
+                    **SELECTION_MODE_SCHEMA,
                 },
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 draft（分镜草稿）",
+                    "description": "生成质量档位；默认 draft（分镜快速版）。精修必须显式传 final，并配合 selection_mode 指定精修范围。",
                 },
             },
             "required": ["script"],
@@ -154,7 +263,10 @@ def generate_storyboards_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             segment_ids = args.get("segment_ids")
+            if segment_ids is not None and not isinstance(segment_ids, list):
+                raise TypeError("segment_ids 必须是字符串数组")
             quality = normalize_quality(args, "draft")
+            selection_mode = _normalize_selection_mode(args, segment_ids)
 
             script = ctx.pm.load_script(ctx.project_name, script_filename)
             project_dir = ctx.project_path
@@ -168,21 +280,32 @@ def generate_storyboards_tool(ctx: ToolContext):
                 project_data = {}
 
             items, id_field, _char_field, _scene_field, _prop_field = get_storyboard_items(script)
-            selected = _select_items(items, id_field, segment_ids)
+            selected = _resolve_selection(
+                items=items,
+                id_field=id_field,
+                segment_ids=segment_ids,
+                selection_mode=selection_mode,
+                quality=quality,
+                quality_explicit="quality" in args,
+                selection_mode_explicit="selection_mode" in args,
+                project_dir=project_dir,
+            )
             if not selected:
-                # 区分两种零结果：调用方显式传了 segment_ids（None vs []，None 即
-                # "未传"，[] 与不命中等价都按错误处理）vs 全部已生成（真无事可做）。
-                if segment_ids is not None:
-                    return {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": f"❌ 没有找到匹配的片段/场景：segment_ids={segment_ids}",
-                            }
-                        ],
-                        "is_error": True,
-                    }
-                return {"content": [{"type": "text", "text": "✨ 所有片段的分镜图都已生成"}]}
+                missing_ids = _missing_requested_ids(items, id_field, segment_ids)
+                is_error = selection_mode == "selected"
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": _selection_empty_text(
+                                selection_mode=selection_mode,
+                                segment_ids=segment_ids,
+                                missing_ids=missing_ids,
+                            ),
+                        }
+                    ],
+                    "is_error": is_error,
+                }
 
             style = project_data.get("style", "")
             style_description = project_data.get("style_description", "")

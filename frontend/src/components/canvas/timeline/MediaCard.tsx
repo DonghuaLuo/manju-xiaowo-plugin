@@ -51,7 +51,7 @@ interface MediaCardProps {
   aspectRatio: "9:16" | "16:9";
   /** 是否在 grid 模式下隐藏单独生成按钮 */
   hideGenerateButton?: boolean;
-  /** 是否只隐藏草稿生成按钮。宫格模式下单格已经是草稿，仍允许生成最终版。 */
+  /** 是否只隐藏快速版生成按钮。宫格模式下单格已经是快速版，仍允许生成精修版。 */
   hideDraftGenerateButton?: boolean;
   /** 生成按钮是否禁用（视频生成需要先有分镜图） */
   generateDisabled?: boolean;
@@ -73,9 +73,21 @@ interface MediaCardProps {
   onUploaded?: () => Promise<void> | void;
 }
 
-function qualityLabel(t: (key: string, options?: Record<string, unknown>) => string, quality?: VersionInfo["generation_quality"]): string | null {
-  if (quality === "draft") return t("episode_status_label_draft");
-  if (quality === "final") return t("media_generate_video_final");
+function qualityLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  kind: MediaKind,
+  quality?: VersionInfo["generation_quality"],
+): string | null {
+  if (quality === "draft") {
+    return kind === "storyboard"
+      ? t("generation_profile_storyboard_draft")
+      : t("generation_profile_video_draft");
+  }
+  if (quality === "final") {
+    return kind === "storyboard"
+      ? t("generation_profile_storyboard_final")
+      : t("generation_profile_video_final");
+  }
   if (quality === "custom") return "Custom";
   return null;
 }
@@ -118,10 +130,10 @@ function sourceStoryboardLabel(
   if (kind !== "video") return null;
   const quality = info?.source_storyboard_generation_quality;
   if (quality === "final") {
-    return t("media_based_on_final_storyboard", { defaultValue: "基于当前最终分镜" });
+    return t("media_based_on_final_storyboard", { defaultValue: "基于当前精修分镜" });
   }
   if (quality === "draft") {
-    return t("media_based_on_draft_storyboard", { defaultValue: "基于当前草稿分镜" });
+    return t("media_based_on_draft_storyboard", { defaultValue: "基于当前快速分镜" });
   }
   if (quality === "custom") {
     return t("media_based_on_custom_storyboard", { defaultValue: "基于当前自定义分镜" });
@@ -154,7 +166,7 @@ function currentVersionBadges(
 ): string[] {
   const route = info?.generation_route;
   return [
-    qualityLabel(t, info?.generation_quality),
+    qualityLabel(t, kind, info?.generation_quality),
     route?.resolution,
     route?.duration_seconds != null ? `${route.duration_seconds}s` : null,
     route?.provider && route.model ? `${route.provider}/${route.model}` : null,
@@ -258,8 +270,8 @@ export function MediaCard({
           });
   const finalGenerateLabel =
     kind === "storyboard"
-      ? t("media_generate_storyboard_final", { defaultValue: "最终版" })
-      : t("media_generate_video_final", { defaultValue: "最终版" });
+      ? t("media_generate_storyboard_final", { defaultValue: "精修版" })
+      : t("media_generate_video_final", { defaultValue: "精修版" });
   const storyboardFinalModes: Array<{
     value: StoryboardFinalGenerationMode;
     label: string;
@@ -303,7 +315,7 @@ export function MediaCard({
   const ratingVersionBadge = effectiveVersionInfo
     ? [
         `v${effectiveVersionInfo.version}`,
-        qualityLabel(t, effectiveVersionInfo.generation_quality),
+        qualityLabel(t, kind, effectiveVersionInfo.generation_quality),
       ].filter(Boolean).join(" · ")
     : "";
   const qualityDimensions = qualityDimensionsForKind(kind);
@@ -755,7 +767,7 @@ export function MediaCard({
                   generateDisabled
                     ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
                     : t("media_storyboard_final_mode_menu", {
-                        defaultValue: "选择最终版生成方式",
+                        defaultValue: "选择精修版生成方式",
                       })
                 }
                 className="focus-ring inline-flex h-full w-full min-w-0 items-center justify-center gap-1.5 rounded-[10px] border px-3 py-2.5 text-[12px] font-semibold transition-colors hover:bg-[oklch(1_0_0_/_0.06)] disabled:cursor-not-allowed disabled:opacity-50"

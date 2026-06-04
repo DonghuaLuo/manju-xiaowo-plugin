@@ -42,10 +42,12 @@ Step 7 视频
 
 ## 视频规格
 
-- **分辨率**：图片 1K，视频 1080p
+- **质量档位**：`draft` = 快速版，`final` = 精修版。批量生成和 Agent 自动生成分镜 / 视频 / 参考视频默认使用快速版；默认补缺只生成缺失或文件不存在的当前项，不重跑已有当前视频。用户明确要求精修时，可以对单镜头或一批镜头使用精修版。分镜精修必须显式传 `selection_mode: "selected"` + `segment_ids`、`selection_mode: "current_unrefined"` 或 `selection_mode: "current_all"`；视频整集 / 全部精修必须显式传 `refine_scope: "current_unrefined"` 或 `refine_scope: "current_all"`。`current_unrefined` 只看当前版本是否不是精修版，历史版本不算；`current_all` 对当前已有资源全量重精修，包括已精修项。用户只说"全部精修"但没说明范围时，必须先反问是只精修当前未精修，还是当前已有资源全量重精修。
+- **默认分辨率**：快速版分镜 1K、快速版视频 720p；精修版规格由项目设置中的精修档位决定
+- **母资产与宫格图**：角色 / 场景 / 道具母资产、宫格图默认高质量生成；宫格图切出的分镜按快速版镜头使用
 - **单片段时长**（storyboard / grid）：项目 `default_duration`（项目创建时按 content_mode 写入 project.json）
 - **单 unit 时长**（reference_video）：所有 shot 总和；**目标贴近当前视频模型的 `max_duration`**，单 shot 取值必须在模型 `supported_durations` 列表中。具体数值由 subagent 在执行时通过 `mcp__arcreel__get_video_capabilities` 工具查得，**不在本文档固化**
-- **拼接**：全部模式用 ffmpeg concat；Veo extend 仅用于**单片段延长**，不串联不同镜头
+- **拼接**：合并成片只使用已生成视频片段；`compose-video` 按当前脚本结构读取 `scenes[]` / `segments[]` / `video_units[]` 的 `generated_assets.video_clip`。缺视频必须提示并停止，不得自动补生成或自动精修。Veo extend 仅用于**单片段延长**，不串联不同镜头
 - **BGM**：视频 prompt 末尾统一追加"禁止出现：BGM、文字字幕、水印"
 
 ## Prompt 语言

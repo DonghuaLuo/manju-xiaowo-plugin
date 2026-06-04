@@ -152,7 +152,7 @@ def generate_assets_tool(ctx: ToolContext):
                 },
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 final（母资产高质量）",
+                    "description": "生成质量档位；默认 final（角色/场景/道具高质量母资产，不属于分镜/视频的快速版抽卡）",
                 },
             },
         },

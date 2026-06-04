@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,9 +36,16 @@ _TRANSITION_MAP: dict[str, TransitionType] = {
 }
 
 from lib.project_manager import ProjectManager
-from server.services.generation_route_resolver import is_video_resolution_below, merged_generation_profiles
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JianyingDraftExportResult:
+    """剪映草稿导出结果。"""
+
+    path: Path
+    summary: dict[str, Any]
 
 
 class JianyingDraftService:
@@ -64,40 +72,75 @@ class JianyingDraftService:
 
     @staticmethod
     def _is_reference_video_script(script: dict[str, Any]) -> bool:
-        return script.get("generation_mode") == "reference_video" or isinstance(script.get("video_units"), list)
+        return JianyingDraftService._video_item_kind(script)[0] == "video_units"
 
-    def _collect_video_clips(self, script: dict, project_dir: Path) -> list[dict[str, Any]]:
-        """从剧本中提取已完成视频的片段列表"""
-        if self._is_reference_video_script(script):
-            items = script.get("video_units") or []
-            id_field = "unit_id"
-            resource_type = "reference_videos"
-        else:
-            content_mode = script.get("content_mode", "narration")
-            items = script.get("segments" if content_mode == "narration" else "scenes", [])
-            id_field = "segment_id" if content_mode == "narration" else "scene_id"
-            resource_type = "videos"
+    @staticmethod
+    def _video_item_kind(script: dict[str, Any]) -> tuple[str, str, str]:
+        if script.get("generation_mode") == "reference_video":
+            return "video_units", "unit_id", "reference_videos"
+        if "video_units" in script and "segments" not in script and "scenes" not in script:
+            return "video_units", "unit_id", "reference_videos"
 
+        content_mode = script.get("content_mode")
+        if content_mode == "drama":
+            return "scenes", "scene_id", "videos"
+        if content_mode == "narration":
+            if "segments" not in script and "scenes" in script:
+                return "scenes", "scene_id", "videos"
+            return "segments", "segment_id", "videos"
+
+        if "scenes" in script and "segments" not in script:
+            return "scenes", "scene_id", "videos"
+        return "segments", "segment_id", "videos"
+
+    def _video_items(self, script: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
+        """返回当前剧本中应该参与视频导出的项目、ID 字段和资源类型。"""
+        item_key, id_field, resource_type = self._video_item_kind(script)
+        items = script.get(item_key) or []
+        safe_items = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        return safe_items, id_field, resource_type
+
+    def _collect_video_export_plan(
+        self,
+        script: dict[str, Any],
+        project_dir: Path,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """收集已出片视频，并记录未生成 / 文件缺失的项目。"""
+        items, id_field, resource_type = self._video_items(script)
+        project_root = project_dir.resolve()
         clips = []
-        for item in items:
+        missing_items = []
+        for index, item in enumerate(items):
+            item_id = str(item.get(id_field) or f"{resource_type}_{index + 1}")
             assets = item.get("generated_assets") or {}
-            video_clip = assets.get("video_clip")
+            video_clip = assets.get("video_clip") if isinstance(assets, dict) else None
+            missing_base = {
+                "id": item_id,
+                "resource_type": resource_type,
+            }
             if not video_clip:
+                missing_items.append({**missing_base, "reason": "not_generated"})
                 continue
 
-            abs_path = (project_dir / video_clip).resolve()
-            if not abs_path.is_relative_to(project_dir.resolve()):
+            try:
+                abs_path = (project_dir / str(video_clip)).resolve()
+            except Exception:
+                logger.warning("video_clip 路径无效，已跳过: %s", video_clip, exc_info=True)
+                missing_items.append({**missing_base, "reason": "path_invalid", "video_clip": str(video_clip)})
+                continue
+            if not abs_path.is_relative_to(project_root):
                 logger.warning("video_clip 路径越界，已跳过: %s", video_clip)
+                missing_items.append({**missing_base, "reason": "path_invalid", "video_clip": str(video_clip)})
                 continue
-            if not abs_path.exists():
+            if not abs_path.is_file():
+                missing_items.append({**missing_base, "reason": "file_missing", "video_clip": str(video_clip)})
                 continue
 
-            item_id = item.get(id_field, "")
             version_metadata = self._get_current_version_metadata(project_dir, resource_type, str(item_id))
             clip = {
                 "id": item_id,
                 "duration_seconds": item.get("duration_seconds", 8),
-                "video_clip": video_clip,
+                "video_clip": str(video_clip),
                 "abs_path": abs_path,
                 "novel_text": item.get("novel_text", ""),
                 "resource_type": resource_type,
@@ -110,7 +153,30 @@ class JianyingDraftService:
                     clip["generation_quality"] = generation_quality
             clips.append(clip)
 
+        return clips, missing_items
+
+    def _collect_video_clips(self, script: dict, project_dir: Path) -> list[dict[str, Any]]:
+        """从剧本中提取已完成视频的片段列表"""
+        clips, _ = self._collect_video_export_plan(script, project_dir)
         return clips
+
+    @staticmethod
+    def _build_export_summary(
+        episode: int,
+        clips: list[dict[str, Any]],
+        missing_items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        exported_ids = [str(clip.get("id") or "") for clip in clips if str(clip.get("id") or "")]
+        missing_ids = [str(item.get("id") or "") for item in missing_items if str(item.get("id") or "")]
+        return {
+            "episode": episode,
+            "total_count": len(clips) + len(missing_items),
+            "exported_count": len(clips),
+            "missing_count": len(missing_items),
+            "exported_ids": exported_ids,
+            "missing_ids": missing_ids,
+            "missing_items": missing_items,
+        }
 
     @staticmethod
     def _get_current_version_metadata(project_dir: Path, resource_type: str, resource_id: str) -> dict[str, Any]:
@@ -120,7 +186,7 @@ class JianyingDraftService:
         try:
             payload = json.loads(versions_path.read_text(encoding="utf-8"))
         except Exception:
-            logger.warning("读取版本元数据失败，跳过最终化检查: %s", versions_path, exc_info=True)
+            logger.warning("读取版本元数据失败，跳过质量信息: %s", versions_path, exc_info=True)
             return {}
 
         resource_info = payload.get(resource_type, {}).get(resource_id)
@@ -139,65 +205,10 @@ class JianyingDraftService:
                 return item
         return {}
 
-    @staticmethod
-    def _final_video_resolution(project: dict[str, Any], resource_type: str = "videos") -> str | None:
-        profile_key = "reference_video_final" if resource_type == "reference_videos" else "video_final"
-        profile = merged_generation_profiles(project).get(profile_key) or {}
-        value = profile.get("resolution")
-        return str(value) if value else None
-
-    @staticmethod
-    def _version_resolution(metadata: dict[str, Any]) -> str | None:
-        route = metadata.get("generation_route")
-        if isinstance(route, dict) and route.get("resolution"):
-            return str(route["resolution"])
-        value = metadata.get("resolution")
-        return str(value) if value else None
-
     @classmethod
     def _assert_export_ready(cls, project: dict[str, Any], clips: list[dict[str, Any]], episode: int) -> None:
-        draft_ids = [str(clip.get("id") or "") for clip in clips if clip.get("generation_quality") == "draft"]
-        draft_ids = [item_id for item_id in draft_ids if item_id]
-        if draft_ids:
-            shown = "、".join(draft_ids[:12])
-            if len(draft_ids) > 12:
-                shown = f"{shown} 等 {len(draft_ids)} 个"
-            raise ValueError(f"第 {episode} 集包含草稿视频片段：{shown}。请先生成最终版视频后再导出剪映草稿。")
-
-        low_resolution_by_target: dict[str, list[str]] = {}
-        for clip in clips:
-            target_resolution = cls._final_video_resolution(project, str(clip.get("resource_type") or "videos"))
-            if not target_resolution:
-                continue
-            metadata = clip.get("version_metadata") or {}
-            resolution = cls._version_resolution(metadata)
-            if is_video_resolution_below(resolution, target_resolution):
-                low_resolution_by_target.setdefault(target_resolution, []).append(f"{clip.get('id') or ''}({resolution})")
-        low_resolution_by_target = {
-            target: [item for item in items if item]
-            for target, items in low_resolution_by_target.items()
-            if any(items)
-        }
-        if not low_resolution_by_target:
-            return
-        if len(low_resolution_by_target) == 1:
-            target_resolution, low_resolution = next(iter(low_resolution_by_target.items()))
-            shown = "、".join(low_resolution[:12])
-            if len(low_resolution) > 12:
-                shown = f"{shown} 等 {len(low_resolution)} 个"
-            raise ValueError(
-                f"第 {episode} 集包含低于最终规格 {target_resolution} 的视频片段：{shown}。"
-                "请先最终化本集后再导出剪映草稿。"
-            )
-        shown_parts = []
-        total = 0
-        for target_resolution, items in low_resolution_by_target.items():
-            total += len(items)
-            shown_parts.append(f"{target_resolution}: {'、'.join(items[:12])}")
-        shown = "；".join(shown_parts)
-        if total > 12:
-            shown = f"{shown} 等 {total} 个"
-        raise ValueError(f"第 {episode} 集包含低于最终规格的视频片段：{shown}。请先最终化本集后再导出剪映草稿。")
+        """保留旧私有入口；剪映导出现在允许草稿/低分辨率视频参与合成。"""
+        return
 
     def _resolve_canvas_size(self, project: dict, first_video_path: Path | None = None) -> tuple[int, int]:
         """根据项目 aspect_ratio 确定画布尺寸，缺失时从首个视频自动检测"""
@@ -365,7 +376,7 @@ class JianyingDraftService:
         *,
         draft_name: str | None = None,
         use_draft_info_name: bool = True,
-    ) -> tuple[Path, Path, str]:
+    ) -> tuple[Path, Path, str, dict[str, Any]]:
         project = self.pm.load_project(project_name)
         project_dir = self.pm.get_project_path(project_name)
 
@@ -374,10 +385,10 @@ class JianyingDraftService:
 
         # 2. 收集已完成视频
         content_mode = script_data.get("content_mode", "narration")
-        clips = self._collect_video_clips(script_data, project_dir)
+        clips, missing_items = self._collect_video_export_plan(script_data, project_dir)
         if not clips:
             raise ValueError(f"第 {episode} 集没有已完成的视频片段，请先生成视频")
-        self._assert_export_ready(project, clips, episode)
+        summary = self._build_export_summary(episode, clips, missing_items)
 
         # 3. 画布尺寸（项目未设 aspect_ratio 时从首个视频自动检测）
         width, height = self._resolve_canvas_size(project, clips[0]["abs_path"])
@@ -430,7 +441,7 @@ class JianyingDraftService:
             if use_draft_info_name:
                 draft_content_path.rename(draft_dir / "draft_info.json")
 
-            return tmp_dir, draft_dir, resolved_draft_name
+            return tmp_dir, draft_dir, resolved_draft_name, summary
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
@@ -453,7 +464,7 @@ class JianyingDraftService:
             FileNotFoundError: 项目或剧本不存在
             ValueError: 无可导出的视频片段
         """
-        tmp_dir, draft_dir, draft_name = self._prepare_episode_draft_dir(
+        tmp_dir, draft_dir, draft_name, _ = self._prepare_episode_draft_dir(
             project_name,
             episode,
             draft_path,
@@ -474,6 +485,45 @@ class JianyingDraftService:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
 
+    def export_episode_draft_to_directory_with_summary(
+        self,
+        project_name: str,
+        episode: int,
+        draft_path: str,
+        *,
+        use_draft_info_name: bool = True,
+    ) -> JianyingDraftExportResult:
+        """
+        直接在剪映草稿目录中创建草稿目录，并返回已导出 / 跳过项目摘要。
+
+        Returns:
+            草稿目录路径和导出摘要
+        """
+        project = self.pm.load_project(project_name)
+        draft_root = Path(draft_path).expanduser()
+        draft_root.mkdir(parents=True, exist_ok=True)
+        _, draft_name = self._unique_draft_dir(
+            draft_root,
+            self._safe_draft_name(project, project_name, episode),
+        )
+        tmp_dir, draft_dir, _, summary = self._prepare_episode_draft_dir(
+            project_name,
+            episode,
+            str(draft_root),
+            draft_name=draft_name,
+            use_draft_info_name=use_draft_info_name,
+        )
+        target_dir = draft_root / draft_name
+        try:
+            shutil.move(str(draft_dir), str(target_dir))
+            return JianyingDraftExportResult(path=target_dir, summary=summary)
+        except Exception:
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def export_episode_draft_to_directory(
         self,
         project_name: str,
@@ -488,27 +538,9 @@ class JianyingDraftService:
         Returns:
             已创建的剪映草稿目录路径
         """
-        project = self.pm.load_project(project_name)
-        draft_root = Path(draft_path).expanduser()
-        draft_root.mkdir(parents=True, exist_ok=True)
-        _, draft_name = self._unique_draft_dir(
-            draft_root,
-            self._safe_draft_name(project, project_name, episode),
-        )
-        tmp_dir, draft_dir, _ = self._prepare_episode_draft_dir(
+        return self.export_episode_draft_to_directory_with_summary(
             project_name,
             episode,
-            str(draft_root),
-            draft_name=draft_name,
+            draft_path,
             use_draft_info_name=use_draft_info_name,
-        )
-        target_dir = draft_root / draft_name
-        try:
-            shutil.move(str(draft_dir), str(target_dir))
-            return target_dir
-        except Exception:
-            if target_dir.exists():
-                shutil.rmtree(target_dir, ignore_errors=True)
-            raise
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        ).path

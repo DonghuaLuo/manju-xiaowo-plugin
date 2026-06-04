@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Video Composer - 使用 ffmpeg 合成最终视频
+Video Composer - 使用 ffmpeg 合并已生成视频片段
 
 Usage:
     python compose_video.py <script_file> [--output OUTPUT] [--music MUSIC_FILE]
 
 Example:
-    python compose_video.py chapter_01_script.json --output chapter_01_final.mp4
+    python compose_video.py chapter_01_script.json --output chapter_01_merged.mp4
     python compose_video.py chapter_01_script.json --music bgm.mp3
 """
 
@@ -203,7 +203,7 @@ def normalize_clip(
     target_height: int,
     target_fps: str,
 ) -> None:
-    """先把单个片段重编码为统一中间片，再做最终拼接。"""
+    """先把单个片段重编码为统一中间片，再做合并拼接。"""
     media = probe_media(video_path)
     # 进入拼接链路的每个中间片都要把音视频轨归零，避免后续 concat / 转场继续放大时间戳偏移。
     video_filter = (
@@ -309,7 +309,7 @@ def normalize_clips(video_paths: list[Path], temp_dir: Path) -> list[Path]:
 
 
 def concatenate_final(video_paths: list[Path], output_path: Path):
-    """对统一规格的中间片做最终拼接，并确保视频轨从 0 开始。"""
+    """对统一规格的中间片做合并拼接，并确保视频轨从 0 开始。"""
     if not video_paths:
         raise ValueError("没有可用的视频片段")
 
@@ -328,7 +328,7 @@ def concatenate_final(video_paths: list[Path], output_path: Path):
                 "+faststart",
                 str(output_path),
             ],
-            "ffmpeg 单段最终输出失败",
+            "ffmpeg 单段输出失败",
         )
         return
 
@@ -338,9 +338,9 @@ def concatenate_final(video_paths: list[Path], output_path: Path):
         inputs.extend(["-i", str(path.resolve())])
         filter_inputs.append(f"[{index}:v][{index}:a]")
 
-    # 仅让中间片归零还不够；最终成片如果不是从 0 开始，QuickTime 停在 0.00s 仍会先黑一下。
-    # concat demuxer + stream copy 会让最终视频轨保留正的 start_time，
-    # QuickTime 停在 0.00s 时会先显示黑屏；这里对统一中间片做一次最终编码，
+    # 仅让中间片归零还不够；合并成片如果不是从 0 开始，QuickTime 停在 0.00s 仍会先黑一下。
+    # concat demuxer + stream copy 会让合并视频轨保留正的 start_time，
+    # QuickTime 停在 0.00s 时会先显示黑屏；这里对统一中间片做一次合并编码，
     # 让音视频轨都从 0 开始。
     filter_complex = "".join(filter_inputs) + f"concat=n={len(video_paths)}:v=1:a=1[vout][aout]"
     run_ffmpeg(
@@ -378,7 +378,7 @@ def concatenate_simple(video_paths: list, output_path: Path):
     """
     无转场拼接
 
-    先把片段规范化为统一的 H.264/AAC 中间片，再做最终拼接，
+    先把片段规范化为统一的 H.264/AAC 中间片，再做合并拼接，
     避免直接 copy 原始码流时的关键帧 / 时间戳边界问题。
     """
     with tempfile.TemporaryDirectory(prefix="compose-video-") as temp_dir:
@@ -591,11 +591,68 @@ def add_background_music(video_path: Path, music_path: Path, output_path: Path, 
         raise RuntimeError(f"添加背景音乐失败: {result.stderr}")
 
 
+def _safe_items(raw: object) -> list[dict]:
+    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _video_item_kind(script: dict) -> tuple[str, str, str]:
+    if script.get("generation_mode") == "reference_video":
+        return "video_units", "unit_id", "unit"
+    if "video_units" in script and "segments" not in script and "scenes" not in script:
+        return "video_units", "unit_id", "unit"
+
+    content_mode = script.get("content_mode")
+    if content_mode == "drama":
+        return "scenes", "scene_id", "场景"
+    if content_mode == "narration":
+        if "segments" not in script and "scenes" in script:
+            return "scenes", "scene_id", "场景"
+        return "segments", "segment_id", "片段"
+
+    if "scenes" in script and "segments" not in script:
+        return "scenes", "scene_id", "场景"
+    return "segments", "segment_id", "片段"
+
+
+def _video_items(script: dict) -> tuple[list[dict], str, str]:
+    """Return ordered script items plus id field and display label."""
+    item_key, id_field, item_kind = _video_item_kind(script)
+    if isinstance(script.get(item_key), list):
+        return _safe_items(script.get(item_key)), id_field, item_kind
+
+    content_mode = script.get("content_mode") or "unknown"
+    generation_mode = script.get("generation_mode") or "storyboard"
+    raise RuntimeError(
+        "compose_video.py 未找到可合并的视频列表；"
+        "剧本顶层需要 scenes[]、segments[] 或 video_units[]。"
+        f"当前 content_mode={content_mode}, generation_mode={generation_mode}"
+    )
+
+
+def _resolve_project_media(project_dir: Path, raw_path: object, item_label: str) -> Path:
+    if not raw_path:
+        raise ValueError(f"{item_label} 缺少视频片段")
+    candidate = Path(str(raw_path))
+    media_path = (candidate if candidate.is_absolute() else project_dir / candidate).resolve()
+    if not media_path.is_relative_to(project_dir):
+        raise ValueError(f"视频文件必须位于项目目录内，收到: {raw_path}")
+    if not media_path.is_file():
+        raise FileNotFoundError(f"视频文件不存在或不是普通文件: {media_path}")
+    return media_path
+
+
+def _default_output_filename(script: dict, script_filename: str) -> str:
+    novel = script.get("novel") if isinstance(script.get("novel"), dict) else {}
+    chapter = novel.get("chapter") or novel.get("title") or Path(script_filename).stem
+    safe_stem = str(chapter or "output").replace(" ", "_")
+    return f"{safe_stem}_merged.mp4"
+
+
 def compose_video(
     script_filename: str, output_filename: str = None, music_path: str = None, use_transitions: bool = True
 ) -> Path:
     """
-    合成最终视频
+    合并已生成视频片段
 
     Args:
         script_filename: 剧本文件名
@@ -611,37 +668,21 @@ def compose_video(
     # 加载剧本（pm.load_script 内部已用 _safe_subpath 过滤 ../ 等逃逸尝试）
     script = pm.load_script(project_name, script_filename)
 
-    # 仅支持 drama 模式（顶层 scenes[]）；narration/reference_video 给友好错误
-    if "scenes" not in script:
-        content_mode = script.get("content_mode") or "unknown"
-        generation_mode = script.get("generation_mode") or "storyboard"
-        raise RuntimeError(
-            f"compose_video.py 目前仅支持 drama 模式（剧本顶层需有 scenes[]）；"
-            f"当前剧本 content_mode={content_mode}, generation_mode={generation_mode}，"
-            "请使用插件工作台的剪映草稿导出"
-        )
-
     # 收集视频片段
     video_paths = []
     transitions = []
+    items, id_field, item_kind = _video_items(script)
 
-    for scene in script["scenes"]:
-        video_clip = scene.get("generated_assets", {}).get("video_clip")
-        if not video_clip:
-            raise ValueError(f"场景 {scene['scene_id']} 缺少视频片段")
-
+    for index, item in enumerate(items):
+        item_id = str(item.get(id_field) or f"{item_kind}{index + 1}")
+        item_label = f"{item_kind} {item_id}"
+        assets = item.get("generated_assets") if isinstance(item.get("generated_assets"), dict) else {}
+        video_clip = assets.get("video_clip")
         # 与 --music / output 同样的围栏：剧本里 video_clip 写成绝对路径或 ../
         # 形式时，未 resolve 的 `project_dir / video_clip` 会落到项目外（且字面
         # 前缀能骗过 is_relative_to），ffmpeg 会真的去读项目外文件
-        candidate = Path(video_clip)
-        video_path = (candidate if candidate.is_absolute() else project_dir / candidate).resolve()
-        if not video_path.is_relative_to(project_dir):
-            raise ValueError(f"视频文件必须位于项目目录内，收到: {video_clip}")
-        if not video_path.is_file():
-            raise FileNotFoundError(f"视频文件不存在或不是普通文件: {video_path}")
-
-        video_paths.append(video_path)
-        transitions.append(scene.get("transition_to_next", "cut"))
+        video_paths.append(_resolve_project_media(project_dir, video_clip, item_label))
+        transitions.append(str(item.get("transition_to_next") or "cut"))
 
     if not video_paths:
         raise ValueError("没有可用的视频片段")
@@ -650,8 +691,7 @@ def compose_video(
 
     # 确定输出路径：强制落在 project_dir/output/ 内，拒绝 ../ 逃逸
     if output_filename is None:
-        chapter = script["novel"].get("chapter", "output").replace(" ", "_")
-        output_filename = f"{chapter}_final.mp4"
+        output_filename = _default_output_filename(script, script_filename)
 
     # 防御 output/ 软链接绕过：若 `project_dir/output` 本身指向项目外目录，
     # resolve 后的 output_dir 会落到项目外，is_relative_to 校验同样会放行——
@@ -699,7 +739,7 @@ def compose_video(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="合成最终视频")
+    parser = argparse.ArgumentParser(description="合并已生成视频片段")
     parser.add_argument("script", help="剧本文件名")
     parser.add_argument("--output", help="输出文件名")
     parser.add_argument("--music", help="背景音乐文件")
@@ -717,8 +757,8 @@ def main():
     try:
         output_path = compose_video(args.script, args.output, args.music, use_transitions=not args.no_transitions)
 
-        print(f"\n🎉 最终视频: {output_path}")
-        print("   单独片段保留在: videos/")
+        print(f"\n🎉 合并视频: {output_path}")
+        print("   单独片段保留在剧本记录的原目录")
 
     except Exception as e:
         print(f"❌ 错误: {e}")

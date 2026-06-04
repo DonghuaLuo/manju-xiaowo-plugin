@@ -660,7 +660,7 @@ def _run_jianying_draft_export_task(
         from server.services.jianying_draft_service import JianyingDraftService
 
         service = JianyingDraftService(ProjectManager(app_data_dir()))
-        draft_dir = service.export_episode_draft_to_directory(
+        result = service.export_episode_draft_to_directory_with_summary(
             project_name=project_name,
             episode=episode,
             draft_path=str(draft_path),
@@ -674,7 +674,8 @@ def _run_jianying_draft_export_task(
                 "projectName": project_name,
                 "episode": episode,
                 "draftPath": str(draft_path),
-                "draftDir": str(draft_dir),
+                "draftDir": str(result.path),
+                "summary": result.summary,
             },
         )
     except Exception as exc:  # noqa: BLE001

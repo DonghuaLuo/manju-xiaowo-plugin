@@ -358,7 +358,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });
 
-  it("previews grid generation against both text-to-image and image-to-image routes", async () => {
+  it("previews grid generation without validating inactive reference-video routes", async () => {
     vi.spyOn(API, "getSystemConfig").mockResolvedValue({
       ...FAKE_CONFIG_WITH_DEFAULTS,
     } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
@@ -391,11 +391,177 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     await waitFor(() => expect(previewSpy).toHaveBeenCalled());
     const payload = previewSpy.mock.calls.at(-1)?.[1];
     const gridRoutes = payload?.routes.filter((route) => route.task_kind === "grid") ?? [];
+    const referenceVideoRoutes = payload?.routes.filter((route) => route.task_kind === "reference_video") ?? [];
 
     expect(gridRoutes).toEqual([
       expect.objectContaining({ quality: "final", capability: "t2i" }),
       expect.objectContaining({ quality: "final", capability: "i2i" }),
     ]);
+    expect(referenceVideoRoutes).toEqual([]);
+  });
+
+  it("previews reference-video routes only for reference-video projects", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      ...FAKE_CONFIG_WITH_DEFAULTS,
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        generation_mode: "reference_video",
+        video_backend: "gemini/veo-3",
+        image_provider_t2i: "gemini/nano-banana",
+        image_provider_i2i: "gemini/nano-banana",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const previewSpy = vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({ routes: [] });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalled());
+    const payload = previewSpy.mock.calls.at(-1)?.[1];
+    const referenceVideoRoutes = payload?.routes.filter((route) => route.task_kind === "reference_video") ?? [];
+
+    expect(referenceVideoRoutes).toEqual([
+      expect.objectContaining({ quality: "draft" }),
+      expect.objectContaining({ quality: "final" }),
+    ]);
+  });
+
+  it("hides reference-video quality profiles for non-reference-video projects", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      ...FAKE_CONFIG_WITH_DEFAULTS,
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        generation_mode: "storyboard",
+        video_backend: "gemini/veo-3",
+        image_provider_t2i: "gemini/nano-banana",
+        image_provider_i2i: "gemini/nano-banana",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({ routes: [] });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await waitFor(() => expect(screen.getByText("视频快速版")).toBeInTheDocument());
+    expect(screen.queryByText("参考视频快速版")).not.toBeInTheDocument();
+    expect(screen.queryByText("参考视频精修版")).not.toBeInTheDocument();
+  });
+
+  it("shows reference-video quality profiles for reference-video projects", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      ...FAKE_CONFIG_WITH_DEFAULTS,
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        generation_mode: "reference_video",
+        video_backend: "gemini/veo-3",
+        image_provider_t2i: "gemini/nano-banana",
+        image_provider_i2i: "gemini/nano-banana",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({ routes: [] });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await waitFor(() => expect(screen.getByText("参考视频快速版")).toBeInTheDocument());
+    expect(screen.getByText("参考视频精修版")).toBeInTheDocument();
+  });
+
+  it("groups repeated route preview errors by message", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      ...FAKE_CONFIG_WITH_DEFAULTS,
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        video_backend: "ark/doubao-seedance-1-5-pro-251215",
+        image_provider_t2i: "gemini/nano-banana",
+        image_provider_i2i: "gemini/nano-banana",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({
+      routes: [
+        {
+          ok: false,
+          label: "参考视频快速版",
+          task_kind: "reference_video",
+          quality: "draft",
+          error: "当前模型不支持参考图，请切换到 Seedance 2.0。",
+        },
+        {
+          ok: false,
+          label: "参考视频精修版",
+          task_kind: "reference_video",
+          quality: "final",
+          error: "当前模型不支持参考图，请切换到 Seedance 2.0。",
+        },
+      ],
+    });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await screen.findByText("参考视频快速版、参考视频精修版: 当前模型不支持参考图，请切换到 Seedance 2.0。");
+    expect(screen.queryByText(/^参考视频快速版: 当前模型不支持参考图/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^参考视频精修版: 当前模型不支持参考图/)).not.toBeInTheDocument();
   });
 
   it("loads existing model_settings resolution into video/image pickers", async () => {

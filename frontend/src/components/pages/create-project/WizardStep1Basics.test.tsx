@@ -93,8 +93,8 @@ describe("WizardStep1Basics", () => {
         onCancel={() => {}}
       />,
     );
-    // click 宫格分镜草稿 / Grid Storyboard Draft
-    fireEvent.click(screen.getByText(/Grid Storyboard Draft|宫格分镜草稿/));
+    // click 宫格分镜快速版 / Grid Fast Storyboards
+    fireEvent.click(screen.getByText(/Grid Fast Storyboards|宫格分镜快速版/));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ generationMode: "grid" }),
     );

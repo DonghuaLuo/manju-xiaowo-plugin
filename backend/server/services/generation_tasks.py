@@ -936,10 +936,10 @@ def _collect_reference_images(
         extra_path = Path(extra)
         if not extra_path.is_absolute():
             extra_path = project_path / extra_path
-        if extra_path.exists():
+        if extra_path.is_file():
             reference_images.append(extra_path)
 
-    if previous_storyboard_path and previous_storyboard_path.exists():
+    if previous_storyboard_path and previous_storyboard_path.is_file():
         reference_images.append(build_previous_storyboard_reference(previous_storyboard_path))
 
     return reference_images or None
@@ -1128,7 +1128,7 @@ def _resolve_video_end_image(
     next_id, next_storyboard = _storyboard_path_for_item(project_path, next_item, id_field)
     if next_id:
         meta["end_storyboard_id"] = next_id
-    if not next_storyboard or not next_storyboard.exists():
+    if not next_storyboard or not next_storyboard.is_file():
         meta["skip_reason"] = "next_storyboard_missing"
         return None, None, meta
 
@@ -1524,7 +1524,7 @@ async def execute_video_task(
         storyboard_file = project_path / storyboard_rel
     else:
         storyboard_file = project_path / "storyboards" / f"scene_{resource_id}.png"
-    if not storyboard_file.exists():
+    if not storyboard_file.is_file():
         raise ValueError(f"storyboard not found: {storyboard_file.name}")
     source_storyboard_quality = _storyboard_source_quality(generator.versions, resource_id, assets)
 

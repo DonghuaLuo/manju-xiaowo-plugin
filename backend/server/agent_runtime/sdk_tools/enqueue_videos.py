@@ -29,7 +29,11 @@ from server.agent_runtime.sdk_tools._context import (
 )
 from server.agent_runtime.sdk_tools._generation_quality import (
     QUALITY_SCHEMA,
+    REFINE_SCOPE_SCHEMA,
+    RefineScope,
+    is_current_refined,
     normalize_quality,
+    normalize_refine_scope,
     route_summary,
 )
 
@@ -52,6 +56,81 @@ def _get_video_prompt(item: dict[str, Any]) -> str | dict[str, Any]:
 
 def _is_reference_script(script: dict[str, Any]) -> bool:
     return script.get("generation_mode") == "reference_video"
+
+
+def _validate_bulk_refine_scope(quality: str, refine_scope: RefineScope | None) -> None:
+    if quality == "final" and refine_scope is None:
+        raise ValueError("批量精修视频必须显式传 refine_scope='current_unrefined' 或 refine_scope='current_all'")
+    if quality != "final" and refine_scope is not None:
+        raise ValueError("refine_scope 只允许和 quality='final' 一起使用")
+
+
+def _current_video_path(project_dir: Path, item: dict[str, Any]) -> Path | None:
+    rel = (item.get("generated_assets") or {}).get("video_clip")
+    if not isinstance(rel, str) or not rel.strip():
+        return None
+    try:
+        project_root = project_dir.resolve()
+        path = (project_dir / rel).resolve()
+        if not path.is_relative_to(project_root):
+            return None
+    except Exception:
+        return None
+    return path if path.is_file() else None
+
+
+def _has_current_video(project_dir: Path, item: dict[str, Any]) -> bool:
+    return _current_video_path(project_dir, item) is not None
+
+
+def _select_current_video_items(
+    *,
+    items: list[dict[str, Any]],
+    id_field: str,
+    project_dir: Path,
+    resource_type: str,
+    refine_scope: RefineScope,
+) -> list[dict[str, Any]]:
+    current_items = [item for item in items if _has_current_video(project_dir, item)]
+    if refine_scope == "current_all":
+        return current_items
+    return [
+        item
+        for item in current_items
+        if not is_current_refined(project_dir, resource_type, str(item.get(id_field) or ""))
+    ]
+
+
+def _refine_scope_empty_text(refine_scope: RefineScope, noun: str) -> str:
+    if refine_scope == "current_unrefined":
+        return f"当前没有未精修的已有{noun}"
+    return f"当前没有可重精修的已有{noun}"
+
+
+def _mark_current_video_items(
+    *,
+    items: list[dict[str, Any]],
+    id_field: str,
+    project_dir: Path,
+    ordered_paths: list[Path | None],
+    already_done: list[str],
+    completed: list[str],
+) -> None:
+    already_done_set = set(already_done)
+    completed_set = set(completed)
+    for idx, item in enumerate(items):
+        item_id = str(item.get(id_field, item.get("scene_id", f"item_{idx}")))
+        if item_id in already_done_set:
+            continue
+        current_path = _current_video_path(project_dir, item)
+        if current_path is None:
+            continue
+        ordered_paths[idx] = current_path
+        already_done.append(item_id)
+        already_done_set.add(item_id)
+        if item_id not in completed_set:
+            completed.append(item_id)
+            completed_set.add(item_id)
 
 
 # Checkpoint helpers
@@ -116,7 +195,7 @@ def _build_video_specs(
             log.append(f"⚠️  {item_type} {item_id} 没有分镜图，跳过")
             continue
         storyboard_path = project_dir / storyboard_image
-        if not storyboard_path.exists():
+        if not storyboard_path.is_file():
             log.append(f"⚠️  分镜图不存在: {storyboard_path}，跳过")
             continue
 
@@ -237,7 +316,7 @@ def _scan_completed_items(
         if item_id not in completed_scenes:
             continue
         video_output = videos_dir / f"scene_{item_id}.mp4"
-        if video_output.exists():
+        if video_output.is_file():
             ordered_paths[idx] = video_output
             already_done.append(item_id)
         else:
@@ -304,6 +383,8 @@ async def _generate_reference_episode(
     log: list[str],
     quality: str = "draft",
     unit_ids: list[str] | None = None,
+    refine_scope: RefineScope | None = None,
+    regenerate_existing: bool = False,
 ) -> list[Path]:
     project_dir = ctx.project_path
     units = script.get("video_units") or []
@@ -312,6 +393,17 @@ async def _generate_reference_episode(
     units = _select_reference_units(units, unit_ids, log)
     if not units:
         raise ValueError("没有找到任何有效的 video_unit")
+
+    if quality == "final" and unit_ids is None and refine_scope is not None:
+        units = _select_current_video_items(
+            items=units,
+            id_field="unit_id",
+            project_dir=project_dir,
+            resource_type="reference_videos",
+            refine_scope=refine_scope,
+        )
+        if not units:
+            raise RuntimeError(_refine_scope_empty_text(refine_scope, "参考视频"))
 
     if unit_ids is None:
         ckpt_path = _episode_checkpoint_path(project_dir, episode)
@@ -334,8 +426,10 @@ async def _generate_reference_episode(
     for idx, unit in enumerate(units):
         unit_id = unit["unit_id"]
         candidate = output_dir / f"{unit_id}.mp4"
-        if candidate.exists() and quality != "final":
-            ordered_paths[idx] = candidate
+        current_path = _current_video_path(project_dir, unit)
+        existing_path = current_path or (candidate if candidate.is_file() else None)
+        if existing_path is not None and quality != "final" and not regenerate_existing:
+            ordered_paths[idx] = existing_path
             already_done.append(unit_id)
             if unit_id not in completed:
                 completed.append(unit_id)
@@ -380,6 +474,8 @@ async def _run_reference_episode(
     log: list[str],
     quality: str = "draft",
     unit_ids: list[str] | None = None,
+    refine_scope: RefineScope | None = None,
+    regenerate_existing: bool = False,
 ) -> dict[str, Any]:
     """Run reference_video-mode generation and format the tool response.
 
@@ -397,6 +493,8 @@ async def _run_reference_episode(
         log=log,
         quality=quality,
         unit_ids=unit_ids,
+        refine_scope=refine_scope,
+        regenerate_existing=regenerate_existing,
     )
     scope = "指定参考视频" if unit_ids is not None else "参考视频"
     header = f"第 {episode} 集{scope}生成完成，共 {len(paths)} 个 unit"
@@ -406,7 +504,7 @@ async def _run_reference_episode(
 def generate_video_episode_tool(ctx: ToolContext):
     @tool(
         "generate_video_episode",
-        "为剧本对应的整集生成所有场景视频。resume=true 时从 checkpoint 续传。"
+        "为剧本对应的整集生成场景视频；默认跳过已有当前视频，只补缺失项。resume=true 时从 checkpoint 续传。"
         "reference_video 模式会自动按 video_units 处理。",
         {
             "type": "object",
@@ -416,9 +514,17 @@ def generate_video_episode_tool(ctx: ToolContext):
                     "description": "剧本文件名（如 episode_1.json），必须是纯文件名，禁止任何路径分隔符",
                 },
                 "resume": {"type": "boolean", "description": "是否从上次中断处继续"},
+                "regenerate_existing": {
+                    "type": "boolean",
+                    "description": "快速版整集重抽开关；默认 false 会跳过已有当前视频。仅当用户明确要求重跑/重抽整集已有视频时传 true。quality='final' 时禁止使用，请改用 refine_scope。",
+                },
+                "refine_scope": {
+                    **REFINE_SCOPE_SCHEMA,
+                    "description": "批量精修范围；仅 quality='final' 时允许传，且整集精修必须传。current_unrefined=只精修当前未精修视频，current_all=当前已有视频全量重精修。",
+                },
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 draft（视频草稿）",
+                    "description": "生成质量档位；默认 draft（视频快速版）。批量/Agent 自动生成默认使用快速版，final 仅在用户明确要求精修时使用，可单镜头或批量精修。",
                 },
             },
             "required": ["script"],
@@ -429,7 +535,12 @@ def generate_video_episode_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             resume = bool(args.get("resume"))
+            regenerate_existing = bool(args.get("regenerate_existing"))
             quality = normalize_quality(args, "draft")
+            refine_scope = normalize_refine_scope(args)
+            _validate_bulk_refine_scope(quality, refine_scope)
+            if quality == "final" and regenerate_existing:
+                raise ValueError("quality='final' 时不能传 regenerate_existing；批量精修请使用 refine_scope")
 
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
@@ -442,6 +553,8 @@ def generate_video_episode_tool(ctx: ToolContext):
                     resume=resume,
                     log=log,
                     quality=quality,
+                    refine_scope=refine_scope,
+                    regenerate_existing=regenerate_existing,
                 )
 
             episode = ProjectManager.resolve_episode_from_script(script, script_filename)
@@ -449,6 +562,16 @@ def generate_video_episode_tool(ctx: ToolContext):
             content_mode = script.get("content_mode", "narration")
             if not items:
                 raise ValueError(f"第 {episode} 集剧本为空：{script_filename}")
+            if quality == "final" and refine_scope is not None:
+                items = _select_current_video_items(
+                    items=items,
+                    id_field=id_field,
+                    project_dir=project_dir,
+                    resource_type="videos",
+                    refine_scope=refine_scope,
+                )
+                if not items:
+                    raise RuntimeError(_refine_scope_empty_text(refine_scope, "视频片段"))
 
             ckpt_path = _episode_checkpoint_path(project_dir, episode)
             completed: list[str] = []
@@ -462,6 +585,15 @@ def generate_video_episode_tool(ctx: ToolContext):
             videos_dir = project_dir / "videos"
             videos_dir.mkdir(parents=True, exist_ok=True)
             ordered_paths, already_done, completed = _scan_completed_items(items, id_field, completed, videos_dir)
+            if quality != "final" and not regenerate_existing:
+                _mark_current_video_items(
+                    items=items,
+                    id_field=id_field,
+                    project_dir=project_dir,
+                    ordered_paths=ordered_paths,
+                    already_done=already_done,
+                    completed=completed,
+                )
             specs, order_map = _build_video_specs(
                 items=items,
                 id_field=id_field,
@@ -515,7 +647,7 @@ def generate_video_scene_tool(ctx: ToolContext):
                 "scene_id": {"type": "string", "description": "场景或片段 ID"},
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 draft（视频草稿）",
+                    "description": "生成质量档位；默认 draft（视频快速版）。批量/Agent 自动生成默认使用快速版，final 仅在用户明确要求精修时使用，可单镜头或批量精修。",
                 },
             },
             "required": ["script", "scene_id"],
@@ -554,7 +686,7 @@ def generate_video_scene_tool(ctx: ToolContext):
             storyboard_image = item.get("generated_assets", {}).get("storyboard_image")
             if not storyboard_image:
                 raise ValueError(f"场景/片段 '{item_id}' 没有分镜图，请先运行 generate_storyboards")
-            if not (project_dir / storyboard_image).exists():
+            if not (project_dir / storyboard_image).is_file():
                 raise FileNotFoundError(f"分镜图不存在: {project_dir / storyboard_image}")
 
             prompt = _get_video_prompt(item)
@@ -604,9 +736,13 @@ def generate_video_all_tool(ctx: ToolContext):
                     "type": "string",
                     "description": "剧本文件名（如 episode_1.json），必须是纯文件名，禁止任何路径分隔符",
                 },
+                "refine_scope": {
+                    **REFINE_SCOPE_SCHEMA,
+                    "description": "批量精修范围；仅 quality='final' 时允许传，且批量精修必须传。current_unrefined=只精修当前未精修视频，current_all=当前已有视频全量重精修。",
+                },
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 draft（视频草稿）",
+                    "description": "生成质量档位；默认 draft（视频快速版）。批量/Agent 自动生成默认使用快速版，final 仅在用户明确要求精修时使用，可单镜头或批量精修。",
                 },
             },
             "required": ["script"],
@@ -617,6 +753,8 @@ def generate_video_all_tool(ctx: ToolContext):
         try:
             script_filename = validate_script_filename(args["script"])
             quality = normalize_quality(args, "draft")
+            refine_scope = normalize_refine_scope(args)
+            _validate_bulk_refine_scope(quality, refine_scope)
             project_dir = ctx.project_path
             script = ctx.pm.load_script(ctx.project_name, script_filename)
 
@@ -628,13 +766,25 @@ def generate_video_all_tool(ctx: ToolContext):
                     resume=False,
                     log=log,
                     quality=quality,
+                    refine_scope=refine_scope,
                 )
 
             items, id_field, _chars, _scenes, _props = get_storyboard_items(script)
             content_mode = script.get("content_mode", "narration")
-            pending = [it for it in items if not (it.get("generated_assets") or {}).get("video_clip")]
-            if not pending:
-                return {"content": [{"type": "text", "text": "✨ 所有场景/片段的视频都已生成"}]}
+            if quality == "final" and refine_scope is not None:
+                pending = _select_current_video_items(
+                    items=items,
+                    id_field=id_field,
+                    project_dir=project_dir,
+                    resource_type="videos",
+                    refine_scope=refine_scope,
+                )
+                if not pending:
+                    return {"content": [{"type": "text", "text": f"✨ {_refine_scope_empty_text(refine_scope, '视频片段')}"}]}
+            else:
+                pending = [it for it in items if not _has_current_video(project_dir, it)]
+                if not pending:
+                    return {"content": [{"type": "text", "text": "✨ 所有场景/片段的视频都已生成"}]}
 
             specs, _order_map = _build_video_specs(
                 items=pending,
@@ -685,7 +835,7 @@ def generate_video_selected_tool(ctx: ToolContext):
                 "resume": {"type": "boolean", "description": "是否从上次中断处继续"},
                 "quality": {
                     **QUALITY_SCHEMA,
-                    "description": "生成质量档位；默认 draft（视频草稿）",
+                    "description": "生成质量档位；默认 draft（视频快速版）。批量/Agent 自动生成默认使用快速版，final 仅在用户明确要求精修时使用，可单镜头或批量精修。",
                 },
             },
             "required": ["script", "scene_ids"],

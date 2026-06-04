@@ -95,6 +95,41 @@ function findQualityGroup(
   return stats?.groups?.generation_quality?.find((item) => item.key === groupName);
 }
 
+function groupRoutePreviewIssues(
+  routes: GenerationRoutePreviewItem[],
+  unknownError: string,
+  formatWarning: (
+    route: GenerationRoutePreviewItem,
+    warning: NonNullable<GenerationRoutePreviewItem["warnings"]>[number],
+  ) => string,
+): string[] {
+  const issues: Array<{ index: number; text: string }> = [];
+  const errorGroups = new Map<string, { index: number; labels: string[] }>();
+
+  routes.forEach((route, index) => {
+    if (!route.ok) {
+      const error = route.error ?? unknownError;
+      const label = route.label ?? route.task_kind;
+      const existing = errorGroups.get(error);
+      if (existing) {
+        existing.labels.push(label);
+      } else {
+        errorGroups.set(error, { index, labels: [label] });
+      }
+      return;
+    }
+    (route.warnings ?? []).forEach((warning) => {
+      issues.push({ index, text: formatWarning(route, warning) });
+    });
+  });
+
+  for (const [error, group] of errorGroups) {
+    issues.push({ index: group.index, text: `${group.labels.join("、")}: ${error}` });
+  }
+
+  return issues.sort((a, b) => a.index - b.index).map((issue) => issue.text);
+}
+
 function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
   templates: StyleTemplate[];
   prompts: Record<string, string>;
@@ -498,6 +533,16 @@ export function ProjectSettingsPage() {
   const normalizedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
   const normalizedGenerationProfilesSignature = generationProfilesSignature(normalizedGenerationProfiles);
   const normalizedShotTierProfilesSignature = shotTierProfilesSignature(normalizedShotTierProfiles);
+  const videoProfileRows: Array<[VideoProfileKey, string]> = [
+    ["video_draft", t("generation_profile_video_draft")],
+    ["video_final", t("generation_profile_video_final")],
+    ...(generationMode === "reference_video"
+      ? ([
+          ["reference_video_draft", t("generation_profile_reference_video_draft")],
+          ["reference_video_final", t("generation_profile_reference_video_final")],
+        ] as Array<[VideoProfileKey, string]>)
+      : []),
+  ];
   const routePreviewRequest = useMemo<GenerationRoutePreviewRequest>(() => {
     const profiles = normalizeGenerationProfiles(
       generationProfiles,
@@ -507,6 +552,27 @@ export function ProjectSettingsPage() {
       }),
     );
     const tierProfiles = normalizeShotTierProfiles(shotTierProfiles);
+    const routes: GenerationRoutePreviewRequest["routes"] = [
+      { label: t("generation_profile_asset"), task_kind: "character", quality: "final", capability: "t2i" },
+      { label: t("generation_profile_storyboard_draft"), task_kind: "storyboard", quality: "draft", capability: "t2i" },
+      { label: t("generation_profile_storyboard_final"), task_kind: "storyboard", quality: "final", capability: "i2i" },
+      { label: `${t("generation_profile_grid")} T2I`, task_kind: "grid", quality: "final", capability: "t2i" },
+      { label: `${t("generation_profile_grid")} I2I`, task_kind: "grid", quality: "final", capability: "i2i" },
+      { label: t("generation_profile_video_draft"), task_kind: "video", quality: "draft" },
+      { label: t("generation_profile_video_final"), task_kind: "video", quality: "final" },
+      ...SHOT_TIERS.map((tier) => ({
+        label: `${tier} ${t("generation_profile_video_final")}`,
+        task_kind: "video" as const,
+        quality: "final" as const,
+        payload: { shot_tier: tier },
+      })),
+    ];
+    if (generationMode === "reference_video") {
+      routes.push(
+        { label: t("generation_profile_reference_video_draft"), task_kind: "reference_video", quality: "draft" },
+        { label: t("generation_profile_reference_video_final"), task_kind: "reference_video", quality: "final" },
+      );
+    }
     return {
       project_overrides: {
         generation_profiles: profiles,
@@ -519,28 +585,13 @@ export function ProjectSettingsPage() {
         default_duration: defaultDuration,
         model_settings: modelSettings,
       },
-      routes: [
-        { label: t("generation_profile_asset"), task_kind: "character", quality: "final", capability: "t2i" },
-        { label: t("generation_profile_storyboard_draft"), task_kind: "storyboard", quality: "draft", capability: "t2i" },
-        { label: t("generation_profile_storyboard_final"), task_kind: "storyboard", quality: "final", capability: "i2i" },
-        { label: `${t("generation_profile_grid")} T2I`, task_kind: "grid", quality: "final", capability: "t2i" },
-        { label: `${t("generation_profile_grid")} I2I`, task_kind: "grid", quality: "final", capability: "i2i" },
-        { label: t("generation_profile_video_draft"), task_kind: "video", quality: "draft" },
-        { label: t("generation_profile_video_final"), task_kind: "video", quality: "final" },
-        ...SHOT_TIERS.map((tier) => ({
-          label: `${tier} ${t("generation_profile_video_final")}`,
-          task_kind: "video" as const,
-          quality: "final" as const,
-          payload: { shot_tier: tier },
-        })),
-        { label: t("generation_profile_reference_video_draft"), task_kind: "reference_video", quality: "draft" },
-        { label: t("generation_profile_reference_video_final"), task_kind: "reference_video", quality: "final" },
-      ],
+      routes,
     };
   }, [
     audioOverride,
     defaultDuration,
     generationProfiles,
+    generationMode,
     imageBackendI2I,
     imageBackendT2I,
     imageResolution,
@@ -613,12 +664,11 @@ export function ProjectSettingsPage() {
     };
   }, [options, projectName, routePreviewRequest]);
 
-  const routePreviewIssues = useMemo(() => routePreview.routes.flatMap((route) => {
-    if (!route.ok) {
-      return [`${route.label ?? route.task_kind}: ${route.error ?? t("unknown_error", { defaultValue: "未知错误" })}`];
-    }
-    return (route.warnings ?? []).map((warning) => formatRouteWarning(t, route, warning));
-  }), [routePreview.routes, t]);
+  const routePreviewIssues = useMemo(() => groupRoutePreviewIssues(
+    routePreview.routes,
+    t("unknown_error", { defaultValue: "未知错误" }),
+    (route, warning) => formatRouteWarning(t, route, warning),
+  ), [routePreview.routes, t]);
   const finalQualityStats = findQualityGroup(routePreview.qualityStats, "final");
   const displayedQualityAverage =
     finalQualityStats?.average_rating ?? routePreview.qualityStats?.average_rating ?? null;
@@ -1209,7 +1259,7 @@ export function ProjectSettingsPage() {
                         <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3">
                           {finalQualityStats
                             ? t("quality_stats_final_average", {
-                                defaultValue: "最终版平均 {{score}}",
+                                defaultValue: "精修版平均 {{score}}",
                                 score: displayedQualityAverage?.toFixed(1) ?? "-",
                               })
                             : t("quality_stats_average", {
@@ -1459,12 +1509,7 @@ export function ProjectSettingsPage() {
                     </div>
                   ))}
 
-                  {([
-                    ["video_draft", t("generation_profile_video_draft")],
-                    ["video_final", t("generation_profile_video_final")],
-                    ["reference_video_draft", t("generation_profile_reference_video_draft")],
-                    ["reference_video_final", t("generation_profile_reference_video_final")],
-                  ] as const).map(([key, label]) => {
+                  {videoProfileRows.map(([key, label]) => {
                     const profile = normalizedGenerationProfiles[key];
                     const audioValue =
                       profile?.generate_audio == null

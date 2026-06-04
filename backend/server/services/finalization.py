@@ -1,74 +1,23 @@
-"""Episode finalization helpers.
+"""Episode readiness checks for the legacy finalization endpoint.
 
-Finalization is an async queue submission step: it finds missing current
-storyboards and non-final-ready videos, enqueues the needed tasks, and returns
-a report that the UI can show immediately while the normal task HUD tracks
-execution.
+The previous endpoint submitted "final" storyboard/video tasks. Product
+positioning has changed: bulk and Agent workflows stay on quick generation,
+while refined generation is a manual per-shot action. This service therefore
+only reports what is missing and never enqueues model work.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 from lib.generation_queue import GenerationQueue
-from lib.generation_queue_client import TaskSpec, TaskSpecValidationError
 from lib.project_manager import ProjectManager, effective_mode
-from lib.reference_video import assemble_shots_text
-from lib.storyboard_sequence import build_storyboard_dependency_plan, get_storyboard_items
-from server.services.generation_route_resolver import is_video_resolution_below, merged_generation_profiles
+from lib.storyboard_sequence import get_storyboard_items
 
 
-def _load_versions(project_dir: Path) -> dict[str, Any]:
-    versions_path = project_dir / "versions" / "versions.json"
-    if not versions_path.is_file():
-        return {}
-    try:
-        payload = json.loads(versions_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _current_version_metadata(
-    versions: dict[str, Any],
-    resource_type: str,
-    resource_id: str,
-) -> dict[str, Any]:
-    resource_info = versions.get(resource_type, {}).get(resource_id)
-    if not isinstance(resource_info, dict):
-        return {}
-    items = resource_info.get("versions")
-    if not isinstance(items, list):
-        return {}
-    current_version = resource_info.get("current_version")
-    for item in items:
-        if isinstance(item, dict) and (
-            item.get("version") == current_version or item.get("is_current")
-        ):
-            return item
-    for item in reversed(items):
-        if isinstance(item, dict):
-            return item
-    return {}
-
-
-def _quality(metadata: dict[str, Any]) -> str:
-    value = metadata.get("generation_quality")
-    return str(value) if value in {"draft", "final", "grid", "custom"} else "unknown"
-
-
-def _route_resolution(metadata: dict[str, Any]) -> str | None:
-    route = metadata.get("generation_route")
-    if isinstance(route, dict) and route.get("resolution"):
-        return str(route["resolution"])
-    value = metadata.get("resolution")
-    return str(value) if value else None
-
-
-def _project_path_exists(project_dir: Path, relative_path: object) -> bool:
+def _project_file_exists(project_dir: Path, relative_path: object) -> bool:
     if not isinstance(relative_path, str) or not relative_path.strip():
         return False
     path = (project_dir / relative_path).resolve()
@@ -76,23 +25,11 @@ def _project_path_exists(project_dir: Path, relative_path: object) -> bool:
         path.relative_to(project_dir.resolve())
     except ValueError:
         return False
-    return path.exists()
-
-
-def _final_video_resolution(project: dict[str, Any]) -> str | None:
-    profile = merged_generation_profiles(project).get("video_final") or {}
-    value = profile.get("resolution")
-    return str(value) if value else None
-
-
-def _final_reference_video_resolution(project: dict[str, Any]) -> str | None:
-    profile = merged_generation_profiles(project).get("reference_video_final") or {}
-    value = profile.get("resolution")
-    return str(value) if value else None
+    return path.is_file()
 
 
 def build_finalization_task_report(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize finalized queue tasks with failure categories and retry hints."""
+    """Summarize legacy finalize-sourced queue tasks with retry hints."""
 
     from lib.friendly_errors import classify_generation_failure
 
@@ -130,6 +67,7 @@ def build_finalization_task_report(tasks: list[dict[str, Any]]) -> dict[str, Any
 class EpisodeFinalizationService:
     def __init__(self, project_manager: ProjectManager, queue: GenerationQueue):
         self.pm = project_manager
+        # Kept for constructor compatibility; this service no longer enqueues.
         self.queue = queue
 
     def _load_episode(self, project_name: str, episode: int) -> tuple[dict, dict, str, Path, str]:
@@ -151,33 +89,30 @@ class EpisodeFinalizationService:
         episode: int,
         user_id: str,
     ) -> dict[str, Any]:
+        _ = user_id
         project, script, script_file, project_dir, mode = await asyncio.to_thread(
             self._load_episode,
             project_name,
             episode,
         )
         if mode == "reference_video" or script.get("generation_mode") == "reference_video":
-            return await self._finalize_reference_video_episode(
+            return self._check_reference_video_episode(
                 project_name=project_name,
                 episode=episode,
                 script=script,
                 script_file=script_file,
                 project_dir=project_dir,
-                project=project,
-                user_id=user_id,
             )
-        return await self._finalize_storyboard_episode(
+        return self._check_storyboard_episode(
             project_name=project_name,
             episode=episode,
             mode=mode,
             script=script,
             script_file=script_file,
             project_dir=project_dir,
-            project=project,
-            user_id=user_id,
         )
 
-    async def _finalize_storyboard_episode(
+    def _check_storyboard_episode(
         self,
         *,
         project_name: str,
@@ -186,187 +121,68 @@ class EpisodeFinalizationService:
         script: dict[str, Any],
         script_file: str,
         project_dir: Path,
-        project: dict[str, Any],
-        user_id: str,
     ) -> dict[str, Any]:
         items, id_field, _char_field, _scenes_field, _props_field = get_storyboard_items(script)
-        versions = _load_versions(project_dir)
-        target_video_resolution = _final_video_resolution(project)
         issues: list[dict[str, Any]] = []
-        storyboard_ids: list[str] = []
-        item_by_id: dict[str, dict[str, Any]] = {}
+        ready_videos = 0
+        missing_storyboards = 0
+        missing_videos = 0
 
         for item in items:
             resource_id = str(item.get(id_field) or "").strip()
             if not resource_id:
                 continue
-            item_by_id[resource_id] = item
             assets = item.get("generated_assets") if isinstance(item.get("generated_assets"), dict) else {}
-            storyboard_exists = _project_path_exists(project_dir, assets.get("storyboard_image"))
-            if not storyboard_exists:
-                storyboard_ids.append(resource_id)
-
-        storyboard_plans = build_storyboard_dependency_plan(
-            items,
-            id_field,
-            storyboard_ids,
-            script_file,
-        )
-        storyboard_task_ids: dict[str, str] = {}
-        enqueued_storyboards: list[dict[str, Any]] = []
-
-        for plan in storyboard_plans:
-            item = item_by_id.get(plan.resource_id) or {}
-            try:
-                extra_payload: dict[str, Any] = {
-                    "quality": "final",
-                    "final_generation_mode": "draft_locked",
-                }
-                if item.get("shot_tier") in {"S", "A", "B"}:
-                    extra_payload["shot_tier"] = item.get("shot_tier")
-                spec = TaskSpec.from_request(
-                    task_type="storyboard",
-                    media_type="image",
-                    resource_id=plan.resource_id,
-                    prompt=item.get("image_prompt"),
-                    script_file=script_file,
-                    extra_payload=extra_payload,
-                )
-            except TaskSpecValidationError as exc:
+            if not _project_file_exists(project_dir, assets.get("storyboard_image")):
+                missing_storyboards += 1
                 issues.append(
                     {
-                        "resource_id": plan.resource_id,
+                        "resource_id": resource_id,
                         "kind": "storyboard",
-                        "message": str(exc),
+                        "message": "缺少当前分镜图；请先生成快速版分镜，或手动上传分镜图。",
                     }
                 )
-                continue
-
-            dependency_task_id = (
-                storyboard_task_ids.get(plan.dependency_resource_id)
-                if plan.dependency_resource_id
-                else None
-            )
-            result = await self.queue.enqueue_task(
-                project_name=project_name,
-                task_type=spec.task_type,
-                media_type=spec.media_type,
-                resource_id=spec.resource_id,
-                payload=spec.payload,
-                script_file=spec.script_file,
-                source="finalize",
-                dependency_task_id=dependency_task_id,
-                dependency_group=plan.dependency_group,
-                dependency_index=plan.dependency_index,
-                user_id=user_id,
-            )
-            storyboard_task_ids[plan.resource_id] = result["task_id"]
-            enqueued_storyboards.append(
-                {
-                    "resource_id": plan.resource_id,
-                    "task_id": result["task_id"],
-                    "deduped": bool(result.get("deduped")),
-                }
-            )
-
-        enqueued_videos: list[dict[str, Any]] = []
-        already_final = 0
-
-        for item in items:
-            resource_id = str(item.get(id_field) or "").strip()
-            if not resource_id:
-                continue
-            assets = item.get("generated_assets") if isinstance(item.get("generated_assets"), dict) else {}
-            storyboard_exists = _project_path_exists(project_dir, assets.get("storyboard_image"))
-            video_meta = _current_version_metadata(versions, "videos", resource_id)
-            video_quality = _quality(video_meta)
-            video_resolution = _route_resolution(video_meta)
-            video_exists = _project_path_exists(project_dir, assets.get("video_clip"))
-
-            needs_video = (
-                not video_exists
-                or video_quality != "final"
-                or is_video_resolution_below(video_resolution, target_video_resolution)
-            )
-            if not needs_video:
-                already_final += 1
-                continue
-
-            dependency_task_id = storyboard_task_ids.get(resource_id)
-            if not dependency_task_id and not storyboard_exists:
+            if _project_file_exists(project_dir, assets.get("video_clip")):
+                ready_videos += 1
+            else:
+                missing_videos += 1
                 issues.append(
                     {
                         "resource_id": resource_id,
                         "kind": "video",
-                        "message": "缺少可用于生成视频的当前分镜",
+                        "message": "缺少已生成视频；合并成片前请先生成快速版视频，或手动上传视频。",
                     }
                 )
-                continue
 
-            try:
-                extra_payload: dict[str, Any] = {"quality": "final"}
-                if item.get("duration_seconds") is not None:
-                    extra_payload["duration_seconds"] = item.get("duration_seconds")
-                if item.get("shot_tier") in {"S", "A", "B"}:
-                    extra_payload["shot_tier"] = item.get("shot_tier")
-                spec = TaskSpec.from_request(
-                    task_type="video",
-                    media_type="video",
-                    resource_id=resource_id,
-                    prompt=item.get("video_prompt"),
-                    script_file=script_file,
-                    extra_payload=extra_payload,
-                )
-            except TaskSpecValidationError as exc:
-                issues.append(
-                    {
-                        "resource_id": resource_id,
-                        "kind": "video",
-                        "message": str(exc),
-                    }
-                )
-                continue
-
-            result = await self.queue.enqueue_task(
-                project_name=project_name,
-                task_type=spec.task_type,
-                media_type=spec.media_type,
-                resource_id=spec.resource_id,
-                payload=spec.payload,
-                script_file=spec.script_file,
-                source="finalize",
-                dependency_task_id=dependency_task_id,
-                dependency_group=f"{script_file}:finalize-video",
-                dependency_index=len(enqueued_videos),
-                user_id=user_id,
-            )
-            enqueued_videos.append(
-                {
-                    "resource_id": resource_id,
-                    "task_id": result["task_id"],
-                    "deduped": bool(result.get("deduped")),
-                    "dependency_task_id": dependency_task_id,
-                }
-            )
-
+        ready_for_merge = missing_videos == 0 and ready_videos > 0
+        message = (
+            "本集所有视频已生成，可直接合并片段；不会自动生成精修版。"
+            if ready_for_merge
+            else "本集还有镜头缺少视频，已停止检查；不会自动补生成或自动精修。"
+        )
         return {
             "success": True,
             "mode": mode if mode in {"storyboard", "grid"} else "storyboard",
             "project_name": project_name,
             "episode": episode,
             "script_file": script_file,
-            "storyboards": enqueued_storyboards,
-            "videos": enqueued_videos,
+            "storyboards": [],
+            "videos": [],
             "issues": issues,
             "summary": {
-                "storyboards_enqueued": len(enqueued_storyboards),
-                "videos_enqueued": len(enqueued_videos),
-                "already_final": already_final,
+                "storyboards_enqueued": 0,
+                "videos_enqueued": 0,
+                "already_final": ready_videos,
+                "ready_videos": ready_videos,
+                "missing_storyboards": missing_storyboards,
+                "missing_videos": missing_videos,
+                "ready_for_merge": ready_for_merge,
                 "issues": len(issues),
+                "message": message,
             },
         }
 
-    async def _finalize_reference_video_episode(
+    def _check_reference_video_episode(
         self,
         *,
         project_name: str,
@@ -374,82 +190,49 @@ class EpisodeFinalizationService:
         script: dict[str, Any],
         script_file: str,
         project_dir: Path,
-        project: dict[str, Any],
-        user_id: str,
     ) -> dict[str, Any]:
-        versions = _load_versions(project_dir)
-        target_resolution = _final_reference_video_resolution(project)
-        enqueued: list[dict[str, Any]] = []
         issues: list[dict[str, Any]] = []
-        already_final = 0
+        ready_videos = 0
+        missing_videos = 0
 
         for unit in script.get("video_units") or []:
             unit_id = str(unit.get("unit_id") or "").strip()
             if not unit_id:
                 continue
             assets = unit.get("generated_assets") if isinstance(unit.get("generated_assets"), dict) else {}
-            meta = _current_version_metadata(versions, "reference_videos", unit_id)
-            quality = _quality(meta)
-            resolution = _route_resolution(meta)
-            clip_exists = _project_path_exists(project_dir, assets.get("video_clip"))
-            needs_video = (
-                not clip_exists
-                or quality != "final"
-                or is_video_resolution_below(resolution, target_resolution)
-            )
-            if not needs_video:
-                already_final += 1
-                continue
-            try:
-                extra_payload: dict[str, Any] = {"quality": "final"}
-                if unit.get("duration_seconds") is not None:
-                    extra_payload["duration_seconds"] = unit.get("duration_seconds")
-                spec = TaskSpec.from_request(
-                    task_type="reference_video",
-                    media_type="video",
-                    resource_id=unit_id,
-                    prompt=assemble_shots_text(unit.get("shots") or []),
-                    script_file=script_file,
-                    extra_payload=extra_payload,
-                )
-            except TaskSpecValidationError as exc:
+            if _project_file_exists(project_dir, assets.get("video_clip")):
+                ready_videos += 1
+            else:
+                missing_videos += 1
                 issues.append(
                     {
                         "resource_id": unit_id,
                         "kind": "reference_video",
-                        "message": str(exc),
+                        "message": "缺少已生成参考视频；合并或导出前请先生成快速版视频。",
                     }
                 )
-                continue
-            result = await self.queue.enqueue_task(
-                project_name=project_name,
-                task_type=spec.task_type,
-                media_type=spec.media_type,
-                resource_id=spec.resource_id,
-                payload=spec.payload,
-                script_file=spec.script_file,
-                source="finalize",
-                user_id=user_id,
-            )
-            enqueued.append(
-                {
-                    "resource_id": unit_id,
-                    "task_id": result["task_id"],
-                    "deduped": bool(result.get("deduped")),
-                }
-            )
 
+        ready_for_merge = missing_videos == 0 and ready_videos > 0
+        message = (
+            "本集所有参考视频已生成，可直接使用现有片段；不会自动生成精修版。"
+            if ready_for_merge
+            else "本集还有参考视频缺失，已停止检查；不会自动补生成或自动精修。"
+        )
         return {
             "success": True,
             "mode": "reference_video",
             "project_name": project_name,
             "episode": episode,
             "script_file": script_file,
-            "reference_videos": enqueued,
+            "reference_videos": [],
             "issues": issues,
             "summary": {
-                "reference_videos_enqueued": len(enqueued),
-                "already_final": already_final,
+                "reference_videos_enqueued": 0,
+                "already_final": ready_videos,
+                "ready_videos": ready_videos,
+                "missing_videos": missing_videos,
+                "ready_for_merge": ready_for_merge,
                 "issues": len(issues),
+                "message": message,
             },
         }

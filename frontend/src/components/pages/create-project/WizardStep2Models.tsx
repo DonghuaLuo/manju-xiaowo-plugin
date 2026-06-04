@@ -188,6 +188,7 @@ export function WizardStep2Models({
             onUpdateVideo={updateVideoProfile}
             videoContinuityPolicy={videoContinuityPolicy}
             onVideoContinuityPolicyChange={onVideoContinuityPolicyChange}
+            generationMode={generationMode}
           />
         </>
       )}
@@ -243,6 +244,7 @@ function GenerationProfilesEditor({
   onUpdateVideo,
   videoContinuityPolicy,
   onVideoContinuityPolicyChange,
+  generationMode,
 }: {
   expanded: boolean;
   onExpandedChange: (next: boolean) => void;
@@ -251,8 +253,19 @@ function GenerationProfilesEditor({
   onUpdateVideo: (key: VideoProfileKey, patch: Partial<VideoGenerationProfile>) => void;
   videoContinuityPolicy: VideoContinuityPolicy;
   onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
+  generationMode?: GenerationMode;
 }) {
   const { t } = useTranslation(["dashboard", "templates"]);
+  const videoProfileRows: Array<[VideoProfileKey, string]> = [
+    ["video_draft", t("dashboard:generation_profile_video_draft")],
+    ["video_final", t("dashboard:generation_profile_video_final")],
+    ...(generationMode === "reference_video"
+      ? ([
+          ["reference_video_draft", t("dashboard:generation_profile_reference_video_draft")],
+          ["reference_video_final", t("dashboard:generation_profile_reference_video_final")],
+        ] as Array<[VideoProfileKey, string]>)
+      : []),
+  ];
   return (
     <section className="rounded-[10px] border border-hairline p-4" style={CARD_STYLE}>
       <button
@@ -346,12 +359,7 @@ function GenerationProfilesEditor({
             </div>
           ))}
 
-          {([
-            ["video_draft", t("dashboard:generation_profile_video_draft")],
-            ["video_final", t("dashboard:generation_profile_video_final")],
-            ["reference_video_draft", t("dashboard:generation_profile_reference_video_draft")],
-            ["reference_video_final", t("dashboard:generation_profile_reference_video_final")],
-          ] as const).map(([key, label]) => {
+          {videoProfileRows.map(([key, label]) => {
             const profile = profiles[key];
             const audioValue =
               profile?.generate_audio == null

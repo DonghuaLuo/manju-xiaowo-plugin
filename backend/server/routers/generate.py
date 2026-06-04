@@ -225,7 +225,7 @@ def _external_video_continuity_reference(
     next_id, next_storyboard = _storyboard_path_for_item(project_path, next_item, id_field)
     if next_id:
         meta["end_storyboard_id"] = next_id
-    if not next_storyboard or not next_storyboard.exists():
+    if not next_storyboard or not next_storyboard.is_file():
         meta["skip_reason"] = "next_storyboard_missing"
         return None, meta
 
@@ -556,7 +556,7 @@ async def get_external_generation_package(
                 else project_path / "storyboards" / f"scene_{segment_id}.png"
             )
             video_refs: list[dict[str, Any]] = []
-            if storyboard_path.exists():
+            if storyboard_path.is_file():
                 raw_video_ref = {
                     "image": storyboard_path,
                     "label": "当前分镜图（视频首帧）",
@@ -740,7 +740,7 @@ async def generate_video(
                 if storyboard_rel
                 else project_path / "storyboards" / f"scene_{segment_id}.png"
             )
-            if not storyboard_file.exists():
+            if not storyboard_file.is_file():
                 raise HTTPException(status_code=400, detail=_t("generate_storyboard_first", segment_id=segment_id))
 
         await asyncio.to_thread(_sync)
@@ -793,7 +793,7 @@ async def finalize_episode(
     episode: int,
     _user: CurrentUser,
 ):
-    """提交本集最终化任务：补齐缺失分镜和最终视频，返回即时报告。"""
+    """检查本集现有视频是否齐全；兼容旧入口，但不再提交生成任务。"""
 
     try:
         service = EpisodeFinalizationService(get_project_manager(), get_generation_queue())
@@ -807,7 +807,7 @@ async def finalize_episode(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("最终化本集失败")
+        logger.exception("检查本集视频齐备状态失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 

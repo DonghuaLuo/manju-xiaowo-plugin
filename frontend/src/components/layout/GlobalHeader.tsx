@@ -19,7 +19,7 @@ import { GlassModal } from "@/components/ui/GlassModal";
 import { ModalCloseButton } from "@/components/ui/ModalCloseButton";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 
-import { API, type ExportTaskEvent } from "@/api";
+import { API, type ExportTaskEvent, type JianyingDraftExportSummary } from "@/api";
 import { ArchiveDiagnosticsDialog } from "@/components/shared/ArchiveDiagnosticsDialog";
 import { rememberAssetLibraryReturnTo } from "@/components/pages/AssetLibraryPage";
 import { costEntries, formatCostOrZero, formatCurrencyAmount } from "@/utils/cost-format";
@@ -36,6 +36,47 @@ function normalizeExportDiagnosticsPayload(value: unknown): ExportDiagnostics {
     auto_fixed: Array.isArray(payload.auto_fixed) ? payload.auto_fixed : [],
     warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
   };
+}
+
+function normalizeJianyingDraftSummary(value: unknown): JianyingDraftExportSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  const toNumber = (item: unknown) => {
+    const value = typeof item === "number" ? item : Number(item);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const toStringArray = (item: unknown) =>
+    Array.isArray(item) ? item.map((entry) => String(entry || "")).filter(Boolean) : undefined;
+  const missingItems = Array.isArray(payload.missing_items)
+    ? payload.missing_items
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          id: typeof item.id === "string" ? item.id : undefined,
+          reason: typeof item.reason === "string" ? item.reason : undefined,
+          resource_type: typeof item.resource_type === "string" ? item.resource_type : undefined,
+          video_clip: typeof item.video_clip === "string" ? item.video_clip : undefined,
+        }))
+    : undefined;
+
+  return {
+    episode: toNumber(payload.episode),
+    total_count: toNumber(payload.total_count),
+    exported_count: toNumber(payload.exported_count),
+    missing_count: toNumber(payload.missing_count),
+    exported_ids: toStringArray(payload.exported_ids),
+    missing_ids: toStringArray(payload.missing_ids),
+    missing_items: missingItems,
+  };
+}
+
+function formatJianyingMissingIds(summary: JianyingDraftExportSummary): string {
+  const ids =
+    summary.missing_ids?.filter(Boolean) ??
+    summary.missing_items?.map((item) => item.id).filter((id): id is string => Boolean(id)) ??
+    [];
+  if (ids.length === 0) return "";
+  const shown = ids.slice(0, 12).join("、");
+  return ids.length > 12 ? `${shown} 等 ${ids.length} 个` : shown;
 }
 
 /**
@@ -57,7 +98,6 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   const [exportingProject, setExportingProject] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [jianyingExporting, setJianyingExporting] = useState(false);
-  const [finalizingEpisode, setFinalizingEpisode] = useState(false);
   const [exportDiagnostics, setExportDiagnostics] = useState<ExportDiagnostics | null>(null);
   const [openSavedPath, setOpenSavedPath] = useState<string | null>(null);
   const usageAnchorRef = useRef<HTMLDivElement>(null);
@@ -162,9 +202,26 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
 
     if (event.kind === "jianying_draft") {
       const draftDir = event.draftDir || event.draftPath || "";
-      useAppStore
-        .getState()
-        .pushToast(`${t("dashboard:jianying_export_completed")}：${draftDir}`, "success");
+      const summary = normalizeJianyingDraftSummary(event.summary);
+      const missingCount = summary?.missing_count ?? summary?.missing_ids?.length ?? 0;
+      if (summary && missingCount > 0) {
+        const exportedCount = summary.exported_count ?? summary.exported_ids?.length ?? 0;
+        const missingIds = formatJianyingMissingIds(summary);
+        const partialMessage = t("dashboard:jianying_export_completed_partial", {
+          exported: exportedCount,
+          missing: missingCount,
+        });
+        const missingMessage = missingIds
+          ? `；${t("dashboard:jianying_export_missing_items", { items: missingIds })}`
+          : "";
+        useAppStore
+          .getState()
+          .pushNotification(`${partialMessage}${missingMessage}${draftDir ? `：${draftDir}` : ""}`, "warning");
+      } else {
+        useAppStore
+          .getState()
+          .pushToast(`${t("dashboard:jianying_export_completed")}：${draftDir}`, "success");
+      }
       if (draftDir) {
         setOpenSavedPath(draftDir);
       }
@@ -233,44 +290,6 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
           t("dashboard:jianying_export_failed", { message: errMsg(err) }),
           "error",
         );
-    }
-  };
-
-  const handleFinalizeEpisode = async (episode: number) => {
-    if (!currentProjectName || finalizingEpisode) return;
-
-    setFinalizingEpisode(true);
-    try {
-      const result = await API.finalizeEpisode(currentProjectName, episode);
-      const summary = result.summary ?? {};
-      const taskCount =
-        (summary.storyboards_enqueued ?? 0) +
-        (summary.videos_enqueued ?? 0) +
-        (summary.reference_videos_enqueued ?? 0);
-      if (taskCount > 0) {
-        useAppStore.getState().pushToast(
-          t("dashboard:finalize_episode_started", { count: taskCount }),
-          "success",
-        );
-      } else {
-        useAppStore.getState().pushToast(t("dashboard:finalize_episode_noop"), "success");
-      }
-      if ((summary.issues ?? 0) > 0) {
-        useAppStore.getState().pushNotification(
-          t("dashboard:finalize_episode_has_issues", { count: summary.issues }),
-          "warning",
-        );
-      }
-      setExportDialogOpen(false);
-    } catch (err) {
-      useAppStore
-        .getState()
-        .pushNotification(
-          t("dashboard:finalize_episode_failed", { message: errMsg(err) }),
-          "error",
-        );
-    } finally {
-      setFinalizingEpisode(false);
     }
   };
 
@@ -535,10 +554,6 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
                 void handleJianyingExport(episode, draftPath, jianyingVersion);
               }}
               jianyingExporting={jianyingExporting}
-              onFinalizeEpisode={(episode) => {
-                void handleFinalizeEpisode(episode);
-              }}
-              finalizingEpisode={finalizingEpisode}
             />
           </div>
 

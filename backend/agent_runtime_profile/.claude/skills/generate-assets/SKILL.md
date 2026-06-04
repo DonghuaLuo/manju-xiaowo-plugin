@@ -8,6 +8,8 @@ description: "统一资产生成 skill：接受 `--type=character|scene|prop`，
 为项目的角色、场景、道具创建参考设计图，保证整个视频中视觉元素的一致性。
 图像供应商由项目设置选择（不锁定具体 backend）。
 
+角色 / 场景 / 道具是项目母资产，默认按高质量生成；它们不参与分镜 / 视频的"快速版 / 精修版"抽卡定位。
+
 > Prompt 编写原则详见 `.claude/references/generation-modes.md` 的"Prompt 语言"章节。
 
 ## 共同约定

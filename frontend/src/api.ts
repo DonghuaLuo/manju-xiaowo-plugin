@@ -720,6 +720,21 @@ export interface ExportTaskStartResponse {
   draftPath?: string;
 }
 
+export interface JianyingDraftExportSummary {
+  episode?: number;
+  total_count?: number;
+  exported_count?: number;
+  missing_count?: number;
+  exported_ids?: string[];
+  missing_ids?: string[];
+  missing_items?: Array<{
+    id?: string;
+    reason?: string;
+    resource_type?: string;
+    video_clip?: string;
+  }>;
+}
+
 export interface ExportTaskEvent {
   taskId?: string;
   kind?: ExportTaskKind;

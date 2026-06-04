@@ -273,7 +273,7 @@ describe("CreateProjectModal", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /生成质量策略/ }));
-    const videoFinalRow = screen.getByText("视频最终版").closest(".grid");
+    const videoFinalRow = screen.getByText("视频精修版").closest(".grid");
     expect(videoFinalRow).not.toBeNull();
     fireEvent.click(within(videoFinalRow as HTMLElement).getByRole("combobox", { name: "分辨率" }));
     fireEvent.click(screen.getByRole("option", { name: "4K" }));

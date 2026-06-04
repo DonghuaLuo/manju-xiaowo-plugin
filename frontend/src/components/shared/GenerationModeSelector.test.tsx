@@ -14,7 +14,7 @@ describe("GenerationModeSelector", () => {
   it("renders three mode options by default", () => {
     setup();
     expect(screen.getByRole("radio", { name: /Image-to-Video|图生视频/ })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Grid Storyboard Draft|宫格分镜草稿/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Grid Fast Storyboards|宫格分镜快速版/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Reference Video Preview|参考视频预览/ })).toBeInTheDocument();
   });
 
@@ -26,7 +26,7 @@ describe("GenerationModeSelector", () => {
 
   it("emits onChange with canonical value when clicked", () => {
     const { onChange } = setup();
-    fireEvent.click(screen.getByRole("radio", { name: /Grid Storyboard Draft|宫格分镜草稿/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Grid Fast Storyboards|宫格分镜快速版/ }));
     expect(onChange).toHaveBeenCalledWith("grid");
   });
 
@@ -45,7 +45,7 @@ describe("GenerationModeSelector", () => {
 
   it("locks every mode in read-only mode", () => {
     const { onChange } = setup({ readOnly: true });
-    const grid = screen.getByRole("radio", { name: /Grid Storyboard Draft|宫格分镜草稿/ }) as HTMLInputElement;
+    const grid = screen.getByRole("radio", { name: /Grid Fast Storyboards|宫格分镜快速版/ }) as HTMLInputElement;
     const storyboard = screen.getByRole("radio", { name: /Image-to-Video|图生视频/ }) as HTMLInputElement;
 
     expect(storyboard.disabled).toBe(true);
