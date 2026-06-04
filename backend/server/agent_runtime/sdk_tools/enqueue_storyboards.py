@@ -15,7 +15,7 @@ from lib.generation_queue_client import (
     TaskSpec,
     batch_enqueue_and_wait,
 )
-from lib.prompt_utils import image_prompt_to_yaml, is_structured_image_prompt
+from lib.prompt_utils import image_prompt_to_yaml, is_structured_image_prompt, normalize_style
 from lib.storyboard_sequence import (
     StoryboardTaskPlan,
     build_storyboard_dependency_plan,
@@ -87,14 +87,16 @@ def _build_prompt(
     if not image_prompt:
         raise ValueError(f"片段/场景 {segment[id_field]} 缺少 image_prompt 字段")
 
+    style = normalize_style(style)
+    structured = is_structured_image_prompt(image_prompt)
     style_parts: list[str] = []
-    if style:
+    if style and not structured:
         style_parts.append(f"Style: {style}")
     if style_description:
         style_parts.append(f"Visual style: {style_description}")
     style_prefix = "\n".join(style_parts) + "\n\n" if style_parts else ""
 
-    if is_structured_image_prompt(image_prompt):
+    if structured:
         yaml_prompt = image_prompt_to_yaml(image_prompt, style)
         return f"{style_prefix}{yaml_prompt}"
     return f"{style_prefix}{image_prompt}"

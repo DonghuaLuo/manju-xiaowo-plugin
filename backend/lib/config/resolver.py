@@ -204,7 +204,6 @@ def _video_caps_for_endpoint(
     if endpoint_key == "openai-video":
         return VideoCapabilities(
             reference_images=True,
-            reference_images_with_start_image=True,
             max_reference_images=1,
         )
     if endpoint_key == "newapi-video":
@@ -238,7 +237,6 @@ def _video_caps_for_provider(provider_id: str, model_id: str) -> VideoCapabiliti
     if provider_id == "openai":
         return VideoCapabilities(
             reference_images=True,
-            reference_images_with_start_image=True,
             max_reference_images=1,
         )
     if provider_id == "grok":

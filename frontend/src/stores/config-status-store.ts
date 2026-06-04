@@ -87,29 +87,45 @@ interface ConfigStatusState {
   isComplete: boolean;
   loading: boolean;
   initialized: boolean;
+  pendingRefresh: boolean;
   fetch: () => Promise<void>;
   refresh: () => Promise<void>;
 }
+
+let inflight: Promise<void> | null = null;
 
 export const useConfigStatusStore = create<ConfigStatusState>((set, get) => ({
   issues: [],
   isComplete: true,
   loading: false,
   initialized: false,
+  pendingRefresh: false,
 
   fetch: async () => {
-    if (get().initialized || get().loading) return;
+    if (get().initialized) return;
     await get().refresh();
   },
 
   refresh: async () => {
-    if (get().loading) return;
-    set({ loading: true });
-    try {
-      const issues = await getConfigIssues();
-      set({ issues, isComplete: issues.length === 0, loading: false, initialized: true });
-    } catch {
-      set({ loading: false });
+    if (inflight) {
+      set({ pendingRefresh: true });
+      return inflight;
     }
+    inflight = (async () => {
+      set({ loading: true });
+      do {
+        set({ pendingRefresh: false });
+        try {
+          const issues = await getConfigIssues();
+          set({ issues, isComplete: issues.length === 0, initialized: true });
+        } catch {
+          // 保留旧状态；下一次显式 refresh 仍可重试。
+        }
+      } while (get().pendingRefresh);
+      set({ loading: false, pendingRefresh: false });
+    })().finally(() => {
+      inflight = null;
+    });
+    return inflight;
   },
 }));

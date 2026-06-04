@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lib.openai_shared import OPENAI_IMAGE_SIZE_MAP
 from lib.pricing.types import (
     PerImageByResolution,
     PerImageFlat,
@@ -89,8 +88,6 @@ def _per_image_openai_token(pricing: PerImageOpenAIToken, params: PricingParams)
         return amount, pricing.currency
 
     size = params.size
-    if size is None and params.resolution is not None and params.aspect_ratio is not None:
-        size = OPENAI_IMAGE_SIZE_MAP.get((params.resolution, params.aspect_ratio))
     quality = params.quality or "medium"
     size = size or "1024x1024"
     model_costs = pricing.fallback_rates.get(model, pricing.fallback_rates[pricing.default_model])

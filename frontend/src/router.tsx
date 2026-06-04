@@ -14,6 +14,7 @@ import { ToastOverlay } from "@/components/layout/ToastOverlay";
 import { API } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAssistantStore } from "@/stores/assistant-store";
+import { useConfigStatusStore } from "@/stores/config-status-store";
 
 let workspaceMaximizeState: "idle" | "pending" | "done" = "idle";
 
@@ -88,9 +89,37 @@ function StudioWorkspace() {
 // Top-level route tree
 // ---------------------------------------------------------------------------
 
+function ConfigStatusLoader() {
+  const fetchConfigStatus = useConfigStatusStore((s) => s.fetch);
+  const initialized = useConfigStatusStore((s) => s.initialized);
+
+  useEffect(() => {
+    if (initialized) return;
+    let cancelled = false;
+    let attempts = 0;
+
+    const run = () => {
+      if (cancelled || useConfigStatusStore.getState().initialized) return;
+      attempts += 1;
+      void fetchConfigStatus().finally(() => {
+        if (cancelled || useConfigStatusStore.getState().initialized || attempts >= 5) return;
+        window.setTimeout(run, 300);
+      });
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchConfigStatus, initialized]);
+
+  return null;
+}
+
 export function AppRoutes() {
   return (
     <>
+      <ConfigStatusLoader />
       <Switch>
         {/* Root redirects to projects list */}
         <Route path="/">

@@ -7,9 +7,12 @@ Prompt 工具函数
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import yaml
+
+_STYLE_PREFIX_RE = re.compile(r"^画风[：:]\s*")
 
 # 预设选项定义
 SHOT_TYPES = [
@@ -36,6 +39,11 @@ CAMERA_MOTIONS = [
 ]
 
 
+def normalize_style(style: str | None) -> str:
+    """Strip duplicated UI label prefixes from stored style prompts."""
+    return _STYLE_PREFIX_RE.sub("", (style or "").strip())
+
+
 def image_prompt_to_yaml(image_prompt: dict, project_style: str) -> str:
     """
     将 imagePrompt 结构转换为 YAML 格式字符串
@@ -56,7 +64,7 @@ def image_prompt_to_yaml(image_prompt: dict, project_style: str) -> str:
         YAML 格式字符串，用于 Gemini API 调用
     """
     ordered = {
-        "Style": project_style,
+        "Style": normalize_style(project_style),
         "Scene": image_prompt["scene"],
         "Composition": {
             "shot_type": image_prompt["composition"]["shot_type"],

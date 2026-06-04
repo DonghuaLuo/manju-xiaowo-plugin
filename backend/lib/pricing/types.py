@@ -52,7 +52,7 @@ class PerImageOpenAIToken:
     """OpenAI 图片计费：SDK 返回 usage 时按 token 计，否则按 (quality, size) 静态表兜底。
 
     - ``token_rates`` 形如 ``{model: {"image_in","image_out","text_in","text_out", ...}}``（每百万）。
-    - ``fallback_rates`` 形如 ``{model: {(quality, size): 每张价}}``，size 缺失时按宽高比反查。
+    - ``fallback_rates`` 形如 ``{model: {(quality, size): 每张价}}``，size 缺失时使用默认 1024x1024。
     """
 
     token_rates: dict[str, dict[str, float]]

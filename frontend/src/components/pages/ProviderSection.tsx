@@ -10,6 +10,7 @@ import { ProviderDetail } from "./ProviderDetail";
 import { CustomProviderSection } from "./settings/CustomProviderSection";
 import { CustomProviderDetail } from "./settings/CustomProviderDetail";
 import { CustomProviderForm } from "./settings/CustomProviderForm";
+import { useConfigStatusStore } from "@/stores/config-status-store";
 
 // ---------------------------------------------------------------------------
 // Status dot — Darkroom palette
@@ -97,11 +98,13 @@ export function ProviderSection() {
   const refreshPreset = useCallback(async () => {
     const res = await API.getProviders();
     setProviders(res.providers);
+    void useConfigStatusStore.getState().refresh();
   }, []);
 
   const refreshCustom = useCallback(async () => {
     const res = await API.listCustomProviders();
     setCustomProviders(res.providers);
+    void useConfigStatusStore.getState().refresh();
   }, []);
 
   useEffect(() => {
@@ -254,6 +257,7 @@ export function ProviderSection() {
                     const newest = res.providers[res.providers.length - 1];
                     setSelection({ kind: "custom", id: newest.id });
                   }
+                  void useConfigStatusStore.getState().refresh();
                 })
                 .catch(() => void refreshCustom());
             }}

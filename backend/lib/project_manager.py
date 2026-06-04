@@ -578,7 +578,8 @@ class ProjectManager:
                 e,
             )
         else:
-            metadata["total_scenes"] = len(items)
+            valid_items = [item for item in items if isinstance(item, dict)]
+            metadata["total_scenes"] = len(valid_items)
 
             default_duration = 4 if kind == "segments" else 8
 
@@ -590,7 +591,7 @@ class ProjectManager:
                     return int(value)
                 return default_duration
 
-            metadata["estimated_duration_seconds"] = sum(_duration(item) for item in items)
+            metadata["estimated_duration_seconds"] = sum(_duration(item) for item in valid_items)
 
         # 原子写（含路径遍历防护，output_path 已在守卫前解析），避免并发 PATCH 导致 JSON 损坏
         atomic_write_json(output_path, script)
@@ -1129,6 +1130,8 @@ class ProjectManager:
             items, id_field, _kind = resolve_items(script)
 
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 if str(item.get(id_field)) == str(scene_id):
                     assets = item.get("generated_assets")
                     if not isinstance(assets, dict):
@@ -1175,7 +1178,9 @@ class ProjectManager:
             items, id_field, _kind = resolve_items(script)
 
             # 建立 scene_id → item 索引，避免 O(N*M) 查找
-            item_by_id: dict[str, dict] = {str(item.get(id_field)): item for item in items}
+            item_by_id: dict[str, dict] = {
+                str(item.get(id_field)): item for item in items if isinstance(item, dict)
+            }
             missing: list[str] = []
 
             for scene_id, asset_type, asset_path in updates:
@@ -1221,7 +1226,7 @@ class ProjectManager:
             assets = item.get("generated_assets")
             return not isinstance(assets, dict) or not assets.get(asset_type)
 
-        return [item for item in items if _missing(item)]
+        return [item for item in items if isinstance(item, dict) and _missing(item)]
 
     # ==================== 文件路径工具 ====================
 
@@ -1264,7 +1269,7 @@ class ProjectManager:
             assets = item.get("generated_assets")
             return not isinstance(assets, dict) or not assets.get("storyboard_image")
 
-        return [item for item in items if _missing_storyboard(item)]
+        return [item for item in items if isinstance(item, dict) and _missing_storyboard(item)]
 
     # ==================== 项目级元数据管理 ====================
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from lib.aspect_size import VIDEO_TIER_SHORT_EDGE, parse_aspect_ratio, resolution_to_short_edge
 from lib.logging_utils import format_kwargs_for_log
 from lib.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
 from lib.providers import PROVIDER_OPENAI
@@ -29,44 +30,44 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "sora-2"
 
-_SIZE_MAP: dict[tuple[str, str], str] = {
-    ("720p", "9:16"): "720x1280",
-    ("720p", "16:9"): "1280x720",
-    ("1080p", "9:16"): "1080x1920",
-    ("1080p", "16:9"): "1920x1080",
-    ("1024p", "9:16"): "1024x1792",
-    ("1024p", "16:9"): "1792x1024",
-}
-
-# resolution=None 时按 aspect_ratio 兜底的最小 size。OpenAI 官方协议下 size 是唯一
-# 传比例的通道，不传则中转聚合（NewAPI / huitongkeji 等）会让各家上游用自己的默认
-# 比例，导致同一项目里输出比例横/方/竖随模型而变。720p 与 NewAPIVideoBackend 的
-# _DEFAULT_SIZE 一致，被所有上游模型接受。
-_FALLBACK_SIZE_BY_ASPECT: dict[str, str] = {
-    "9:16": "720x1280",
-    "16:9": "1280x720",
-}
+_SORA_SIZES_720P: tuple[str, ...] = ("720x1280", "1280x720")
+_SORA_SIZES_1024P: tuple[str, ...] = ("1024x1792", "1792x1024")
+_SORA_LEGAL_SIZES: tuple[str, ...] = _SORA_SIZES_720P + _SORA_SIZES_1024P
+_SORA_1024P_MIN_SHORT = 1024
 
 
-def _resolve_size(resolution: str | None, aspect_ratio: str) -> str | None:
-    """解析 size：None → 按 aspect 兜底；已知复合 key 映射；未知 → warning 后透传。"""
-    if resolution is None:
-        fallback = _FALLBACK_SIZE_BY_ASPECT.get(aspect_ratio)
-        if fallback is None:
-            logger.warning(
-                "OpenAI video: resolution 未配置且 aspect=%r 无兜底，size 字段不传，比例由上游默认决定",
-                aspect_ratio,
-            )
-        return fallback
-    mapped = _SIZE_MAP.get((resolution, aspect_ratio))
-    if mapped is not None:
-        return mapped
-    logger.warning(
-        "OpenAI video: 未知 (resolution=%r, aspect=%r)，原样作为 size 透传",
-        resolution,
-        aspect_ratio,
-    )
-    return resolution
+def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
+    """在 model+分辨率档支持的 Sora 合法尺寸中，选择最接近项目比例的一档。"""
+    aw, ah = parse_aspect_ratio(aspect_ratio)
+    target = aw / ah
+    is_pro = "pro" in model.lower()
+    short = resolution_to_short_edge(resolution, tier_map=VIDEO_TIER_SHORT_EDGE)
+    supported_shorts = [720, _SORA_1024P_MIN_SHORT] if is_pro else [720]
+    achieved_short = min(supported_shorts, key=lambda s: (abs(s - short), -s))
+    legal = _SORA_SIZES_1024P if achieved_short == _SORA_1024P_MIN_SHORT else _SORA_SIZES_720P
+    if short > achieved_short:
+        logger.warning(
+            "OpenAI video: model=%s 无法满足分辨率请求 %s（短边 %d），输出封顶到 %dp 档",
+            model,
+            resolution,
+            short,
+            achieved_short,
+        )
+
+    def _score(size: str) -> tuple[float, int]:
+        w, h = (int(x) for x in size.split("x"))
+        return abs(w / h - target), -(w * h)
+
+    chosen = min(legal, key=_score)
+    cw, ch = (int(x) for x in chosen.split("x"))
+    if abs(cw / ch - target) > 0.01:
+        logger.warning(
+            "OpenAI video: aspect_ratio=%s 无精确 sora 档，吸附到 %s（比例偏差，输出非项目设定比例）",
+            aspect_ratio,
+            chosen,
+        )
+    assert chosen in _SORA_LEGAL_SIZES, f"_resolve_size produced illegal sora size: {chosen}"
+    return chosen
 
 
 class OpenAIVideoBackend:
@@ -96,7 +97,6 @@ class OpenAIVideoBackend:
     def video_capabilities(self) -> VideoCapabilities:
         return VideoCapabilities(
             reference_images=True,
-            reference_images_with_start_image=True,
             max_reference_images=1,
         )
 
@@ -106,22 +106,11 @@ class OpenAIVideoBackend:
             "model": self._model,
             "seconds": str(request.duration_seconds),
         }
-        size = _resolve_size(request.resolution, request.aspect_ratio)
-        if size is not None:
-            kwargs["size"] = size
+        kwargs["size"] = _resolve_size(self._model, request.resolution, request.aspect_ratio)
 
-        # 收集所有参考图：start_image + reference_images
-        refs = []
-        if request.start_image and Path(request.start_image).exists():
-            refs.append(_encode_start_image(Path(request.start_image)))
-        if request.reference_images:
-            for ref_path in request.reference_images:
-                p = Path(ref_path) if not isinstance(ref_path, Path) else ref_path
-                if p.exists():
-                    refs.append(_encode_start_image(p))
-        if refs:
-            # 单张图时保持 tuple 格式（API 兼容），多张时用 list
-            kwargs["input_reference"] = refs[0] if len(refs) == 1 else refs
+        input_reference = _resolve_input_reference(request)
+        if input_reference is not None:
+            kwargs["input_reference"] = input_reference
 
         logger.info("OpenAI 视频生成开始: model=%s, seconds=%s", self._model, kwargs["seconds"])
         logger.info("调用 %s 视频 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
@@ -213,6 +202,31 @@ class OpenAIVideoBackend:
 def _encode_start_image(image_path: Path) -> tuple[str, bytes, str]:
     mime = IMAGE_MIME_TYPES.get(image_path.suffix.lower(), "image/png")
     return (image_path.name, image_path.read_bytes(), mime)
+
+
+def _resolve_input_reference(request: VideoGenerationRequest) -> tuple[str, bytes, str] | None:
+    """OpenAI Sora accepts one input_reference; prefer the start image when present."""
+    if request.start_image and Path(request.start_image).exists():
+        if request.reference_images:
+            logger.info("OpenAI video: ignoring reference_images because input_reference is already start_image")
+        return _encode_start_image(Path(request.start_image))
+
+    if not request.reference_images:
+        return None
+
+    existing_refs: list[Path] = []
+    for ref_path in request.reference_images:
+        path = ref_path if isinstance(ref_path, Path) else Path(ref_path)
+        if path.exists():
+            existing_refs.append(path)
+    if not existing_refs:
+        return None
+    if len(existing_refs) > 1:
+        logger.info(
+            "OpenAI video: ignoring %d extra reference_images; Sora accepts one input_reference",
+            len(existing_refs) - 1,
+        )
+    return _encode_start_image(existing_refs[0])
 
 
 def _is_openai_not_found(exc: BaseException) -> bool:

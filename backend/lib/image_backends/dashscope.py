@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from lib.aspect_size import IMAGE_TIER_SHORT_EDGE, aspect_size, resolution_to_short_edge
 from lib.dashscope_shared import (
     DASHSCOPE_RETRYABLE_ERRORS,
     dashscope_headers,
@@ -45,48 +46,17 @@ _I2I_ONLY_MARKERS = ("qwen-image-edit",)
 _QWEN_REF_LIMIT = 3
 _WAN_REF_LIMIT = 9
 
-# 缺省尺寸：qwen 用像素 宽*高，wan 用档位预算（换算成像素后下传）
-_DEFAULT_QWEN_SIZE = "2048*2048"
 _DEFAULT_WAN_BUDGET = "2K"
+_DEFAULT_SHORT_FUSION = 2048
+_DEFAULT_SHORT_WAN = 1440
+_DEFAULT_SHORT_EDIT = 2048
 
 # 标准档总像素预算（非 pro / 非文生图上限）= 2048×2048；超出须 wan2.7-image-pro 文生图（4K=4096×4096）
 _STANDARD_PIXEL_BUDGET = 2048 * 2048
-
-# aspect_ratio → 像素 宽*高。值取 qwen-image-2.0 系列官方推荐档（千问-文生图.md），
-# 总像素均 ≤ 2048×2048 且比例在 [1:8, 8:1] 内，故 wan2.7-image 像素方式同样适用、复用此表。
-_SIZE_BY_RATIO: dict[str, str] = {
-    "16:9": "2688*1536",
-    "9:16": "1536*2688",
-    "1:1": "2048*2048",
-    "4:3": "2368*1728",
-    "3:4": "1728*2368",
-}
-
-# wan 系档位 → 各比例的显式像素。wan 的「方式一档位」在文生图下会强制输出正方形、丢掉比例，
-# 故 backend 永不下传档位词，一律换算成「方式二像素值」。2K 复用上方官方推荐档；1K/4K 按 2K
-# 等比 ×0.5 / ×2 并对齐 16 的倍数，保持官方推荐档的精确比例。4K（总像素 4096×4096）仅
-# wan2.7-image-pro 文生图可用，门控见 _resolve_size。
-_WAN_PIXELS_BY_BUDGET: dict[str, dict[str, str]] = {
-    "1K": {"16:9": "1344*768", "9:16": "768*1344", "1:1": "1024*1024", "4:3": "1184*864", "3:4": "864*1184"},
-    "2K": _SIZE_BY_RATIO,
-    "4K": {"16:9": "5376*3072", "9:16": "3072*5376", "1:1": "4096*4096", "4:3": "4736*3456", "3:4": "3456*4736"},
-}
-
-
-def _has_pixel_sep(size: str) -> bool:
-    """size 是否为显式像素值（含 宽*高 分隔符），区别于 1K/2K/4K 档位词。"""
-    s = size.lower()
-    return "*" in s or "x" in s or "×" in s
-
-
-# 编辑系列宽高均 ∈ [512, 2048]，单独一张 ≤2048 的授权档表。
-_EDIT_SIZE_BY_RATIO: dict[str, str] = {
-    "16:9": "2048*1152",
-    "9:16": "1152*2048",
-    "1:1": "2048*2048",
-    "4:3": "2048*1536",
-    "3:4": "1536*2048",
-}
+_FOURK_PIXEL_BUDGET = 4096 * 4096
+_EDIT_MAX_LONG_EDGE = 2048
+_DASHSCOPE_MAX_RATIO = 8.0
+_EDIT_MAX_RATIO = 4.0
 
 
 class DashScopeImageBackend:
@@ -210,27 +180,36 @@ class DashScopeImageBackend:
         )
 
     def _resolve_size(self, request: ImageGenerationRequest, has_refs: bool) -> str:
+        """比例来自项目 aspect_ratio；image_size 只贡献清晰度短边。"""
         explicit = (request.image_size or "").strip()
-        if not self._is_wan:
-            # qwen 系：caller 显式指定优先；否则按 aspect_ratio 选授权像素档（编辑系列宽高 ≤2048）。
-            # 不按 aspect 选档会让项目 aspect_ratio 静默失效、一律产出 1:1 方图。
-            if explicit:
-                return explicit
-            table = _EDIT_SIZE_BY_RATIO if self._is_edit else _SIZE_BY_RATIO
-            return table.get(request.aspect_ratio, _DEFAULT_QWEN_SIZE)
-        # wan 系：超 2048×2048 预算的输出（4K 档或大像素值）仅 wan2.7-image-pro 文生图支持，
-        # 非 pro 不支持、pro 的 I2I 不支持 —— 先门控（档位词与像素值统一判定）
-        budget = explicit or _DEFAULT_WAN_BUDGET
-        if self._exceeds_standard_budget(budget) and ("pro" not in self._model.lower() or has_refs):
-            raise ImageCapabilityError("image_dashscope_4k_t2i_only", model=self._model)
-        # 显式像素值（caller 已定比例）原样 honor
-        if _has_pixel_sep(explicit):
-            return explicit
-        # 档位词 / 空 → 一律按 aspect_ratio 换算成显式像素，绝不下传档位词，
-        # 否则 wan 文生图会被强制输出正方形、丢掉项目的 16:9 / 9:16 比例
-        tier = explicit.upper() if explicit.upper() in _WAN_PIXELS_BY_BUDGET else _DEFAULT_WAN_BUDGET
-        table = _WAN_PIXELS_BY_BUDGET[tier]
-        return table.get(request.aspect_ratio, table["1:1"])
+        aspect = request.aspect_ratio
+
+        if self._is_wan:
+            budget_word = explicit or _DEFAULT_WAN_BUDGET
+            exceeds = self._exceeds_standard_budget(budget_word)
+            if exceeds and ("pro" not in self._model.lower() or has_refs):
+                raise ImageCapabilityError("image_dashscope_4k_t2i_only", model=self._model)
+            max_total = _FOURK_PIXEL_BUDGET if exceeds else _STANDARD_PIXEL_BUDGET
+            short = resolution_to_short_edge(
+                explicit or None, tier_map=IMAGE_TIER_SHORT_EDGE, default_short=_DEFAULT_SHORT_WAN
+            )
+            w, h = aspect_size(aspect, short, round_to=16, max_total_pixels=max_total, max_ratio=_DASHSCOPE_MAX_RATIO)
+            return f"{w}*{h}"
+
+        if self._is_edit:
+            short = resolution_to_short_edge(
+                explicit or None, tier_map=IMAGE_TIER_SHORT_EDGE, default_short=_DEFAULT_SHORT_EDIT
+            )
+            w, h = aspect_size(aspect, short, round_to=16, max_long_edge=_EDIT_MAX_LONG_EDGE, max_ratio=_EDIT_MAX_RATIO)
+            return f"{w}*{h}"
+
+        short = resolution_to_short_edge(
+            explicit or None, tier_map=IMAGE_TIER_SHORT_EDGE, default_short=_DEFAULT_SHORT_FUSION
+        )
+        w, h = aspect_size(
+            aspect, short, round_to=16, max_total_pixels=_STANDARD_PIXEL_BUDGET, max_ratio=_DASHSCOPE_MAX_RATIO
+        )
+        return f"{w}*{h}"
 
     def _build_content(self, request: ImageGenerationRequest, has_refs: bool) -> list[dict]:
         content: list[dict] = []
