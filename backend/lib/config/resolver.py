@@ -31,7 +31,7 @@ from lib.custom_provider import is_custom_provider, parse_provider_id
 from lib.custom_provider.endpoints import get_endpoint_spec
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
-from lib.project_manager import ProjectManager
+from lib.project_manager import ProjectManager, effective_mode
 from lib.script_splitting_templates import (
     check_provider_compatibility,
     ensure_project_script_splitting_snapshot,
@@ -262,6 +262,49 @@ def _fallback_video_caps(capabilities: list[str], max_reference_images: int | No
         reference_images=(max_reference_images or 0) > 0,
         max_reference_images=max_reference_images or 0,
     )
+
+
+_VIDU2_REFERENCE_VIDEO_DURATIONS = [4]
+_VIDU2_REFERENCE_VIDEO_RESOLUTIONS = ["360p", "720p"]
+_VIDU2_REFERENCE_VIDEO_RESOLUTION_CONSTRAINTS = {"360p": [4], "720p": [4]}
+
+
+def _is_vidu2_reference_video_context(
+    *,
+    provider_id: str,
+    model_id: str,
+    endpoint_family: str | None,
+    project: dict | None,
+) -> bool:
+    if not project or effective_mode(project=project, episode={}) != "reference_video":
+        return False
+    if model_id.lower() != "vidu2.0":
+        return False
+    return provider_id == "vidu" or endpoint_family == "vidu-video"
+
+
+def _apply_project_video_capability_overrides(
+    *,
+    provider_id: str,
+    model_id: str,
+    endpoint_family: str | None,
+    project: dict | None,
+    supported_durations: list[int],
+    resolutions: list[str],
+    duration_resolution_constraints: dict[str, list[int]],
+) -> tuple[list[int], list[str], dict[str, list[int]]]:
+    if _is_vidu2_reference_video_context(
+        provider_id=provider_id,
+        model_id=model_id,
+        endpoint_family=endpoint_family,
+        project=project,
+    ):
+        return (
+            list(_VIDU2_REFERENCE_VIDEO_DURATIONS),
+            list(_VIDU2_REFERENCE_VIDEO_RESOLUTIONS),
+            {key: list(value) for key, value in _VIDU2_REFERENCE_VIDEO_RESOLUTION_CONSTRAINTS.items()},
+        )
+    return supported_durations, resolutions, duration_resolution_constraints
 
 
 def _trusted_payload_provider(provider_id: object) -> str | None:
@@ -565,7 +608,14 @@ class ConfigResolver:
         project: dict | None,
     ) -> dict:
         provider_id, model_id = await self._resolve_video_backend_from_project(svc, session, project)
-        return await self._resolve_video_caps_for_model(svc, session, provider_id, model_id, project)
+        return await self._resolve_video_caps_for_model(
+            svc,
+            session,
+            provider_id,
+            model_id,
+            project,
+            apply_project_generation_mode_overrides=True,
+        )
 
     async def _resolve_video_caps_for_model(
         self,
@@ -574,6 +624,8 @@ class ConfigResolver:
         provider_id: str,
         model_id: str,
         project: dict | None,
+        *,
+        apply_project_generation_mode_overrides: bool = False,
     ) -> dict:
         if is_custom_provider(provider_id):
             source = "custom"
@@ -652,6 +704,17 @@ class ConfigResolver:
             duration_resolution_constraints = {
                 key: list(value) for key, value in (model_info.duration_resolution_constraints or {}).items()
             }
+
+        if apply_project_generation_mode_overrides:
+            supported_durations, resolutions, duration_resolution_constraints = _apply_project_video_capability_overrides(
+                provider_id=provider_id,
+                model_id=model_id,
+                endpoint_family=endpoint_family,
+                project=project,
+                supported_durations=supported_durations,
+                resolutions=resolutions,
+                duration_resolution_constraints=duration_resolution_constraints,
+            )
 
         if not supported_durations:
             raise ValueError(f"supported_durations is empty for {provider_id}/{model_id}; cannot derive capabilities")

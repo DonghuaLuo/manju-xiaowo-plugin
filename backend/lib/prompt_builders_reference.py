@@ -12,6 +12,79 @@ from __future__ import annotations
 from lib.script_splitting_templates import render_profile_prompt_section
 
 
+def _format_bullets(items: list | tuple | None) -> str:
+    values = [str(item).strip() for item in items or [] if str(item).strip()]
+    return "\n".join(f"- {item}" for item in values) or "（无）"
+
+
+def _format_quality_gates(profile: dict) -> str:
+    rows = []
+    for gate in profile.get("quality_gates") or []:
+        if not isinstance(gate, dict):
+            continue
+        gate_id = gate.get("id")
+        description = gate.get("description")
+        severity = gate.get("severity")
+        if gate_id and description:
+            rows.append(f"- {gate_id}: {description}（{severity or 'warn'}）")
+    return "\n".join(rows) or "（无）"
+
+
+def _format_few_shot_examples(profile: dict) -> str:
+    examples = []
+    for ex in profile.get("few_shot_examples") or []:
+        if not isinstance(ex, dict):
+            continue
+        source = ex.get("source")
+        good = ex.get("good") or ex.get("fixed")
+        bad = ex.get("bad")
+        if source and good:
+            block = f"输入：{source}\n可借鉴写法：{good}"
+            if bad:
+                block += f"\n应避免：{bad}"
+            examples.append(block)
+    return "\n\n".join(examples) or "（无）"
+
+
+def _render_reference_video_adapter_section(profile: dict) -> str:
+    fields = ", ".join(profile.get("output_fields") or []) or "（无）"
+    contract = profile.get("locked_contract") if isinstance(profile.get("locked_contract"), dict) else {}
+    unit_name = contract.get("unit_name") or "scene/segment"
+    return f"""# 拆分方案 Profile（reference_video 适配）
+
+当前拆分方案：{profile.get("id")} / {profile.get("name")}
+模板 hash：{profile.get("hash")}
+定位：{profile.get("description")}
+原始契约：{unit_name}
+支持生成方式：{", ".join(profile.get("supported_generation_modes") or profile.get("recommended_generation_modes") or [])}
+
+当前生成方式固定输出 ReferenceVideoScript，step1_units 结构仍为 video_unit / shots / references。
+本模板通过 reference_video 适配层生效：不要把 {unit_name} 契约字段改成 `step1_reference_units.md` 的新表头，
+但必须把下列拆分规则、禁止写法和质检要求转译到 video_unit 拆分、shot 文本、references 选择和镜头衔接里。
+
+## 可转译字段（不作为输出列）
+{fields}
+
+## 转译要求
+- 将 scene/segment 的镜头节拍转成 1-4 个连续 shot；跨时空、跨场景或动作状态不连续时开启新 video_unit。
+- 将 reference_assets / first_frame_intent / continuity_anchor 一类字段转成 references 列表、Shot 1 首帧意图和相邻 shot 的动作衔接。
+- 将 provider_hints / camera_motion / sound_cue / audio_plan 一类字段融入 shot text；只保留模型能执行的动作、声音和运镜。
+- 题材字段只转译可见、可听、可动的信息，不能把抽象风格词或解释性备注直接塞进 shot text。
+
+## 模板拆分规则
+{_format_bullets(profile.get("split_rules"))}
+
+## 禁止写法
+{_format_bullets(profile.get("forbidden_patterns"))}
+
+## 模板质检
+{_format_quality_gates(profile)}
+
+## Few-shot 参考（只借鉴意图，不复制字段名为输出列）
+{_format_few_shot_examples(profile)}
+"""
+
+
 def _render_reference_profile_prompt_section(profile: dict | None) -> str:
     if not profile or profile.get("legacy_passthrough"):
         return ""
@@ -19,15 +92,7 @@ def _render_reference_profile_prompt_section(profile: dict | None) -> str:
     if contract.get("unit_name") == "video_unit":
         return render_profile_prompt_section(profile)
 
-    return f"""# 拆分方案参考
-
-当前拆分方案：{profile.get("id")} / {profile.get("name")}
-模板 hash：{profile.get("hash")}
-定位：{profile.get("description")}
-
-当前生成方式固定输出 ReferenceVideoScript，step1_units 结构仍为 video_unit / shots / references。
-当前模板不是 video_unit 契约；为避免改变旧 reference_video units 结构，本 prompt 只记录模板身份和定位，不注入该模板的 scene/segment 输出字段或拆分规则。
-"""
+    return _render_reference_video_adapter_section(profile)
 
 
 def _format_asset_names(assets: dict | None) -> str:

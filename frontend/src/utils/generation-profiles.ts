@@ -6,14 +6,98 @@ export const VIDEO_PROFILE_RESOLUTIONS = ["480p", "720p", "1080p", "4K"] as cons
 interface DefaultProfileInput {
   imageResolution?: string | null;
   videoResolution?: string | null;
+  imageResolutionOptions?: readonly string[] | null;
+  videoResolutionOptions?: readonly string[] | null;
+}
+
+const IMAGE_FINAL_FALLBACK = "2K";
+const IMAGE_DRAFT_FALLBACK = "1K";
+const VIDEO_FINAL_FALLBACK = "1080p";
+const VIDEO_DRAFT_FALLBACK = "720p";
+
+function uniqueOptions(options?: readonly string[] | null): string[] {
+  return Array.from(
+    new Set((options ?? []).map((option) => option.trim()).filter(Boolean)),
+  );
+}
+
+function findMatchingOption(options: readonly string[], value?: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return (
+    options.find((option) => option === trimmed) ??
+    options.find((option) => option.toLowerCase() === trimmed.toLowerCase()) ??
+    null
+  );
+}
+
+function resolutionRank(value?: string | null): number | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  const dimensionMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:x|\*|×)\s*(\d+(?:\.\d+)?)/);
+  if (dimensionMatch) {
+    return Math.min(Number(dimensionMatch[1]), Number(dimensionMatch[2]));
+  }
+  const unitMatch = normalized.match(/^(\d+(?:\.\d+)?)\s*(k|p|px)$/);
+  if (!unitMatch) return null;
+  const valueNumber = Number(unitMatch[1]);
+  if (!Number.isFinite(valueNumber)) return null;
+  if (unitMatch[2] === "k") return valueNumber * 1024;
+  return valueNumber;
+}
+
+export function coerceResolutionForOptions(
+  value: string | null | undefined,
+  options: readonly string[] | null | undefined,
+  fallback: string,
+): string {
+  const candidates = uniqueOptions(options);
+  const preferred = value?.trim() || fallback;
+  if (candidates.length === 0) return preferred;
+
+  const exact = findMatchingOption(candidates, preferred) ?? findMatchingOption(candidates, fallback);
+  if (exact) return exact;
+
+  const targetRank = resolutionRank(preferred) ?? resolutionRank(fallback);
+  if (targetRank !== null) {
+    const rankedCandidates = candidates
+      .map((option) => ({ option, rank: resolutionRank(option) }))
+      .filter((item): item is { option: string; rank: number } => item.rank !== null)
+      .sort((a, b) => a.rank - b.rank);
+    const lowerOrEqual = rankedCandidates.filter((item) => item.rank <= targetRank).at(-1);
+    if (lowerOrEqual) return lowerOrEqual.option;
+    if (rankedCandidates.length > 0) return rankedCandidates[0].option;
+  }
+
+  return candidates[0];
 }
 
 export function createDefaultGenerationProfiles({
   imageResolution,
   videoResolution,
+  imageResolutionOptions,
+  videoResolutionOptions,
 }: DefaultProfileInput = {}): GenerationProfiles {
-  const finalImageResolution = imageResolution || "2K";
-  const finalVideoResolution = videoResolution || "1080p";
+  const finalImageResolution = coerceResolutionForOptions(
+    imageResolution,
+    imageResolutionOptions,
+    IMAGE_FINAL_FALLBACK,
+  );
+  const draftImageResolution = coerceResolutionForOptions(
+    IMAGE_DRAFT_FALLBACK,
+    imageResolutionOptions,
+    finalImageResolution,
+  );
+  const finalVideoResolution = coerceResolutionForOptions(
+    videoResolution,
+    videoResolutionOptions,
+    VIDEO_FINAL_FALLBACK,
+  );
+  const draftVideoResolution = coerceResolutionForOptions(
+    VIDEO_DRAFT_FALLBACK,
+    videoResolutionOptions,
+    finalVideoResolution,
+  );
 
   return {
     asset: {
@@ -24,7 +108,7 @@ export function createDefaultGenerationProfiles({
     storyboard_draft: {
       image_provider_t2i: null,
       image_provider_i2i: null,
-      resolution: "1K",
+      resolution: draftImageResolution,
     },
     storyboard_final: {
       image_provider_t2i: null,
@@ -38,7 +122,7 @@ export function createDefaultGenerationProfiles({
     },
     video_draft: {
       video_backend: null,
-      resolution: "720p",
+      resolution: draftVideoResolution,
       duration_seconds: null,
       generate_audio: false,
       service_tier: "default",
@@ -52,7 +136,7 @@ export function createDefaultGenerationProfiles({
     },
     reference_video_draft: {
       video_backend: null,
-      resolution: "720p",
+      resolution: draftVideoResolution,
       duration_seconds: null,
       generate_audio: false,
       service_tier: "default",
@@ -120,7 +204,15 @@ const VIDEO_CONTINUITY_PROFILE_POLICIES = ["auto", "start_only", "end_frame", "r
 
 export type ShotTierProfiles = Partial<Record<ShotTier, ShotTierProfile>>;
 
-export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfile> {
+export function createDefaultShotTierProfiles(
+  input: DefaultProfileInput = {},
+): Record<ShotTier, ShotTierProfile> {
+  const defaults = createDefaultGenerationProfiles(input);
+  const finalImageResolution = defaults.storyboard_final?.resolution ?? IMAGE_FINAL_FALLBACK;
+  const draftImageResolution = defaults.storyboard_draft?.resolution ?? finalImageResolution;
+  const finalVideoResolution = defaults.video_final?.resolution ?? VIDEO_FINAL_FALLBACK;
+  const draftVideoResolution = defaults.video_draft?.resolution ?? finalVideoResolution;
+
   return {
     S: {
       label: "hero",
@@ -130,10 +222,10 @@ export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfil
       prefer_final_storyboard_source: true,
       profiles: {
         storyboard_final: {
-          resolution: "2K",
+          resolution: finalImageResolution,
         },
         video_final: {
-          resolution: "1080p",
+          resolution: finalVideoResolution,
           generate_audio: true,
           service_tier: "default",
         },
@@ -155,10 +247,10 @@ export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfil
       prefer_final_storyboard_source: false,
       profiles: {
         storyboard_final: {
-          resolution: "1K",
+          resolution: draftImageResolution,
         },
         video_final: {
-          resolution: "720p",
+          resolution: draftVideoResolution,
           generate_audio: false,
           service_tier: "default",
         },
@@ -169,8 +261,8 @@ export function createDefaultShotTierProfiles(): Record<ShotTier, ShotTierProfil
 
 export function normalizeShotTierProfiles(
   profiles?: ShotTierProfiles | null,
+  defaults: Record<ShotTier, ShotTierProfile> = createDefaultShotTierProfiles(),
 ): Record<ShotTier, ShotTierProfile> {
-  const defaults = createDefaultShotTierProfiles();
   return Object.fromEntries(
     SHOT_TIERS.map((tier) => {
       const raw: ShotTierProfile = profiles?.[tier] ?? {};

@@ -1,3 +1,4 @@
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { ModelConfigSection, type ModelConfigValue } from "@/components/shared/ModelConfigSection";
@@ -6,18 +7,22 @@ import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, CARD_STYLE, GHOST_BTN_LG_CLS } fro
 import {
   IMAGE_PROFILE_RESOLUTIONS,
   VIDEO_PROFILE_RESOLUTIONS,
+  coerceResolutionForOptions,
   createDefaultGenerationProfiles,
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
 import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { GenerationMode } from "@/utils/generation-mode";
 import {
+  lookupResolutions,
   lookupStoryboardVideoStartImageSupport,
   lookupVideoContinuitySupport,
 } from "@/utils/provider-models";
+import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import type {
   GenerationProfiles,
   ImageGenerationProfile,
+  MediaType,
   ProviderInfo,
   VideoContinuityPolicy,
   VideoGenerationProfile,
@@ -60,6 +65,37 @@ export interface WizardStep2ModelsProps {
   error: string | null;
 }
 
+type ImageProfileKey = "asset" | "storyboard_draft" | "storyboard_final" | "grid";
+type VideoProfileKey =
+  | "video_draft"
+  | "video_final"
+  | "reference_video_draft"
+  | "reference_video_final";
+
+const IMAGE_PROFILE_KEYS: ImageProfileKey[] = ["asset", "storyboard_draft", "storyboard_final", "grid"];
+const VIDEO_PROFILE_KEYS: VideoProfileKey[] = [
+  "video_draft",
+  "video_final",
+  "reference_video_draft",
+  "reference_video_final",
+];
+
+function resolutionOptionsForBackend(
+  data: WizardStep2Data | null,
+  backend: string,
+  fallback: readonly string[],
+  endpointToMediaType: Record<string, MediaType>,
+): string[] {
+  if (!data || !backend) return [...fallback];
+  const res = lookupResolutions(
+    data.providers,
+    backend,
+    data.customProviders,
+    endpointToMediaType,
+  );
+  return res.options.length > 0 ? res.options : [...fallback];
+}
+
 export function WizardStep2Models({
   value,
   onChange,
@@ -78,15 +114,50 @@ export function WizardStep2Models({
 }: WizardStep2ModelsProps) {
   const { t } = useTranslation(["common", "templates", "dashboard"]);
   const loading = !data && !error;
-  const defaultGenerationProfiles = createDefaultGenerationProfiles({
-    imageResolution: value.imageResolution,
-    videoResolution: value.videoResolution,
-  });
+
+  const endpointToMediaType = useEndpointCatalogStore((s) => s.endpointToMediaType);
+  const fetchEndpointCatalog = useEndpointCatalogStore((s) => s.fetch);
+  useEffect(() => {
+    if ((data?.customProviders.length ?? 0) > 0) void fetchEndpointCatalog();
+  }, [data?.customProviders.length, fetchEndpointCatalog]);
+
+  const effectiveImageBackend = value.imageBackendT2I || data?.globalDefaults.imageT2I || "";
+  const effectiveVideoBackend = value.videoBackend || data?.globalDefaults.video || "";
+  const imageResolutionOptions = useMemo(
+    () =>
+      resolutionOptionsForBackend(
+        data,
+        effectiveImageBackend,
+        IMAGE_PROFILE_RESOLUTIONS,
+        endpointToMediaType,
+      ),
+    [data, effectiveImageBackend, endpointToMediaType],
+  );
+  const videoResolutionOptions = useMemo(
+    () =>
+      resolutionOptionsForBackend(
+        data,
+        effectiveVideoBackend,
+        VIDEO_PROFILE_RESOLUTIONS,
+        endpointToMediaType,
+      ),
+    [data, effectiveVideoBackend, endpointToMediaType],
+  );
+
+  const defaultGenerationProfiles = useMemo(
+    () =>
+      createDefaultGenerationProfiles({
+        imageResolution: value.imageResolution,
+        videoResolution: value.videoResolution,
+        imageResolutionOptions,
+        videoResolutionOptions,
+      }),
+    [imageResolutionOptions, value.imageResolution, value.videoResolution, videoResolutionOptions],
+  );
   const normalizedGenerationProfiles = normalizeGenerationProfiles(
     generationProfiles,
     defaultGenerationProfiles,
   );
-  const effectiveVideoBackend = value.videoBackend || data?.globalDefaults.video || "";
   const referenceVideoUnsupported = Boolean(
     data &&
       generationMode === "reference_video" &&
@@ -99,6 +170,41 @@ export function WizardStep2Models({
       effectiveVideoBackend &&
       lookupStoryboardVideoStartImageSupport(effectiveVideoBackend, data.customProviders) === false,
   );
+
+  useEffect(() => {
+    if (!data) return;
+    let changed = false;
+    const next = normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles);
+
+    for (const key of IMAGE_PROFILE_KEYS) {
+      const current = next[key]?.resolution;
+      if (!current) continue;
+      const coerced = coerceResolutionForOptions(current, imageResolutionOptions, current);
+      if (coerced !== current) {
+        next[key] = { ...next[key], resolution: coerced };
+        changed = true;
+      }
+    }
+
+    for (const key of VIDEO_PROFILE_KEYS) {
+      const current = next[key]?.resolution;
+      if (!current) continue;
+      const coerced = coerceResolutionForOptions(current, videoResolutionOptions, current);
+      if (coerced !== current) {
+        next[key] = { ...next[key], resolution: coerced };
+        changed = true;
+      }
+    }
+
+    if (changed) onGenerationProfilesChange(next);
+  }, [
+    data,
+    defaultGenerationProfiles,
+    generationProfiles,
+    imageResolutionOptions,
+    onGenerationProfilesChange,
+    videoResolutionOptions,
+  ]);
 
   const updateImageProfile = (
     key: ImageProfileKey,
@@ -189,6 +295,8 @@ export function WizardStep2Models({
             videoContinuityPolicy={videoContinuityPolicy}
             onVideoContinuityPolicyChange={onVideoContinuityPolicyChange}
             generationMode={generationMode}
+            imageResolutionOptions={imageResolutionOptions}
+            videoResolutionOptions={videoResolutionOptions}
           />
         </>
       )}
@@ -226,13 +334,6 @@ export function WizardStep2Models({
   );
 }
 
-type ImageProfileKey = "asset" | "storyboard_draft" | "storyboard_final" | "grid";
-type VideoProfileKey =
-  | "video_draft"
-  | "video_final"
-  | "reference_video_draft"
-  | "reference_video_final";
-
 const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
 
@@ -245,6 +346,8 @@ function GenerationProfilesEditor({
   videoContinuityPolicy,
   onVideoContinuityPolicyChange,
   generationMode,
+  imageResolutionOptions,
+  videoResolutionOptions,
 }: {
   expanded: boolean;
   onExpandedChange: (next: boolean) => void;
@@ -254,6 +357,8 @@ function GenerationProfilesEditor({
   videoContinuityPolicy: VideoContinuityPolicy;
   onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
   generationMode?: GenerationMode;
+  imageResolutionOptions: readonly string[];
+  videoResolutionOptions: readonly string[];
 }) {
   const { t } = useTranslation(["dashboard", "templates"]);
   const videoProfileRows: Array<[VideoProfileKey, string]> = [
@@ -346,7 +451,7 @@ function GenerationProfilesEditor({
                 </span>
                 <SelectMenu
                   value={profiles[key]?.resolution ?? ""}
-                  options={IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
+                  options={imageResolutionOptions.map((resolution) => ({
                     value: resolution,
                     label: resolution,
                   }))}
@@ -381,7 +486,7 @@ function GenerationProfilesEditor({
                   </span>
                   <SelectMenu
                     value={profile?.resolution ?? ""}
-                    options={VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
+                    options={videoResolutionOptions.map((resolution) => ({
                       value: resolution,
                       label: resolution,
                     }))}

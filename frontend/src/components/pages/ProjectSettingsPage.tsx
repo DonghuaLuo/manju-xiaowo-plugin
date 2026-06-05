@@ -19,11 +19,13 @@ import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import {
   getProviderModels,
   getCustomProviderModels,
+  lookupResolutions,
   lookupStoryboardVideoStartImageSupport,
   lookupVideoContinuitySupport,
   storyboardVideoStartImageSupportFromCapabilities,
   videoContinuitySupportFromCapabilities,
 } from "@/utils/provider-models";
+import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
 import {
@@ -56,6 +58,7 @@ import {
   REFERENCE_IMAGE_POLICIES,
   SHOT_TIERS,
   VIDEO_PROFILE_RESOLUTIONS,
+  coerceResolutionForOptions,
   createDefaultGenerationProfiles,
   createDefaultShotTierProfiles,
   generationProfilesSignature,
@@ -158,6 +161,14 @@ type SourceLanguage = "zh" | "en" | "vi";
 type ImageProfileKey = "asset" | "storyboard_draft" | "storyboard_final" | "grid";
 type VideoProfileKey = "video_draft" | "video_final" | "reference_video_draft" | "reference_video_final";
 
+const IMAGE_PROFILE_KEYS: ImageProfileKey[] = ["asset", "storyboard_draft", "storyboard_final", "grid"];
+const VIDEO_PROFILE_KEYS: VideoProfileKey[] = [
+  "video_draft",
+  "video_final",
+  "reference_video_draft",
+  "reference_video_final",
+];
+
 interface InitialProjectSettingsSnapshot {
   videoBackend: string;
   imageBackendT2I: string;
@@ -182,6 +193,13 @@ const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
 const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
+
+function resolutionSelectOptions(resolutions: readonly string[]) {
+  return resolutions.map((resolution) => ({
+    value: resolution,
+    label: resolution,
+  }));
+}
 
 function routeLabel(route: GenerationRoutePreviewItem): string {
   return route.label ?? route.profile_key ?? route.task_kind;
@@ -374,6 +392,21 @@ export function ProjectSettingsPage() {
     error?: string;
   }>({ loading: false, routes: [], recommendations: [] });
 
+  const endpointToMediaType = useEndpointCatalogStore((s) => s.endpointToMediaType);
+  const fetchEndpointCatalog = useEndpointCatalogStore((s) => s.fetch);
+  useEffect(() => {
+    if (customProviders.length > 0) void fetchEndpointCatalog();
+  }, [customProviders.length, fetchEndpointCatalog]);
+
+  const getProfileResolutionOptions = useCallback(
+    (backend: string, fallback: readonly string[]) => {
+      if (!backend) return [...fallback];
+      const res = lookupResolutions(providers, backend, customProviders, endpointToMediaType);
+      return res.options.length > 0 ? res.options : [...fallback];
+    },
+    [customProviders, endpointToMediaType, providers],
+  );
+
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
   const [savingStyle, setSavingStyle] = useState(false);
@@ -525,19 +558,39 @@ export function ProjectSettingsPage() {
         (vModelId ? (legacyVideo[vModelId]?.resolution ?? null) : null) ||
         null;
       const iRes = effectiveIb ? (ms[effectiveIb]?.resolution ?? null) : null;
+      const initialImageResolutionOptions = (() => {
+        if (!effectiveIb) return [...IMAGE_PROFILE_RESOLUTIONS];
+        const res = lookupResolutions(providerList, effectiveIb, customProviderList);
+        return res.options.length > 0 ? res.options : [...IMAGE_PROFILE_RESOLUTIONS];
+      })();
+      const initialVideoResolutionOptions = (() => {
+        if (!effectiveVb) return [...VIDEO_PROFILE_RESOLUTIONS];
+        const res = lookupResolutions(providerList, effectiveVb, customProviderList);
+        return res.options.length > 0 ? res.options : [...VIDEO_PROFILE_RESOLUTIONS];
+      })();
+      const initialDefaultGenerationProfiles = createDefaultGenerationProfiles({
+        imageResolution: iRes,
+        videoResolution: vRes,
+        imageResolutionOptions: initialImageResolutionOptions,
+        videoResolutionOptions: initialVideoResolutionOptions,
+      });
+      const initialDefaultShotTierProfiles = createDefaultShotTierProfiles({
+        imageResolution: iRes,
+        videoResolution: vRes,
+        imageResolutionOptions: initialImageResolutionOptions,
+        videoResolutionOptions: initialVideoResolutionOptions,
+      });
       setVideoResolution(vRes);
       setImageResolution(iRes);
       setModelSettings(ms);
       const normalizedProfiles = normalizeGenerationProfiles(
         project.generation_profiles as GenerationProfiles | undefined,
-        createDefaultGenerationProfiles({
-          imageResolution: iRes,
-          videoResolution: vRes,
-        }),
+        initialDefaultGenerationProfiles,
       );
       setGenerationProfiles(normalizedProfiles);
       const normalizedShotTiers = normalizeShotTierProfiles(
         project.shot_tier_profiles as Partial<Record<ShotTier, ShotTierProfile>> | undefined,
+        initialDefaultShotTierProfiles,
       );
       setShotTierProfiles(normalizedShotTiers);
 
@@ -591,14 +644,52 @@ export function ProjectSettingsPage() {
     && (initialStyleRef.current.templateId !== null
       || initialStyleRef.current.uploadedPreview !== null
       || !!initialStyleRef.current.stylePrompt.trim());
-  const normalizedGenerationProfiles = normalizeGenerationProfiles(
-    generationProfiles,
-    createDefaultGenerationProfiles({
-      imageResolution,
-      videoResolution,
-    }),
+  const effectiveImageBackendForProfiles = imageBackendT2I || globalDefaults.imageT2I || "";
+  const effectiveVideoBackendForContinuity = videoBackend || globalDefaults.video || "";
+  const imageResolutionOptions = useMemo(
+    () =>
+      getProfileResolutionOptions(
+        effectiveImageBackendForProfiles,
+        IMAGE_PROFILE_RESOLUTIONS,
+      ),
+    [effectiveImageBackendForProfiles, getProfileResolutionOptions],
   );
-  const normalizedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
+  const videoResolutionOptions = useMemo(
+    () =>
+      getProfileResolutionOptions(
+        effectiveVideoBackendForContinuity,
+        VIDEO_PROFILE_RESOLUTIONS,
+      ),
+    [effectiveVideoBackendForContinuity, getProfileResolutionOptions],
+  );
+  const defaultGenerationProfiles = useMemo(
+    () =>
+      createDefaultGenerationProfiles({
+        imageResolution,
+        videoResolution,
+        imageResolutionOptions,
+        videoResolutionOptions,
+      }),
+    [imageResolution, imageResolutionOptions, videoResolution, videoResolutionOptions],
+  );
+  const defaultShotTierProfiles = useMemo(
+    () =>
+      createDefaultShotTierProfiles({
+        imageResolution,
+        videoResolution,
+        imageResolutionOptions,
+        videoResolutionOptions,
+      }),
+    [imageResolution, imageResolutionOptions, videoResolution, videoResolutionOptions],
+  );
+  const normalizedGenerationProfiles = useMemo(
+    () => normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles),
+    [defaultGenerationProfiles, generationProfiles],
+  );
+  const normalizedShotTierProfiles = useMemo(
+    () => normalizeShotTierProfiles(shotTierProfiles, defaultShotTierProfiles),
+    [defaultShotTierProfiles, shotTierProfiles],
+  );
   const normalizedGenerationProfilesSignature = generationProfilesSignature(normalizedGenerationProfiles);
   const normalizedShotTierProfilesSignature = shotTierProfilesSignature(normalizedShotTierProfiles);
   const scriptSplittingTemplateDirty =
@@ -615,14 +706,6 @@ export function ProjectSettingsPage() {
       : []),
   ];
   const routePreviewRequest = useMemo<GenerationRoutePreviewRequest>(() => {
-    const profiles = normalizeGenerationProfiles(
-      generationProfiles,
-      createDefaultGenerationProfiles({
-        imageResolution,
-        videoResolution,
-      }),
-    );
-    const tierProfiles = normalizeShotTierProfiles(shotTierProfiles);
     const routes: GenerationRoutePreviewRequest["routes"] = [
       { label: t("generation_profile_asset"), task_kind: "character", quality: "final", capability: "t2i" },
       { label: t("generation_profile_storyboard_draft"), task_kind: "storyboard", quality: "draft", capability: "t2i" },
@@ -646,8 +729,8 @@ export function ProjectSettingsPage() {
     }
     return {
       project_overrides: {
-        generation_profiles: profiles,
-        shot_tier_profiles: tierProfiles,
+        generation_profiles: normalizedGenerationProfiles,
+        shot_tier_profiles: normalizedShotTierProfiles,
         video_backend: videoBackend || null,
         image_provider_t2i: imageBackendT2I || null,
         image_provider_i2i: imageBackendI2I || null,
@@ -661,17 +744,15 @@ export function ProjectSettingsPage() {
   }, [
     audioOverride,
     defaultDuration,
-    generationProfiles,
     generationMode,
     imageBackendI2I,
     imageBackendT2I,
-    imageResolution,
     modelSettings,
-    shotTierProfiles,
+    normalizedGenerationProfiles,
+    normalizedShotTierProfiles,
     t,
     videoBackend,
     videoContinuityPolicy,
-    videoResolution,
   ]);
 
   const isDirty =
@@ -696,6 +777,107 @@ export function ProjectSettingsPage() {
   /* eslint-enable react-hooks/refs */
 
   useWarnUnsaved(isDirty);
+
+  useEffect(() => {
+    if (!options) return;
+
+    setGenerationProfiles((prev) => {
+      const base = normalizeGenerationProfiles(prev, defaultGenerationProfiles);
+      let changed = false;
+      const next: GenerationProfiles = { ...base };
+
+      for (const key of IMAGE_PROFILE_KEYS) {
+        const current = base[key]?.resolution;
+        if (!current) continue;
+        const coerced = coerceResolutionForOptions(current, imageResolutionOptions, current);
+        if (coerced !== current) {
+          next[key] = { ...base[key], resolution: coerced };
+          changed = true;
+        }
+      }
+
+      for (const key of VIDEO_PROFILE_KEYS) {
+        const current = base[key]?.resolution;
+        if (!current) continue;
+        const coerced = coerceResolutionForOptions(current, videoResolutionOptions, current);
+        if (coerced !== current) {
+          next[key] = { ...base[key], resolution: coerced };
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+
+    setShotTierProfiles((prev) => {
+      const base = normalizeShotTierProfiles(prev, defaultShotTierProfiles);
+      let changed = false;
+      const next: Record<ShotTier, ShotTierProfile> = { ...base };
+
+      const updateTierProfile = (
+        tier: ShotTier,
+        profileKey: "storyboard_final" | "video_final",
+        patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
+      ) => {
+        const tierProfile = next[tier];
+        next[tier] = {
+          ...tierProfile,
+          profiles: {
+            ...(tierProfile.profiles ?? {}),
+            [profileKey]: {
+              ...((tierProfile.profiles?.[profileKey] ?? {}) as ImageGenerationProfile | VideoGenerationProfile),
+              ...patch,
+            },
+          },
+        };
+      };
+
+      for (const tier of SHOT_TIERS) {
+        const tierProfile = base[tier];
+        const storyboardProfile = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
+        const storyboardResolution = storyboardProfile.resolution;
+        if (storyboardResolution) {
+          const coerced = coerceResolutionForOptions(
+            storyboardResolution,
+            imageResolutionOptions,
+            storyboardResolution,
+          );
+          if (coerced !== storyboardResolution) {
+            updateTierProfile(tier, "storyboard_final", { resolution: coerced });
+            changed = true;
+          }
+        }
+
+        const videoProfile = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+        const videoResolutionOverride = videoProfile.resolution;
+        if (videoResolutionOverride) {
+          const tierVideoOptions = getProfileResolutionOptions(
+            videoProfile.video_backend || effectiveVideoBackendForContinuity,
+            VIDEO_PROFILE_RESOLUTIONS,
+          );
+          const coerced = coerceResolutionForOptions(
+            videoResolutionOverride,
+            tierVideoOptions,
+            videoResolutionOverride,
+          );
+          if (coerced !== videoResolutionOverride) {
+            updateTierProfile(tier, "video_final", { resolution: coerced });
+            changed = true;
+          }
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [
+    defaultGenerationProfiles,
+    defaultShotTierProfiles,
+    effectiveVideoBackendForContinuity,
+    getProfileResolutionOptions,
+    imageResolutionOptions,
+    options,
+    videoResolutionOptions,
+  ]);
 
   useEffect(() => {
     if (!options || !projectName) return;
@@ -782,7 +964,6 @@ export function ProjectSettingsPage() {
   const finalQualityStats = findQualityGroup(routePreview.qualityStats, "final");
   const displayedQualityAverage =
     finalQualityStats?.average_rating ?? routePreview.qualityStats?.average_rating ?? null;
-  const effectiveVideoBackendForContinuity = videoBackend || globalDefaults.video || "";
   const videoContinuitySupport = useMemo(() => {
     if (!effectiveVideoBackendForContinuity) return null;
     const capsBackend = videoCapabilities
@@ -1113,12 +1294,9 @@ export function ProjectSettingsPage() {
       const normalizedEpisodeTargetUnits = normalizeEpisodeTargetUnits(episodeTargetUnits);
       const savedGenerationProfiles = normalizeGenerationProfiles(
         generationProfiles,
-        createDefaultGenerationProfiles({
-          imageResolution,
-          videoResolution,
-        }),
+        defaultGenerationProfiles,
       );
-      const savedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
+      const savedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles, defaultShotTierProfiles);
 
       await API.updateProject(projectName, {
         video_backend: videoBackend || null,
@@ -1159,7 +1337,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I, defaultGenerationProfiles, defaultShotTierProfiles]);
 
   return (
     <div
@@ -1535,6 +1713,10 @@ export function ProjectSettingsPage() {
                       const tierProfile = normalizedShotTierProfiles[tier];
                       const storyboardOverride = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
                       const videoOverride = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+                      const tierVideoResolutionOptions = getProfileResolutionOptions(
+                        videoOverride.video_backend || effectiveVideoBackendForContinuity,
+                        VIDEO_PROFILE_RESOLUTIONS,
+                      );
                       const tierVideoStartImageUnsupported = Boolean(
                         generationMode !== "reference_video" &&
                           videoOverride.video_backend &&
@@ -1623,10 +1805,7 @@ export function ProjectSettingsPage() {
                                 value={storyboardOverride.resolution ?? ""}
                                 options={[
                                   { value: "", label: t("follow_global_default") },
-                                  ...IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
-                                    value: resolution,
-                                    label: resolution,
-                                  })),
+                                  ...resolutionSelectOptions(imageResolutionOptions),
                                 ]}
                                 onChange={(next) =>
                                   updateShotTierOverride(tier, "storyboard_final", {
@@ -1646,10 +1825,7 @@ export function ProjectSettingsPage() {
                                 value={videoOverride.resolution ?? ""}
                                 options={[
                                   { value: "", label: t("follow_global_default") },
-                                  ...VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
-                                    value: resolution,
-                                    label: resolution,
-                                  })),
+                                  ...resolutionSelectOptions(tierVideoResolutionOptions),
                                 ]}
                                 onChange={(next) =>
                                   updateShotTierOverride(tier, "video_final", {
@@ -1677,6 +1853,7 @@ export function ProjectSettingsPage() {
                                 onChange={(next) =>
                                   updateShotTierOverride(tier, "video_final", {
                                     video_backend: next || null,
+                                    resolution: null,
                                   })
                                 }
                                 ariaLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
@@ -1735,10 +1912,7 @@ export function ProjectSettingsPage() {
                         </span>
                         <SelectMenu
                           value={normalizedGenerationProfiles[key]?.resolution ?? ""}
-                          options={IMAGE_PROFILE_RESOLUTIONS.map((resolution) => ({
-                            value: resolution,
-                            label: resolution,
-                          }))}
+                          options={resolutionSelectOptions(imageResolutionOptions)}
                           onChange={(next) =>
                             updateImageProfile(key, { resolution: next || null })
                           }
@@ -1772,10 +1946,7 @@ export function ProjectSettingsPage() {
                           </span>
                           <SelectMenu
                             value={profile?.resolution ?? ""}
-                            options={VIDEO_PROFILE_RESOLUTIONS.map((resolution) => ({
-                              value: resolution,
-                              label: resolution,
-                            }))}
+                            options={resolutionSelectOptions(videoResolutionOptions)}
                             onChange={(next) =>
                               updateVideoProfile(key, { resolution: next || null })
                             }

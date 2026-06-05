@@ -60,11 +60,17 @@ mcp__arcreel__get_video_capabilities({})
 `project.json.script_splitting.resolved_profile`。
 
 注意：`generation_mode=reference_video` 的输出结构固定是 `video_unit / shots / references`。
-如果当前 resolved_profile 是通用旧版方案（`legacy_passthrough=true`），或
-`locked_contract.unit_name` 不是 `video_unit`，不要把其中的 `segments` / `scenes`
-输出字段套到本文件；继续沿用本文下方的旧 reference_video unit 拆分规则，只把模板 ID
-和 hash 写入文件头。若 resolved_profile 的 `locked_contract.unit_name` 是 `video_unit`，
-则在不改变 `step1_reference_units.md` 基本结构的前提下，额外遵守其拆分规则、禁止写法和质检要求。
+如果当前 resolved_profile 是通用旧版方案（`legacy_passthrough=true`），不要套用新的输出字段，
+继续沿用本文下方的旧 reference_video unit 拆分规则，只把模板 ID 和 hash 写入文件头。
+
+如果当前 resolved_profile 不是旧版方案：
+- `locked_contract.unit_name == video_unit` 时，在不改变 `step1_reference_units.md` 基本结构的前提下，直接遵守其拆分规则、禁止写法和质检要求。
+- `locked_contract.unit_name != video_unit` 时，不要把其中的 `segments` / `scenes` 输出字段套到本文件，
+  但必须把 resolved_profile 的拆分规则、禁止写法、few-shot 和质检要求转译到 `video_unit / shots / references`：
+  - scene/segment 的镜头节拍 → 1-4 个连续 shot；
+  - reference_assets / first_frame_intent / continuity_anchor → references、首帧意图和动作衔接；
+  - camera_motion / provider_hints / sound_cue / audio_plan → shot 文本里的可执行运镜、声音和动作；
+  - 题材字段只转译可见、可听、可动的信息，不把抽象风格词或解释性备注直接写进 shot text。
 
 ### Step 2: 按 video_unit 粒度拆分
 

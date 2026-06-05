@@ -310,6 +310,66 @@ _REFERENCE_CONTRACT = {
 }
 
 
+_DRAMA_PRODUCTION_FIELDS = [
+    "scene_id",
+    "beat_type",
+    "dramatic_purpose",
+    "coverage_role",
+    "start_state",
+    "visible_action",
+    "dialogue_core",
+    "emotion_turn",
+    "reaction_target",
+    "end_state",
+    "shot_size",
+    "camera_angle",
+    "camera_motion",
+    "screen_direction",
+    "eyeline_match",
+    "match_action",
+    "continuity_anchor",
+    "reference_assets",
+    "asset_binding_requirements",
+    "first_frame_intent",
+    "lighting_palette",
+    "sound_cue",
+    "provider_hints",
+    "duration_seconds",
+    "segment_break",
+    "transition_to_next",
+    "production_note",
+]
+
+_DRAMA_PRODUCTION_SPLIT_RULES = [
+    "先把原文拆成可拍摄的视觉节拍，再按 establishing / action / reaction / insert / reveal / transition 选择 coverage_role。",
+    "每个镜头只安排一个清楚主体动作和一种镜头运动；复杂动作、多人调度或大场面必须拆成连续短镜头。",
+    "相邻镜头必须写明 end_state、start_state、screen_direction、eyeline_match 或 match_action 中至少一个衔接依据。",
+    "对白场面要保留视线匹配、反应镜头或插入镜头，不让关键情绪只停留在台词里。",
+    "图生视频、参考视频和宫格分镜都要写 first_frame_intent、reference_assets、provider_hints，让下游生成能直接接住首帧、主体和动作。",
+]
+
+_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS = [
+    "一个镜头同时换时空、换场景、换主动作或塞入多个反转。",
+    "只写高级、震撼、压迫、唯美等抽象风格词，没有主体动作、镜头运动或可见线索。",
+    "相邻镜头没有站位、视线、动作或道具状态衔接，导致剪辑时只能硬切。",
+    "为了追求炫技而安排 360 度旋转、快速变焦、多主体复杂运动等高失控镜头。",
+]
+
+_DRAMA_PRODUCTION_QUALITY_GATES = [
+    {"id": "single_shot_intent", "severity": "block", "description": "每个镜头必须只有一个主要动作或一个情绪转折。"},
+    {"id": "continuity_match", "severity": "warn", "description": "相邻镜头必须可通过视线、方向、动作或道具状态接上。"},
+    {"id": "generation_ready", "severity": "warn", "description": "first_frame_intent、reference_assets、provider_hints 应能直接服务图生视频/参考视频/宫格。"},
+]
+
+
+def _production_drama_fields(*style_fields: str) -> list[str]:
+    fields = list(_DRAMA_PRODUCTION_FIELDS)
+    insert_at = fields.index("provider_hints")
+    for field in reversed([item for item in style_fields if item and item not in fields]):
+        fields.insert(insert_at, field)
+    return fields
+
+
 BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
     "narration_legacy_reading_default": _template(
         template_id="narration_legacy_reading_default",
@@ -459,6 +519,60 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
             {"id": "source_fidelity", "severity": "block", "description": "不得虚构原文没有的反转。"},
         ],
     ),
+    "narration_cinematic_manga_drama": _template(
+        template_id="narration_cinematic_manga_drama",
+        content_mode="narration",
+        name="旁白漫剧镜头流",
+        description="保留小说旁白原文，同时把每段拆成可生成的影视化画面节拍，适合说书、漫剧和轻剧情旁白视频。",
+        recommended_generation_modes=list(GENERATION_MODE_ORDER),
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["subject_reference", "first_frame", "camera_command"],
+        locked_contract=_NARRATION_CONTRACT,
+        output_fields=[
+            "segment_id",
+            "narrative_purpose",
+            "novel_text",
+            "visual_focus",
+            "shot_size",
+            "camera_motion",
+            "continuity_anchor",
+            "first_frame_intent",
+            "sound_cue",
+            "duration_seconds",
+            "has_dialogue",
+            "segment_break",
+            "transition_to_next",
+        ],
+        split_rules=[
+            "novel_text 必须保留原文；影视化只写在 visual_focus、camera_motion、first_frame_intent 等字段中。",
+            "每个 segment 只承载一个旁白信息点和一个主视觉焦点，避免把长段心理活动拆成空泛氛围图。",
+            "不可见心理必须通过旁白保留，画面只补充可见动作、道具、光线、视线或环境动态。",
+            "连续同一场景内要写 continuity_anchor；segment_break=是时才允许重新建立空间和首帧构图。",
+            "camera_motion 以固定镜头、慢推、轻微跟随为主，只有动作明确时才使用更强运镜。",
+        ],
+        forbidden_patterns=[
+            "删改小说原文以适配画面。",
+            "把一整段旁白压成一个静态氛围词，例如孤独、绝望、震撼。",
+            "连续片段中角色服装、道具状态或空间方位无理由跳变。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "她终于在母亲的旧箱底找到那封被烧过一角的信。",
+                "good": "E1S01 novel_text=原句；visual_focus=旧木箱、烧角信纸和她停住的手；first_frame_intent=手电光照在箱底信纸上；transition_to_next=match cut to letter close-up。",
+            },
+            {
+                "source": "我这才知道，原来所有人都在骗我。",
+                "bad": "画面写我震惊地知道真相。",
+                "fixed": "旁白保留原句；画面聚焦她攥皱名单、目光扫过门外几道人影。",
+            },
+        ],
+        quality_gates=[
+            {"id": "novel_text_preserved", "severity": "block", "description": "novel_text 不得删改原文。"},
+            {"id": "visual_focus_actionable", "severity": "warn", "description": "visual_focus 必须能转成单帧画面或单镜头动作。"},
+            {"id": "narration_continuity", "severity": "warn", "description": "同场连续旁白片段应保留连续性锚点。"},
+        ],
+    ),
     "drama_legacy_scene_default": _template(
         template_id="drama_legacy_scene_default",
         content_mode="drama",
@@ -512,48 +626,28 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         template_id="drama_web_short_hook",
         content_mode="drama",
         name="短剧爽点节奏",
-        description="高密度冲突、强钩子、强反转；首版内置轻量连续性字段。",
+        description="高密度冲突、强钩子、强反转；同时补齐反应镜头、视线衔接和首帧锚点，适合短剧爽点内容。",
         recommended_generation_modes=["storyboard", "reference_video"],
         required_capabilities=["single_shot_video"],
-        preferred_capabilities=["subject_reference", "first_last_frame", "multi_shot"],
+        preferred_capabilities=["subject_reference", "first_last_frame", "multi_shot", "camera_command"],
         locked_contract=_DRAMA_CONTRACT,
-        output_fields=[
-            "scene_id",
-            "beat_type",
-            "dramatic_purpose",
-            "start_state",
-            "visible_action",
-            "dialogue_core",
-            "emotion_turn",
-            "end_state",
-            "shot_size",
-            "camera_angle",
-            "camera_motion",
-            "continuity_anchor",
-            "reference_assets",
-            "asset_binding_requirements",
-            "first_frame_intent",
-            "provider_hints",
-            "duration_seconds",
-            "segment_break",
-            "transition_to_next",
-        ],
+        output_fields=_production_drama_fields("payoff_hook"),
         split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
             "一个镜头只承担一个主要动作或一个明确情绪转折。",
-            "每个镜头都要写 start_state、visible_action、end_state 和 transition_to_next。",
-            "内心活动必须转成可见动作、表情、停顿、视线或对白。",
-            "写入轻量连续性字段：continuity_anchor、reference_assets、first_frame_intent。",
-            "首镜优先建立冲突或危险状态，避免从背景介绍开始。",
+            "首镜优先建立冲突、羞辱、危险、误会或强反差，不从背景介绍开始。",
+            "每 3-5 个镜头至少形成一次小 payoff：反击、打脸、身份露出、众人见证、证据翻出或情绪压倒。",
+            "payoff_hook 写下一镜观众期待看到的爽点兑现，不提前把后续反转解释完。",
         ],
         forbidden_patterns=[
-            "单镜头内混入多个时空、多个动作链或多个情绪反转。",
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
             "用决定、意识到、回忆起、感到绝望等不可见动词替代可见表演。",
-            "镜头之间没有状态衔接，只是孤立画面堆叠。",
+            "把爽点写成口号式总结，没有证据、反应镜头或可见行动承接。",
         ],
         few_shot_examples=[
             {
                 "source": "她看见丈夫牵着陌生女人进门，手里的汤碗摔碎。",
-                "good": "E1S01 start_state=她端汤站在门内；visible_action=目光定住、汤碗坠地；end_state=碎瓷散开，丈夫回头。",
+                "good": "E1S01 coverage_role=hook/action；start_state=她端汤站在门内；visible_action=目光定住、汤碗坠地；end_state=碎瓷散开，丈夫回头；reaction_target=丈夫与陌生女人；payoff_hook=下一镜看丈夫反应。",
             },
             {
                 "source": "他心里决定反击。",
@@ -562,9 +656,10 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
             },
         ],
         quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
             {"id": "state_fields_present", "severity": "block", "description": "start_state/end_state/transition_to_next 必须存在。"},
             {"id": "visible_action_only", "severity": "warn", "description": "visible_action 不应只写不可见心理。"},
-            {"id": "continuity_anchor_present", "severity": "warn", "description": "剧情模板需保留连续性锚点。"},
+            {"id": "payoff_visible", "severity": "warn", "description": "爽点兑现需要有可见证据、行动或反应镜头。"},
         ],
     ),
     "drama_reference_continuity_lite": _template(
@@ -614,6 +709,212 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
             {"id": "first_frame_intent_present", "severity": "warn", "description": "需要首帧意图描述。"},
         ],
     ),
+    "drama_cinematic_shot_flow": _template(
+        template_id="drama_cinematic_shot_flow",
+        content_mode="drama",
+        name="影视镜头流",
+        description="通用制作型预设：用建立镜头、动作镜头、反应镜头、插入镜头和匹配剪辑组织剧情，适合真人感和动漫感短剧。",
+        recommended_generation_modes=list(GENERATION_MODE_ORDER),
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["subject_reference", "first_last_frame", "multi_shot", "camera_command"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields(),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "重要动作优先拆成“动作开始 -> 动作中段 -> 反应/结果”三类镜头，而不是一个长镜头讲完。",
+            "每场开头先建立空间、人物站位或冲突关系；每场结束保留能剪到下一场的动作、视线、道具或声音。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "只有连续中景对白，没有反应、插入、特写或空间建立镜头。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "他推门进来，所有人都安静了。",
+                "good": "E1S01 coverage_role=establishing/action；visible_action=门被推开，屋内众人动作停住；reaction_target=桌边众人；screen_direction=他从画面右侧进入；match_action=推门动作接下一镜众人回头。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "coverage_variety", "severity": "warn", "description": "连续 4 个以上镜头不应全部是同一景别和同一 coverage_role。"},
+        ],
+    ),
+    "drama_suspense_clue_chain": _template(
+        template_id="drama_suspense_clue_chain",
+        content_mode="drama",
+        name="悬疑线索推进",
+        description="适合悬疑、复仇、刑侦和反转：按异常信号、线索特写、人物反应和延迟揭示来拆镜。",
+        recommended_generation_modes=list(GENERATION_MODE_ORDER),
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["first_frame", "camera_command", "native_audio", "subject_reference"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields("clue_state", "reveal_boundary"),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "每个镜头只推进一个线索：异常物件、可疑动作、证词矛盾、空间痕迹或人物反应。",
+            "clue_state 写清线索处于“发现 / 遮挡 / 被误读 / 被验证 / 暂不揭示”的哪一阶段。",
+            "reveal_boundary 写本镜头允许观众知道什么、必须保留什么；谜底不要提前解释完。",
+            "声音线索可以作为转场：脚步、门轴、钟声、手机震动等必须写入 sound_cue。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "用旁白直接揭露凶手、真相或幕后身份，跳过线索和反应镜头。",
+            "每个镜头都只写阴森氛围，没有可见线索或可听事件。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "她打开衣柜，发现里面挂着一件不属于自己的湿外套。",
+                "good": "E1S01 coverage_role=insert/reaction；clue_state=发现异常物件；visible_action=柜门打开，湿外套滴水；reaction_target=她的手停在门把上；reveal_boundary=只暴露外套来源异常，不说明来者是谁。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "clue_visible_or_audible", "severity": "warn", "description": "悬疑镜头必须有可见线索或可听线索。"},
+            {"id": "reveal_control", "severity": "warn", "description": "每个镜头只揭示一层信息，不提前解完谜底。"},
+        ],
+    ),
+    "drama_xuanhuan_xianxia_spectacle": _template(
+        template_id="drama_xuanhuan_xianxia_spectacle",
+        content_mode="drama",
+        name="玄幻修仙奇观",
+        description="适合玄幻、修仙、异能和国风战斗：用力量锚点、动作段落和反应镜头控制奇观，不把大场面写散。",
+        recommended_generation_modes=["storyboard", "reference_video", "grid"],
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["subject_reference", "element_reference", "first_last_frame", "multi_shot", "camera_command"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields("power_anchor", "scale_control"),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "先建立角色、法器、阵法、灵光或环境破坏的 power_anchor，再写动作爆发。",
+            "大场面按“起势 / 交锋 / 影响 / 反应 / 余波”拆成短镜头，避免单镜头同时写满天法术和多人战斗。",
+            "scale_control 写本镜头奇观尺度：近身细节、单人法术、双人交锋、场景级冲击或天地异象。",
+            "动漫风可写衣摆、发丝、灵光粒子、符文、尘土等细节，但动作仍必须物理可见。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "一镜同时写多人乱战、法术变化、场景坍塌和角色心理转折。",
+            "只写恢弘、燃、炸裂，没有明确法器、动作方向或环境影响。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "少年拔剑，剑身亮起青色符文，山门前的石阶寸寸裂开。",
+                "good": "E1S01 coverage_role=action/insert；power_anchor=青色符文长剑；visible_action=剑身亮起，石阶从剑尖方向裂开；scale_control=单人法术影响近景环境；sound_cue=石阶碎裂声。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "spectacle_anchor", "severity": "warn", "description": "奇观必须绑定角色、法器、阵法、场景破坏或明确能量锚点。"},
+            {"id": "scale_not_overloaded", "severity": "warn", "description": "单镜头奇观尺度不能同时跨越多个动作阶段。"},
+        ],
+    ),
+    "drama_apocalypse_survival_pressure": _template(
+        template_id="drama_apocalypse_survival_pressure",
+        content_mode="drama",
+        name="末世压迫逃生",
+        description="适合末世、生存、灾变和怪物压迫：按威胁距离、资源状态、空间出口和角色决策动作来拆镜。",
+        recommended_generation_modes=["storyboard", "reference_video"],
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["subject_reference", "first_last_frame", "camera_command", "native_audio"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields("threat_vector", "survival_resource", "escape_route"),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "每个镜头写清威胁从哪里来、离角色多远、角色能看见或听见什么。",
+            "survival_resource 写当前可用资源：武器、药品、燃料、食物、门锁、车辆、通讯或同伴状态。",
+            "escape_route 写角色可走的空间路径或被封锁的出口，保证追逐和逃生方向能接上。",
+            "压迫感来自可见限制：低光、狭窄空间、门缝、倒计时、脚步声、失效设备，而不是空泛恐慌。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "没有空间出口、威胁方向或资源状态，只写末世很危险。",
+            "同一镜头里既逃跑、战斗、找物资又完成情绪反转。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "走廊尽头传来撞门声，她只剩最后一发子弹。",
+                "good": "E1S01 coverage_role=establishing/insert；threat_vector=走廊尽头门后撞击；survival_resource=手枪仅一发子弹；escape_route=右侧消防门半掩；sound_cue=连续撞门声。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "threat_direction_present", "severity": "warn", "description": "末世压迫镜头应写清威胁方向和距离。"},
+            {"id": "survival_state_visible", "severity": "warn", "description": "资源、出口或同伴状态需要可见化。"},
+        ],
+    ),
+    "drama_folk_horror_ritual_dread": _template(
+        template_id="drama_folk_horror_ritual_dread",
+        content_mode="drama",
+        name="民俗鬼怪氛围",
+        description="适合民俗、怪谈、灵异和乡土恐怖：用禁忌、仪式物、空间声响和延迟露出来制造真实压迫。",
+        recommended_generation_modes=list(GENERATION_MODE_ORDER),
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["first_frame", "camera_command", "native_audio", "element_reference"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields("folklore_taboo", "ritual_symbol", "unseen_presence"),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "每个恐怖镜头先写可见民俗物或空间异常：红绳、纸钱、牌位、香灰、门槛、水缸、戏台、祠堂等。",
+            "folklore_taboo 写本镜头触犯或接近的禁忌，ritual_symbol 写承载禁忌的具体物件。",
+            "鬼怪不必频繁正面出现；可用影子、脚步、风铃、香灰、门缝、视线反应建立 unseen_presence。",
+            "恐怖衔接优先使用声音、视线、物件状态变化和慢推近景，不靠突兀跳吓堆叠。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "只写恐怖、诡异、阴森，没有民俗物件、空间异常或声音线索。",
+            "每个镜头都让鬼怪正面露出，导致悬念和真实感失效。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "她跨过门槛时，脚边的红绳自己断了。",
+                "good": "E1S01 coverage_role=insert/reaction；folklore_taboo=夜里不可跨祠堂门槛；ritual_symbol=门槛红绳；visible_action=红绳在脚边绷断；unseen_presence=门内烛火同时偏向同一侧。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "folk_anchor_visible", "severity": "warn", "description": "民俗恐怖镜头必须有可见仪式物、禁忌物或空间异常。"},
+            {"id": "horror_reveal_delayed", "severity": "warn", "description": "鬼怪露出要有延迟和反应，不应连续硬露。"},
+        ],
+    ),
+    "drama_emotional_conflict_performance": _template(
+        template_id="drama_emotional_conflict_performance",
+        content_mode="drama",
+        name="情感冲突表演",
+        description="适合婚恋、家庭、虐恋、职场和关系修罗场：用视线、停顿、微表情、反应镜头和物件细节承接情绪。",
+        recommended_generation_modes=list(GENERATION_MODE_ORDER),
+        default_generation_mode="storyboard",
+        required_capabilities=["single_shot_video"],
+        preferred_capabilities=["subject_reference", "first_last_frame", "dialogue_audio", "camera_command"],
+        locked_contract=_DRAMA_CONTRACT,
+        output_fields=_production_drama_fields("subtext", "acting_detail", "dialogue_timing"),
+        split_rules=[
+            *_DRAMA_PRODUCTION_SPLIT_RULES,
+            "情绪变化要拆成可拍表演：停顿、视线闪避、手部动作、呼吸、吞咽、笑容消失、拿起或放下物件。",
+            "subtext 写台词背后的真实意图；acting_detail 写可见表演细节，不能只写伤心、愤怒、崩溃。",
+            "dialogue_timing 写台词与动作的时间关系：先看见证据再开口、沉默后开口、打断对方、说完后反应。",
+            "冲突镜头要给对手反应或旁观者反应，尤其是羞辱、误会、摊牌和选择时刻。",
+        ],
+        forbidden_patterns=[
+            *_DRAMA_PRODUCTION_FORBIDDEN_PATTERNS,
+            "连续对白没有停顿、反应、视线或手部动作。",
+            "把情绪写成抽象总结，没有可见表演或物件互动。",
+        ],
+        few_shot_examples=[
+            {
+                "source": "她把离婚协议推到他面前，笑着说不用解释了。",
+                "good": "E1S01 coverage_role=action/reaction；visible_action=她把协议推过桌面，笑容停在嘴角；subtext=她已知道真相但压住情绪；acting_detail=指尖压住纸角微微发白；dialogue_timing=推纸后停一拍再说台词。",
+            }
+        ],
+        quality_gates=[
+            *_DRAMA_PRODUCTION_QUALITY_GATES,
+            {"id": "emotion_visible", "severity": "warn", "description": "情绪必须通过表演细节、停顿、视线或物件互动呈现。"},
+            {"id": "reaction_present", "severity": "warn", "description": "关键冲突需要对方或旁观者反应镜头。"},
+        ],
+    ),
     "drama_reference_continuity": _template(
         template_id="drama_reference_continuity",
         content_mode="drama",
@@ -637,15 +938,27 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
             "每个 video_unit 对应一次参考视频生成调用，包含 1-4 个连续 shot。",
             "references 必须覆盖 unit 中出现的关键角色、场景和道具。",
             "按 provider 能力把 2-4 个连续镜头合并为短任务，不把整集塞入一个 prompt。",
+            "每个 shot 只写一个主体动作和一种镜头运动；多动作、多反应或跨空间内容拆成多个 shot 或多个 unit。",
+            "同一 unit 内的 shot 必须共享连续空间、连续角色状态和可接上的动作方向；跨场景时开启新 unit。",
+            "shot_sequence 写清建立镜头、动作镜头、反应镜头、插入镜头或转场镜头的顺序。",
+            "audio_plan 只写本 unit 内可执行的对白、环境声和关键物体声，不把整集 BGM 或后期包装塞入生成任务。",
         ],
         forbidden_patterns=[
             "跨时空、跨场景或动作状态不连续的 shot 合并进同一 unit。",
             "忽略参考素材数量和时长上限。",
+            "shot text 复述参考图外貌、服装和场景细节，导致参考一致性被文本冲突覆盖。",
+            "一个 unit 承担完整一场戏或多个情绪转折，导致生成时动作和口型失控。",
         ],
-        few_shot_examples=[],
+        few_shot_examples=[
+            {
+                "source": "他从门口走到桌边，拿起账本，抬头看向对面的人。",
+                "good": "E1U01 shots=Shot1 @[他] 从门口走向 @[桌边]；Shot2 @[他] 拿起 @[账本] 并抬头；references=character:他, scene:房间, prop:账本；shot_sequence=动作镜头接反应镜头。",
+            }
+        ],
         quality_gates=[
             {"id": "reference_count_limit", "severity": "block", "description": "references 数量不得超过 provider 上限。"},
             {"id": "unit_duration_limit", "severity": "block", "description": "unit 总时长不得超过 provider 上限。"},
+            {"id": "unit_continuity", "severity": "warn", "description": "同一 unit 内镜头必须动作和空间连续。"},
         ],
     ),
 }
@@ -1311,7 +1624,7 @@ def provider_capability_profile(caps: dict[str, Any] | None) -> list[str]:
     if caps.get("supports_last_frame") or caps.get("supports_end_image"):
         mapped.add("first_last_frame")
     if caps.get("supports_reference_images") or int(caps.get("max_reference_images") or 0) > 0:
-        mapped.update({"reference_image", "subject_reference"})
+        mapped.update({"reference_image", "reference_video", "subject_reference"})
     if caps.get("supports_reference_with_start_image"):
         mapped.add("element_reference")
     if caps.get("supports_generate_audio"):
@@ -1321,9 +1634,9 @@ def provider_capability_profile(caps: dict[str, Any] | None) -> list[str]:
     model = str(caps.get("model") or "").lower()
     endpoint_family = str(caps.get("endpoint_family") or "")
     if provider_id in {"ark", "vidu", "dashscope"} or endpoint_family in {"ark-seedance", "vidu-video"}:
-        mapped.add("multi_shot")
+        mapped.update({"camera_command", "multi_shot"})
     if "seedance" in model or "kling" in model or "wan" in model or "vidu" in model:
-        mapped.add("multi_shot")
+        mapped.update({"camera_command", "multi_shot"})
     return sorted(mapped)
 
 

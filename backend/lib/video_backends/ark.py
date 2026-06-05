@@ -100,7 +100,7 @@ class ArkVideoBackend:
                 reference_images_with_start_image=True,
                 max_reference_images=9,
             )
-        if "seedance-1-5-pro" in model_lower:
+        if "seedance-1-5-pro" in model_lower or "seedance-1.5-pro" in model_lower:
             return VideoCapabilities(first_frame=True, last_frame=True, reference_images=False, max_reference_images=0)
         if "seedance-1-0-pro-fast" in model_lower:
             return VideoCapabilities(first_frame=True, last_frame=False, reference_images=False, max_reference_images=0)

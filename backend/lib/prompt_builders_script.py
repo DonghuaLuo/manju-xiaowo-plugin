@@ -50,24 +50,46 @@ def _step1_drama_table(profile: dict | None, episode: int) -> str:
         "scene_description": "详细的场景描述...",
         "dramatic_purpose": "本镜头的戏剧目的",
         "beat_type": "hook / conflict / reaction / reveal",
+        "coverage_role": "establishing / action / reaction / insert / reveal",
         "start_state": "镜头开始时的角色站位、表情、道具状态",
         "visible_action": "可见动作、表情、视线或对白",
         "dialogue_core": "核心对白或空",
         "emotion_turn": "情绪变化",
+        "reaction_target": "承接上一动作的反应角色或物件",
         "end_state": "镜头结束时必须接到下一镜的状态",
         "shot_size": "Close-up / Medium Shot / Long Shot",
         "camera_angle": "eye-level / low angle / high angle",
         "camera_motion": "Static / Tracking Shot / Pan Left",
+        "screen_direction": "角色从画面左向右移动，下一镜保持方向",
+        "eyeline_match": "她看向画面右侧，下一镜承接被看对象",
+        "match_action": "手触到门把手，下一镜从门内接开门动作",
         "continuity_anchor": "角色位置、道具状态、场景方位等连续性锚点",
         "reference_assets": "角色:某人; 场景:某地; 道具:某物",
         "asset_binding_requirements": "缺少参考资产时写需求",
         "first_frame_intent": "首帧主体位置、视线和关键道具",
+        "lighting_palette": "冷顶光 + 暖色台灯；主色锚点为青灰、米白、暗红",
+        "sound_cue": "门轴声 / 脚步声 / 风铃声",
+        "payoff_hook": "下一镜兑现身份反转或众人见证",
+        "clue_state": "线索处于发现 / 遮挡 / 被验证 / 暂不揭示",
+        "reveal_boundary": "本镜只让观众看到湿外套，不说明来者身份",
+        "power_anchor": "青色符文长剑 / 阵法光圈 / 灵力裂纹",
+        "scale_control": "近身细节 / 双人交锋 / 场景级冲击",
+        "threat_vector": "威胁来自走廊尽头，距离角色约三米",
+        "survival_resource": "只剩一发子弹 / 半瓶药 / 被堵住的消防门",
+        "escape_route": "右侧消防门半掩，下一镜可接转身冲出",
+        "folklore_taboo": "夜里不可跨祠堂门槛",
+        "ritual_symbol": "门槛红绳 / 纸钱 / 牌位 / 香灰",
+        "unseen_presence": "烛火偏向同一侧，门缝外有脚步声",
+        "subtext": "她已知道真相但压住情绪",
+        "acting_detail": "指尖压住纸角发白，笑容停在嘴角",
+        "dialogue_timing": "推纸后停一拍再开口",
         "shot_sequence": "同一任务内的镜头顺序",
         "provider_hints": "运镜、运动幅度、参考图或音频提示",
         "audio_plan": "对白、环境音、旁白意图",
         "duration_seconds": "<duration>",
         "segment_break": "是",
         "transition_to_next": "cut / fade / dissolve",
+        "production_note": "用于剪辑衔接的简短说明",
     }
     header = "| " + " | ".join(fields) + " |"
     separator = "| " + " | ".join("---" for _ in fields) + " |"
@@ -105,6 +127,28 @@ def _render_step1_to_json_bridge(profile: dict | None) -> str:
         "shot_sequence",
         "provider_hints",
         "audio_plan",
+        "coverage_role",
+        "reaction_target",
+        "screen_direction",
+        "eyeline_match",
+        "match_action",
+        "lighting_palette",
+        "sound_cue",
+        "payoff_hook",
+        "clue_state",
+        "reveal_boundary",
+        "power_anchor",
+        "scale_control",
+        "threat_vector",
+        "survival_resource",
+        "escape_route",
+        "folklore_taboo",
+        "ritual_symbol",
+        "unseen_presence",
+        "subtext",
+        "acting_detail",
+        "dialogue_timing",
+        "production_note",
     }
     if not fields.intersection(continuity_fields):
         return ""
@@ -112,6 +156,28 @@ def _render_step1_to_json_bridge(profile: dict | None) -> str:
 - 若 shots 表包含 start_state / visible_action / end_state：必须把状态衔接转写进 image_prompt.scene 与 video_prompt.action，不能只丢弃为备注。
 - 若 shots 表包含 continuity_anchor / reference_assets / first_frame_intent：用它们约束角色站位、关键道具、首帧构图和候选 characters/scenes/props。
 - 若 shots 表包含 shot_sequence / provider_hints / audio_plan：把可执行部分转写到 camera_motion、ambiance_audio、dialogue 或动作描述中；无法落入 schema 的信息要融入文字描述。
+- 若 shots 表包含 coverage_role / reaction_target / screen_direction / eyeline_match / match_action：用它们组织镜头景别、视线方向、动作承接和反应镜头，避免生成孤立画面。
+- 若 shots 表包含 sound_cue / lighting_palette / production_note：把声音、光源色彩和剪辑衔接意图转写到 ambiance_audio、composition.lighting 或 scene/action 描述中。
+- 若 shots 表包含题材字段（payoff_hook / clue_state / power_anchor / threat_vector / folklore_taboo / subtext 等）：把其中可见、可听、可动的部分转成画面与动作，不要只作为备注保留。
+"""
+
+
+def _render_narration_step1_to_json_bridge(profile: dict | None) -> str:
+    fields = set(_profile_output_fields(profile))
+    bridge_fields = {
+        "visual_focus",
+        "shot_size",
+        "camera_motion",
+        "continuity_anchor",
+        "first_frame_intent",
+        "sound_cue",
+        "transition_to_next",
+    }
+    if not fields.intersection(bridge_fields):
+        return ""
+    return """
+- 若 segments 表包含 visual_focus / first_frame_intent / continuity_anchor：把画面焦点、首帧构图和连续性锚点转写进 image_prompt.scene 与候选 assets。
+- 若 segments 表包含 camera_motion / sound_cue / transition_to_next：把可执行部分转写到 video_prompt.camera_motion、ambiance_audio 或动作描述中，不能只停留在拆分表备注里。
 """
 
 
@@ -203,6 +269,8 @@ def build_narration_prompt(
     pacing_block = (render_pacing_section("narration") + "\n\n") if is_v2_enabled() else ""
     profile_block = render_profile_prompt_section(script_splitting_profile)
     profile_section = f"{profile_block}\n" if profile_block else ""
+    step1_bridge = _render_narration_step1_to_json_bridge(script_splitting_profile)
+    step1_bridge_section = step1_bridge if step1_bridge else ""
 
     return f"""# 角色与任务
 
@@ -264,6 +332,7 @@ segments 表每行是一个待生成的片段，包含：片段 ID（E{episode}S
   - 候选 props：[{", ".join(prop_names) or "（无）"}]
   - 不要发明候选之外的名称。
 - **segment_break** / **duration_seconds**：与 segments 表保持一致。
+{step1_bridge_section}
 
 ## 图片提示词（image_prompt）——切换到「摄影师」视角
 

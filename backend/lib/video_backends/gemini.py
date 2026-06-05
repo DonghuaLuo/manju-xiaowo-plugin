@@ -167,7 +167,7 @@ class GeminiVideoBackend:
             "duration_seconds": duration_str,
         }
         if request.resolution is not None:
-            config_params["resolution"] = request.resolution
+            config_params["resolution"] = "4k" if request.resolution.lower() == "4k" else request.resolution
         if self._backend_type == "vertex":
             config_params["generate_audio"] = request.generate_audio
 

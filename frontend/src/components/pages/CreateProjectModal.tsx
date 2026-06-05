@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useLocation } from "wouter";
@@ -13,11 +13,14 @@ import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
 import {
+  IMAGE_PROFILE_RESOLUTIONS,
+  VIDEO_PROFILE_RESOLUTIONS,
   createDefaultGenerationProfiles,
   createDefaultShotTierProfiles,
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
-import { lookupVideoContinuitySupport } from "@/utils/provider-models";
+import { lookupResolutions, lookupVideoContinuitySupport } from "@/utils/provider-models";
+import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import {
   defaultScriptSplittingTemplateId,
   firstRecommendedGenerationMode,
@@ -27,7 +30,7 @@ import { WizardStep2Models, type WizardStep2Data } from "./create-project/Wizard
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { GenerationProfiles, VideoContinuityPolicy } from "@/types";
+import type { GenerationProfiles, MediaType, VideoContinuityPolicy } from "@/types";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -73,6 +76,22 @@ const STEP_CONNECTOR_INACTIVE_STYLE: CSSProperties = {
   height: 1,
   background: "var(--color-hairline-soft)",
 };
+
+function resolutionOptionsForBackend(
+  data: WizardStep2Data | null,
+  backend: string,
+  fallback: readonly string[],
+  endpointToMediaType: Record<string, MediaType>,
+): string[] {
+  if (!data || !backend) return [...fallback];
+  const res = lookupResolutions(
+    data.providers,
+    backend,
+    data.customProviders,
+    endpointToMediaType,
+  );
+  return res.options.length > 0 ? res.options : [...fallback];
+}
 
 function StepIndicator({ current }: { current: 1 | 2 | 3 }) {
   const { t } = useTranslation("templates");
@@ -199,6 +218,32 @@ export function CreateProjectModal() {
   // 前进/后退切 step 时 Step2 unmount/mount 不再触发 HTTP。
   const [step2Data, setStep2Data] = useState<WizardStep2Data | null>(null);
   const [step2Error, setStep2Error] = useState<string | null>(null);
+
+  const endpointToMediaType = useEndpointCatalogStore((s) => s.endpointToMediaType);
+  const fetchEndpointCatalog = useEndpointCatalogStore((s) => s.fetch);
+  useEffect(() => {
+    if ((step2Data?.customProviders.length ?? 0) > 0) void fetchEndpointCatalog();
+  }, [fetchEndpointCatalog, step2Data?.customProviders.length]);
+
+  const profileImageResolutionOptions = useMemo(() => {
+    const effectiveImageT2I = models.imageBackendT2I || step2Data?.globalDefaults.imageT2I || "";
+    return resolutionOptionsForBackend(
+      step2Data,
+      effectiveImageT2I,
+      IMAGE_PROFILE_RESOLUTIONS,
+      endpointToMediaType,
+    );
+  }, [endpointToMediaType, models.imageBackendT2I, step2Data]);
+
+  const profileVideoResolutionOptions = useMemo(() => {
+    const effectiveVideo = models.videoBackend || step2Data?.globalDefaults.video || "";
+    return resolutionOptionsForBackend(
+      step2Data,
+      effectiveVideo,
+      VIDEO_PROFILE_RESOLUTIONS,
+      endpointToMediaType,
+    );
+  }, [endpointToMediaType, models.videoBackend, step2Data]);
 
   useEffect(() => {
     let cancelled = false;
@@ -369,6 +414,8 @@ export function CreateProjectModal() {
       const defaultGenerationProfiles = createDefaultGenerationProfiles({
         imageResolution: models.imageResolution,
         videoResolution: models.videoResolution,
+        imageResolutionOptions: profileImageResolutionOptions,
+        videoResolutionOptions: profileVideoResolutionOptions,
       });
       const savedGenerationProfiles = generationProfilesCustomized
         ? normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles)
@@ -391,7 +438,12 @@ export function CreateProjectModal() {
         text_backend_overview: models.textBackendOverview || null,
         text_backend_style: models.textBackendStyle || null,
         generation_profiles: savedGenerationProfiles,
-        shot_tier_profiles: createDefaultShotTierProfiles(),
+        shot_tier_profiles: createDefaultShotTierProfiles({
+          imageResolution: models.imageResolution,
+          videoResolution: models.videoResolution,
+          imageResolutionOptions: profileImageResolutionOptions,
+          videoResolutionOptions: profileVideoResolutionOptions,
+        }),
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
       });
 

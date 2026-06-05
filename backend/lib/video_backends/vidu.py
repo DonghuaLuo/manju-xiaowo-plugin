@@ -145,6 +145,15 @@ _RESOLUTION_WHITELIST: dict[str, list[str]] = {
 }
 _DEFAULT_RESOLUTION = "720p"
 
+# 部分 Vidu 2.0 规格还受端点和时长共同约束；模型级白名单只用于兜底。
+_RESOLUTION_RULES: dict[tuple[str, str, int], list[str]] = {
+    ("vidu2.0", "/img2video", 4): ["360p", "720p", "1080p"],
+    ("vidu2.0", "/img2video", 8): ["720p"],
+    ("vidu2.0", "/start-end2video", 4): ["360p", "720p", "1080p"],
+    ("vidu2.0", "/start-end2video", 8): ["720p"],
+    ("vidu2.0", "/reference2video", 4): ["360p", "720p"],
+}
+
 
 class ViduVideoBackend:
     """Vidu 视频生成后端，按 request 字段分派到不同端点。"""
@@ -282,7 +291,12 @@ class ViduVideoBackend:
         }
 
         # 4) resolution 白名单兜底
-        resolution = _coerce_resolution(self._model, request.resolution)
+        resolution = _coerce_resolution(
+            self._model,
+            request.resolution,
+            endpoint=endpoint,
+            duration=duration,
+        )
         if resolution:
             body["resolution"] = resolution
 
@@ -384,9 +398,19 @@ def _coerce_duration(model: str, endpoint: str, requested: int | None) -> int:
     return int(nearest)
 
 
-def _coerce_resolution(model: str, requested: str | None) -> str | None:
+def _coerce_resolution(
+    model: str,
+    requested: str | None,
+    *,
+    endpoint: str | None = None,
+    duration: int | None = None,
+) -> str | None:
     """白名单内透传，否则降级到模型默认 720p（viduq1 默认 1080p）。"""
-    whitelist = _RESOLUTION_WHITELIST.get(model)
+    whitelist = None
+    if endpoint and duration is not None:
+        whitelist = _RESOLUTION_RULES.get((model, endpoint, duration))
+    if whitelist is None:
+        whitelist = _RESOLUTION_WHITELIST.get(model)
     if not whitelist:
         return requested
     if requested and requested in whitelist:

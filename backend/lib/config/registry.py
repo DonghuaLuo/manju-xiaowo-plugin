@@ -242,8 +242,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "negative_prompt", "video_extend"],
                 supported_durations=[4, 6, 8],
-                duration_resolution_constraints={"1080p": [8]},
-                resolutions=["720p", "1080p"],
+                duration_resolution_constraints={"1080p": [8], "4K": [8]},
+                resolutions=["720p", "1080p", "4K"],
                 max_reference_images=3,
 
                 pricing=_veo_video_pricing("veo-3.1-generate-preview", _VEO_STANDARD_RATES),),
@@ -252,8 +252,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "negative_prompt", "video_extend"],
                 supported_durations=[4, 6, 8],
-                duration_resolution_constraints={"1080p": [8]},
-                resolutions=["720p", "1080p"],
+                duration_resolution_constraints={"1080p": [8], "4K": [8]},
+                resolutions=["720p", "1080p", "4K"],
                 max_reference_images=3,
 
                 pricing=_veo_video_pricing("veo-3.1-fast-generate-preview", _VEO_FAST_RATES),),
@@ -322,7 +322,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "negative_prompt", "video_extend"],
                 supported_durations=[4, 6, 8],
-                resolutions=["720p", "1080p"],
+                duration_resolution_constraints={"1080p": [8], "4K": [8]},
+                resolutions=["720p", "1080p", "4K"],
                 max_reference_images=3,
 
                 pricing=_veo_video_pricing("veo-3.1-generate-001", _VEO_STANDARD_RATES),),
@@ -332,7 +333,8 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "negative_prompt", "video_extend"],
                 default=True,
                 supported_durations=[4, 6, 8],
-                resolutions=["720p", "1080p"],
+                duration_resolution_constraints={"1080p": [8], "4K": [8]},
+                resolutions=["720p", "1080p", "4K"],
                 max_reference_images=3,
 
                 pricing=_veo_video_pricing("veo-3.1-fast-generate-001", _VEO_FAST_RATES),),
@@ -405,7 +407,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 default=True,
                 supported_durations=list(range(4, 13)),
                 resolutions=["480p", "720p", "1080p"],
-                max_reference_images=9,
+                max_reference_images=0,
 
                 pricing=_ark_video_pricing(
                     "doubao-seedance-1-5-pro-251215",
@@ -433,7 +435,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "seed_control", "video_extend"],
                 supported_durations=list(range(4, 16)),
-                resolutions=["480p", "720p", "1080p"],
+                resolutions=["480p", "720p"],
                 max_reference_images=9,
 
                 pricing=_ark_video_pricing(
@@ -545,7 +547,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "seed_control", "flex_tier"],
                 supported_durations=list(range(4, 13)),
                 resolutions=["480p", "720p", "1080p"],
-                max_reference_images=9,
+                max_reference_images=0,
             ),
             "doubao-seedance-2.0": ModelInfo(
                 display_name="Seedance 2.0",
@@ -561,7 +563,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_video", "image_to_video", "generate_audio", "seed_control", "video_extend"],
                 default=True,
                 supported_durations=list(range(4, 16)),
-                resolutions=["480p", "720p", "1080p"],
+                resolutions=["480p", "720p"],
                 max_reference_images=9,
             ),
         },
@@ -701,7 +703,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "sora-2": ModelInfo(
                 display_name="Sora 2",
                 media_type="video",
-                capabilities=["text_to_video", "image_to_video"],
+                capabilities=["text_to_video", "image_to_video", "generate_audio"],
                 default=True,
                 supported_durations=[4, 8, 12],
                 resolutions=["720p"],
@@ -711,12 +713,12 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "sora-2-pro": ModelInfo(
                 display_name="Sora 2 Pro",
                 media_type="video",
-                capabilities=["text_to_video", "image_to_video"],
+                capabilities=["text_to_video", "image_to_video", "generate_audio"],
                 supported_durations=[4, 8, 12],
                 resolutions=["720p", "1024p"],
                 max_reference_images=1,
 
-                pricing=_sora_video_pricing("sora-2-pro", {"720p": 0.30, "1024p": 0.50, "1080p": 0.50}),),
+                pricing=_sora_video_pricing("sora-2-pro", {"720p": 0.30, "1024p": 0.50}),),
         },
     ),
     "vidu": ProviderMeta(
@@ -776,6 +778,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["image_to_video", "seed_control"],
                 supported_durations=[4, 8],
+                duration_resolution_constraints={"360p": [4], "1080p": [4]},
                 resolutions=["360p", "720p", "1080p"],
                 max_reference_images=7,
 

@@ -106,17 +106,45 @@ const BUILTIN_TEMPLATE_DISPLAY: Record<string, { name: string; description: stri
     name: "悬疑钩子节奏",
     description: "适合悬疑、复仇和反转内容：开头更抓人，段尾保留追问，让观众愿意继续看。",
   },
+  narration_cinematic_manga_drama: {
+    name: "旁白漫剧镜头流",
+    description: "适合说书、漫剧和轻剧情旁白：保留原文，同时把每段补成更明确的画面焦点和镜头衔接。",
+  },
   drama_legacy_scene_default: {
     name: "通用拆分方案",
     description: "兼容图生视频、参考视频和宫格分镜，把剧情拆成清晰可生成的视觉场景。",
   },
   drama_web_short_hook: {
     name: "短剧爽点节奏",
-    description: "适合爽文和短剧：优先冲突、反转和情绪爆点，让每个镜头都有明确动作和下一步钩子。",
+    description: "适合爽文和短剧：强化冲突、反转、众人反应和爽点兑现，同时保留可剪辑的镜头衔接。",
   },
   drama_reference_continuity_lite: {
     name: "角色道具连续性",
     description: "适合需要人物、场景、道具前后保持一致的剧情视频：每个镜头会强调主体位置、关键道具和首帧画面。",
+  },
+  drama_cinematic_shot_flow: {
+    name: "影视镜头流",
+    description: "通用制作型预设：用建立镜头、动作镜头、反应镜头和插入镜头组织剧情，适合追求真人/动漫剧感。",
+  },
+  drama_suspense_clue_chain: {
+    name: "悬疑线索推进",
+    description: "适合悬疑、刑侦、复仇和反转：按异常信号、线索特写、人物反应和延迟揭示来拆镜。",
+  },
+  drama_xuanhuan_xianxia_spectacle: {
+    name: "玄幻修仙奇观",
+    description: "适合玄幻、修仙、异能和国风战斗：先锚定法器、阵法或环境影响，再拆成稳定动作段落。",
+  },
+  drama_apocalypse_survival_pressure: {
+    name: "末世压迫逃生",
+    description: "适合末世、生存、灾变和怪物压迫：强调威胁方向、资源状态、出口路线和逃生衔接。",
+  },
+  drama_folk_horror_ritual_dread: {
+    name: "民俗鬼怪氛围",
+    description: "适合民俗、怪谈、灵异和乡土恐怖：用禁忌物、仪式物、声音线索和延迟露出来制造压迫。",
+  },
+  drama_emotional_conflict_performance: {
+    name: "情感冲突表演",
+    description: "适合婚恋、家庭、虐恋、职场和关系修罗场：用视线、停顿、微表情和物件细节承接情绪。",
   },
   drama_reference_continuity: {
     name: "参考视频高一致性",

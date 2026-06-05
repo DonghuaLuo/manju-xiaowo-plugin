@@ -394,6 +394,9 @@ _VIDEO_RESOLUTION_RANKS = {
     "2k": 2000,
     "4k": 4000,
 }
+_VIDU2_REFERENCE_VIDEO_DURATIONS = [4]
+_VIDU2_REFERENCE_VIDEO_RESOLUTIONS = ["360p", "720p"]
+_VIDU2_REFERENCE_VIDEO_RESOLUTION_CONSTRAINTS = {"360p": [4], "720p": [4]}
 
 
 def _drop_quality_duration(profile_key: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -589,6 +592,29 @@ def duration_options_for_resolution(
     return intersection or constrained
 
 
+def _apply_task_video_capability_overrides(
+    *,
+    task_kind: str,
+    provider_id: str,
+    model_id: str,
+    endpoint_family: str | None,
+    supported_durations: list[int],
+    supported_resolutions: list[str],
+    duration_resolution_constraints: dict[str, list[int]],
+) -> tuple[list[int], list[str], dict[str, list[int]]]:
+    if (
+        task_kind == "reference_video"
+        and model_id.lower() == "vidu2.0"
+        and (provider_id == "vidu" or endpoint_family == "vidu-video")
+    ):
+        return (
+            list(_VIDU2_REFERENCE_VIDEO_DURATIONS),
+            list(_VIDU2_REFERENCE_VIDEO_RESOLUTIONS),
+            {key: list(value) for key, value in _VIDU2_REFERENCE_VIDEO_RESOLUTION_CONSTRAINTS.items()},
+        )
+    return supported_durations, supported_resolutions, duration_resolution_constraints
+
+
 def _apply_video_backend_override(effective_payload: dict[str, Any], profile: dict[str, Any]) -> None:
     """Translate video_backend into ConfigResolver's payload keys."""
 
@@ -730,19 +756,35 @@ async def _resolve_video_route(
     supports_seed: bool | None = None
     service_tiers: list[str] = []
     max_reference_images: int | None = None
+    endpoint_family = ""
     provider_capability_hash_value = ""
     try:
         caps = await resolver.video_capabilities_for_model(resolved.provider_id, resolved.model_id, project)
         caps_for_hash = dict(caps)
         caps_for_hash.setdefault("provider_id", resolved.provider_id)
         caps_for_hash.setdefault("model", resolved.model_id)
-        provider_capability_hash_value = provider_capability_hash(caps_for_hash)
+        endpoint_family = str(caps.get("endpoint_family") or "")
         supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
         supported_durations = [int(item) for item in caps.get("supported_durations") or []]
         duration_resolution_constraints = {
             str(key): [int(item) for item in value or []]
             for key, value in (caps.get("duration_resolution_constraints") or {}).items()
         }
+        supported_durations, supported_resolutions, duration_resolution_constraints = (
+            _apply_task_video_capability_overrides(
+                task_kind=task_kind,
+                provider_id=resolved.provider_id,
+                model_id=resolved.model_id,
+                endpoint_family=endpoint_family,
+                supported_durations=supported_durations,
+                supported_resolutions=supported_resolutions,
+                duration_resolution_constraints=duration_resolution_constraints,
+            )
+        )
+        caps_for_hash["supported_durations"] = supported_durations
+        caps_for_hash["resolutions"] = supported_resolutions
+        caps_for_hash["duration_resolution_constraints"] = duration_resolution_constraints
+        provider_capability_hash_value = provider_capability_hash(caps_for_hash)
         supports_generate_audio = bool(caps["supports_generate_audio"]) if "supports_generate_audio" in caps else None
         supports_seed = bool(caps["supports_seed"]) if "supports_seed" in caps else None
         service_tiers = [str(item) for item in caps.get("service_tiers") or [] if str(item)]
