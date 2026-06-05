@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { Check, Loader2, Sparkles, Trash2, Upload, X } from "lucide-react";
 import {
   DEFAULT_TEMPLATE_ID,
   type StyleTemplate,
@@ -27,6 +27,8 @@ export interface StylePickerProps {
   templatePrompts?: Record<string, string>;
   onAnalyzeCustomStyle?: (file: UploadFileInput) => Promise<string>;
   analyzingCustomStyle?: boolean;
+  onDeleteFavorite?: (templateId: string) => void;
+  deletingFavoriteTemplateId?: string | null;
 }
 
 const SELECTED_RING_STYLE: CSSProperties = {
@@ -155,6 +157,8 @@ export function StylePicker({
   templatePrompts = {},
   onAnalyzeCustomStyle,
   analyzingCustomStyle = false,
+  onDeleteFavorite,
+  deletingFavoriteTemplateId = null,
 }: StylePickerProps) {
   const { t } = useTranslation(["common", "templates"]);
   const ownedBlobUrlRef = useRef<string | null>(null);
@@ -369,23 +373,56 @@ export function StylePicker({
           {templates.length > 0 ? (
             <>
               <div className="grid max-h-[360px] grid-cols-4 gap-3 overflow-y-auto p-1 pr-2">
-                {templates.map((tpl) => (
-                  <TemplateCard
-                    key={tpl.id}
-                    thumbnail={tpl.thumbnailUrl ?? thumbnailUrls[tpl.id] ?? null}
-                    label={tpl.name || t(`templates:name.${tpl.id}`)}
-                    tagline={tpl.tagline || t(`templates:tagline.${tpl.id}`, "")}
-                    isSelected={value.templateId === tpl.id}
-                    isDefault={tpl.id === DEFAULT_TEMPLATE_ID}
-                    defaultLabel={t("templates:template_selected_default")}
-                    onClick={() => onChange({
-                      ...value,
-                      mode: "template",
-                      templateId: tpl.id,
-                      stylePrompt: templatePrompts[tpl.id] ?? "",
-                    })}
-                  />
-                ))}
+                {templates.map((tpl) => {
+                  const canDeleteFavorite = tpl.category === "favorite" && !!onDeleteFavorite;
+                  const isDeleting = deletingFavoriteTemplateId === tpl.id;
+                  return (
+                    <div key={tpl.id} className="relative">
+                      <TemplateCard
+                        thumbnail={tpl.thumbnailUrl ?? thumbnailUrls[tpl.id] ?? null}
+                        label={tpl.name || t(`templates:name.${tpl.id}`)}
+                        tagline={tpl.tagline || t(`templates:tagline.${tpl.id}`, "")}
+                        isSelected={value.templateId === tpl.id}
+                        isDefault={tpl.id === DEFAULT_TEMPLATE_ID}
+                        defaultLabel={t("templates:template_selected_default")}
+                        onClick={() => onChange({
+                          ...value,
+                          mode: "template",
+                          templateId: tpl.id,
+                          stylePrompt: templatePrompts[tpl.id] ?? "",
+                        })}
+                      />
+                      {canDeleteFavorite ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteFavorite?.(tpl.id);
+                          }}
+                          disabled={isDeleting}
+                          aria-label={t("templates:delete_favorite_style", {
+                            defaultValue: "删除收藏风格",
+                          })}
+                          title={t("templates:delete_favorite_style", {
+                            defaultValue: "删除收藏风格",
+                          })}
+                          className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full text-text-2 transition-colors hover:text-text disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          style={{
+                            background: "oklch(0 0 0 / 0.62)",
+                            backdropFilter: "blur(6px)",
+                            WebkitBackdropFilter: "blur(6px)",
+                          }}
+                        >
+                          {isDeleting ? (
+                            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
               {promptEditor(false)}
             </>

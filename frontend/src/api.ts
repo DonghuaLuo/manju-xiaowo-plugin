@@ -871,6 +871,7 @@ export interface AssetArchiveIncludeOptions {
 export interface AssetArchiveExportOptions {
   includeAssets: AssetArchiveIncludeOptions;
   includeGlobalConfig: boolean;
+  includeScriptSplittingTemplates: boolean;
 }
 
 export interface ExportTaskStartResponse {
@@ -937,6 +938,7 @@ export interface AssetArchiveExportInfoResponse {
   projectsRoot?: string;
   globalAssetsRoot?: string;
   styleFavoritesRoot?: string;
+  scriptSplittingTemplatesRoot?: string;
   detail?: string;
 }
 
@@ -1197,6 +1199,12 @@ class API {
     return response.json() as Promise<{ success: boolean; template: StyleTemplateInfo }>;
   }
 
+  static async deleteFavoriteStyleTemplate(templateId: string): Promise<SuccessResponse> {
+    return this.request(`/style-templates/favorites/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+    });
+  }
+
 
   // ==================== 项目管理 ====================
 
@@ -1363,6 +1371,7 @@ class API {
     projectsRoot: string;
     globalAssetsRoot?: string;
     styleFavoritesRoot?: string;
+    scriptSplittingTemplatesRoot?: string;
   }> {
     const result = await PluginSDK.callBackend<AssetArchiveExportInfoResponse>(
       "arcreel_asset_archive_export_info",
@@ -1375,6 +1384,7 @@ class API {
       projectsRoot: result.projectsRoot,
       globalAssetsRoot: result.globalAssetsRoot,
       styleFavoritesRoot: result.styleFavoritesRoot,
+      scriptSplittingTemplatesRoot: result.scriptSplittingTemplatesRoot,
     };
   }
 

@@ -172,6 +172,8 @@ export default {
   asset_export_prop_library_hint: "Bao gồm metadata đạo cụ và ảnh đạo cụ toàn cục",
   asset_export_style_favorites: "Phong cách yêu thích tùy chỉnh",
   asset_export_style_favorites_hint: "Bao gồm mẫu phong cách yêu thích và ảnh thu nhỏ",
+  asset_export_script_splitting_templates: "Xuất mẫu tách kịch bản",
+  asset_export_script_splitting_templates_hint: "Bao gồm các mẫu tách kịch bản tùy chỉnh đã lưu",
   asset_export_global_config: "Xuất cả cấu hình toàn cục",
   asset_export_global_config_hint: "Bao gồm cấu hình agent, API nhà cung cấp, nhà cung cấp tùy chỉnh và mô hình mặc định.",
   asset_export_global_config_warning: "Cấu hình toàn cục chứa API Key nhạy cảm. Chỉ lưu vào vị trí đáng tin cậy.",

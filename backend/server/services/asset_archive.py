@@ -26,12 +26,15 @@ from lib.db.models.asset import Asset
 from lib.db.models.config import ProviderConfig, SystemSetting
 from lib.db.models.credential import ProviderCredential
 from lib.db.models.custom_provider import CustomProvider, CustomProviderModel
+from lib.script_splitting_templates import upsert_custom_script_splitting_template
 from server.services.project_archive import ProjectArchiveValidationError
 
 ASSET_ARCHIVE_FORMAT_VERSION = 1
 ASSET_ARCHIVE_MANIFEST_NAME = "arcreel-assets-export.json"
 ASSET_LIBRARY_METADATA_NAME = "asset-library/assets.json"
 GLOBAL_CONFIG_NAME = "global_config/config.json"
+SCRIPT_SPLITTING_TEMPLATES_ROOT_NAME = "_script_splitting_templates"
+SCRIPT_SPLITTING_TEMPLATES_NAME = f"{SCRIPT_SPLITTING_TEMPLATES_ROOT_NAME}/templates.json"
 PROJECTS_ROOT_NAME = "projects-root.txt"
 PROJECT_ARCHIVE_MANIFEST_NAME = "arcreel-export.json"
 PROJECT_FILE_NAME = "project.json"
@@ -66,6 +69,7 @@ class AssetArchiveOptions:
     asset_types: tuple[str, ...]
     include_style_favorites: bool
     include_global_config: bool
+    include_script_splitting_templates: bool = True
 
 
 @dataclass(frozen=True)
@@ -100,14 +104,21 @@ def normalize_asset_archive_options(params: dict[str, Any] | None = None) -> Ass
     )
     include_style_favorites = include_assets.get("styleFavorites", True) is not False
     include_global_config = bool(payload.get("includeGlobalConfig"))
+    include_script_splitting_templates = payload.get("includeScriptSplittingTemplates", True) is not False
 
-    if not selected_types and not include_style_favorites and not include_global_config:
+    if (
+        not selected_types
+        and not include_style_favorites
+        and not include_global_config
+        and not include_script_splitting_templates
+    ):
         raise ValueError("至少选择一类要导出的资产或配置")
 
     return AssetArchiveOptions(
         asset_types=selected_types,
         include_style_favorites=include_style_favorites,
         include_global_config=include_global_config,
+        include_script_splitting_templates=include_script_splitting_templates,
     )
 
 
@@ -298,12 +309,14 @@ class AssetArchiveService:
         self.projects_root = Path(projects_root or app_data_dir()).resolve()
         self.global_assets_root = self.projects_root / "_global_assets"
         self.style_favorites_root = self.projects_root / "_style_favorites"
+        self.script_splitting_templates_root = self.projects_root / SCRIPT_SPLITTING_TEMPLATES_ROOT_NAME
 
     def get_export_info(self) -> dict[str, str]:
         return {
             "projectsRoot": str(self.projects_root),
             "globalAssetsRoot": str(self.global_assets_root),
             "styleFavoritesRoot": str(self.style_favorites_root),
+            "scriptSplittingTemplatesRoot": str(self.script_splitting_templates_root),
         }
 
     async def import_archive(self, archive_path: Path) -> AssetArchiveImportResult:
@@ -325,6 +338,8 @@ class AssetArchiveService:
                     "assets": 0,
                     "asset_files": 0,
                     "style_favorites_files": 0,
+                    "script_splitting_templates": 0,
+                    "script_splitting_template_files": 0,
                     "global_config": False,
                     "global_config_rows": {},
                     "global_config_files": 0,
@@ -344,6 +359,7 @@ class AssetArchiveService:
                         await asyncio.to_thread(
                             self._install_imported_files,
                             staging_dir,
+                            warnings,
                         )
                     )
                     summary["global_config"] = bool(
@@ -588,6 +604,7 @@ class AssetArchiveService:
             "asset_types": list(options.asset_types),
             "style_favorites": options.include_style_favorites,
             "global_config": options.include_global_config,
+            "script_splitting_templates": options.include_script_splitting_templates,
         }
         manifest = {
             "format_version": ASSET_ARCHIVE_FORMAT_VERSION,
@@ -596,6 +613,7 @@ class AssetArchiveService:
             "asset_types": list(options.asset_types),
             "include_style_favorites": options.include_style_favorites,
             "include_global_config": options.include_global_config,
+            "include_script_splitting_templates": options.include_script_splitting_templates,
         }
 
         with zipfile.ZipFile(archive_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -624,6 +642,16 @@ class AssetArchiveService:
             if options.include_global_config:
                 archive.writestr(GLOBAL_CONFIG_NAME, _json_bytes(payload.get("global_config") or {}))
                 summary["files"] += self._write_optional_global_config_files(archive)
+
+            if options.include_script_splitting_templates:
+                if self.script_splitting_templates_root.exists():
+                    summary["files"] += self._write_tree(
+                        archive,
+                        self.script_splitting_templates_root,
+                        Path(SCRIPT_SPLITTING_TEMPLATES_ROOT_NAME),
+                    )
+                else:
+                    archive.writestr(SCRIPT_SPLITTING_TEMPLATES_NAME, _json_bytes({"templates": []}))
 
         return summary
 
@@ -678,6 +706,7 @@ class AssetArchiveService:
             PROJECTS_ROOT_NAME,
             "_global_assets",
             "_style_favorites",
+            SCRIPT_SPLITTING_TEMPLATES_ROOT_NAME,
         }
         skipped_roots: set[str] = set()
 
@@ -1109,6 +1138,45 @@ class AssetArchiveService:
     def _install_style_favorites(self, staging_dir: Path) -> int:
         return self._copy_tree(staging_dir / "_style_favorites", self.style_favorites_root)
 
+    def _install_script_splitting_templates(self, staging_dir: Path, warnings: list[str]) -> dict[str, int]:
+        source_path = staging_dir / SCRIPT_SPLITTING_TEMPLATES_NAME
+        if not source_path.exists():
+            return {
+                "script_splitting_templates": 0,
+                "script_splitting_template_files": 0,
+            }
+
+        payload = self._read_json_file(source_path, SCRIPT_SPLITTING_TEMPLATES_NAME)
+        raw_templates = payload.get("templates") if payload else None
+        if not isinstance(raw_templates, list):
+            warnings.append("_script_splitting_templates/templates.json 中 templates 字段不是列表，已跳过拆分模板")
+            return {
+                "script_splitting_templates": 0,
+                "script_splitting_template_files": 1,
+            }
+
+        imported = 0
+        for index, raw_template in enumerate(raw_templates):
+            if not isinstance(raw_template, dict):
+                warnings.append(f"拆分模板第 {index + 1} 条不是对象，已跳过")
+                continue
+            try:
+                upsert_custom_script_splitting_template(
+                    raw_template,
+                    data_root=self.projects_root,
+                    source="imported",
+                )
+            except ValueError as exc:
+                template_id = _text(raw_template.get("id")).strip() or f"#{index + 1}"
+                warnings.append(f"拆分模板 '{template_id}' 导入失败，已跳过：{exc}")
+                continue
+            imported += 1
+
+        return {
+            "script_splitting_templates": imported,
+            "script_splitting_template_files": 1,
+        }
+
     def _install_global_config_files(self, staging_dir: Path) -> int:
         written = 0
         legacy_config = staging_dir / "global_config" / "legacy" / ".system_config.json"
@@ -1124,12 +1192,14 @@ class AssetArchiveService:
         )
         return written
 
-    def _install_imported_files(self, staging_dir: Path) -> dict[str, int]:
-        return {
+    def _install_imported_files(self, staging_dir: Path, warnings: list[str]) -> dict[str, int]:
+        installed = {
             "asset_files": self._install_asset_files(staging_dir),
             "style_favorites_files": self._install_style_favorites(staging_dir),
             "global_config_files": self._install_global_config_files(staging_dir),
         }
+        installed.update(self._install_script_splitting_templates(staging_dir, warnings))
+        return installed
 
     @staticmethod
     def _copy_tree(source_root: Path, target_root: Path) -> int:

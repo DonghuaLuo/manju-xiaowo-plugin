@@ -47,7 +47,13 @@ from lib.script_splitting_templates import (
     validate_script_splitting_template,
 )
 from lib.status_calculator import StatusCalculator
-from lib.style_templates import is_known_template, list_style_templates, resolve_template_prompt
+from lib.style_templates import (
+    favorite_style_thumbnail_path,
+    get_favorite_style_template,
+    is_known_template,
+    list_style_templates,
+    resolve_template_prompt,
+)
 from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
 from lib.video_input_preflight import run_video_input_preflight
 from server.auth import CurrentUser, create_download_token, verify_download_token
@@ -87,6 +93,32 @@ def get_status_calculator() -> StatusCalculator:
 
 def _manager_data_root(manager: ProjectManager) -> Path:
     return Path(getattr(manager, "projects_root", getattr(manager, "base", app_data_dir())))
+
+
+def _materialize_favorite_style_for_project(
+    manager: ProjectManager,
+    project_name: str,
+    template: dict,
+    style_prompt: str,
+    _t: Translator,
+) -> dict[str, str]:
+    """把用户收藏风格复制为项目级自定义风格。"""
+    thumbnail_file = str(template.get("thumbnail_file") or "").strip()
+    try:
+        source_path = favorite_style_thumbnail_path(thumbnail_file, data_root=_manager_data_root(manager))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_t("forbidden_access")) from exc
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail=_t("file_not_found", path=thumbnail_file))
+
+    suffix = source_path.suffix.lower() or ".png"
+    style_filename = f"style_reference{suffix}"
+    target_path = manager.get_project_path(project_name) / style_filename
+    shutil.copyfile(source_path, target_path)
+    return {
+        "style_image": style_filename,
+        "style_description": style_prompt,
+    }
 
 
 def get_archive_service() -> ProjectArchiveService:
@@ -638,6 +670,7 @@ async def create_project(
             project_name = manual_name or manager.generate_project_name(title)
 
             style_prompt = (req.style or "").strip()
+            favorite_style_template: dict | None = None
             if req.style_template_id:
                 data_root = _manager_data_root(manager)
                 if not is_known_template(req.style_template_id, data_root=data_root):
@@ -646,6 +679,7 @@ async def create_project(
                         detail=_t("unknown_style_template", template_id=req.style_template_id),
                     )
                 style_prompt = style_prompt or resolve_template_prompt(req.style_template_id, data_root=data_root)
+                favorite_style_template = get_favorite_style_template(req.style_template_id, data_root=data_root)
 
             # legacy image_backend 已退役（拆为 image_provider_t2i/i2i）；写路径直接拒绝，
             # 避免迁移后再写时被解析链忽略、静默落到全局默认的另一供应商。
@@ -702,15 +736,29 @@ async def create_project(
                 extras["episode_target_units"] = episode_target_units
             # generation_mode 是项目级固定选择，创建时一次性写入。
             extras["generation_mode"] = req.generation_mode
+            metadata_style = style_prompt
+            style_template_id = req.style_template_id
+            if favorite_style_template is not None:
+                extras.update(
+                    _materialize_favorite_style_for_project(
+                        manager,
+                        project_name,
+                        favorite_style_template,
+                        style_prompt,
+                        _t,
+                    )
+                )
+                metadata_style = ""
+                style_template_id = None
             with project_change_source("webui"):
                 project = manager.create_project_metadata(
                     project_name,
                     title or manual_name,
-                    style_prompt,
+                    metadata_style,
                     req.content_mode,
                     aspect_ratio=req.aspect_ratio,
                     default_duration=req.default_duration,
-                    style_template_id=req.style_template_id,
+                    style_template_id=style_template_id,
                     script_splitting_template_id=req.script_splitting_template_id,
                     extras=extras or None,
                 )
@@ -1030,14 +1078,29 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                                 status_code=400,
                                 detail=_t("unknown_style_template", template_id=req.style_template_id),
                             )
-                        project["style_template_id"] = req.style_template_id
-                        project["style"] = style_override or resolve_template_prompt(
-                            req.style_template_id,
-                            data_root=data_root,
-                        )
-                        # 强互斥:模版与参考图二选一
-                        project.pop("style_image", None)
-                        project.pop("style_description", None)
+                        favorite_style_template = get_favorite_style_template(req.style_template_id, data_root=data_root)
+                        if favorite_style_template is not None:
+                            style_prompt = style_override or str(favorite_style_template.get("prompt") or "").strip()
+                            project.pop("style_template_id", None)
+                            project["style"] = ""
+                            project.update(
+                                _materialize_favorite_style_for_project(
+                                    manager,
+                                    name,
+                                    favorite_style_template,
+                                    style_prompt,
+                                    _t,
+                                )
+                            )
+                        else:
+                            project["style_template_id"] = req.style_template_id
+                            project["style"] = style_override or resolve_template_prompt(
+                                req.style_template_id,
+                                data_root=data_root,
+                            )
+                            # 强互斥:模版与参考图二选一
+                            project.pop("style_image", None)
+                            project.pop("style_description", None)
 
                 if req.clear_style_image:
                     # 显式清除自定义参考图，用于"清空风格"流程

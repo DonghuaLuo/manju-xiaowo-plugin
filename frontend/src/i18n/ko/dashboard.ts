@@ -31,6 +31,8 @@ export default {
   asset_export_prop_library_hint: "전역 소품 에셋과 메타데이터를 포함합니다",
   asset_export_style_favorites: "사용자 지정 스타일 즐겨찾기",
   asset_export_style_favorites_hint: "저장한 스타일 템플릿과 참조 이미지를 포함합니다",
+  asset_export_script_splitting_templates: "분할 템플릿 내보내기",
+  asset_export_script_splitting_templates_hint: "사용자가 저장한 스크립트 분할 템플릿을 포함합니다",
   asset_export_global_config: "전역 설정도 내보내기",
   asset_export_global_config_hint: "에이전트, 공급자, API 설정 및 기타 전역 설정을 포함합니다",
   asset_export_global_config_warning: "전역 설정에는 API 키 등 민감한 데이터가 포함될 수 있습니다. ZIP 파일을 안전하게 보관하세요.",

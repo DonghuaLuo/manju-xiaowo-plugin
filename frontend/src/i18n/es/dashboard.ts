@@ -31,6 +31,8 @@ export default {
   asset_export_prop_library_hint: "Incluye activos globales de utilería y sus metadatos",
   asset_export_style_favorites: "Favoritos de estilo personalizados",
   asset_export_style_favorites_hint: "Incluye plantillas de estilo guardadas e imágenes de referencia",
+  asset_export_script_splitting_templates: "Exportar plantillas de división",
+  asset_export_script_splitting_templates_hint: "Incluye plantillas de división de guion guardadas por el usuario",
   asset_export_global_config: "Exportar también configuración global",
   asset_export_global_config_hint: "Incluye agentes, proveedores, configuración de API y otros ajustes globales",
   asset_export_global_config_warning: "La configuración global puede contener claves API y otros datos sensibles. Guarda el ZIP en un lugar seguro.",

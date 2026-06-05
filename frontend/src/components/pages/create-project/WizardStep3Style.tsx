@@ -18,6 +18,8 @@ export interface WizardStep3StyleProps {
   templatePrompts?: Record<string, string>;
   onAnalyzeCustomStyle?: (file: UploadFileInput) => Promise<string>;
   analyzingCustomStyle?: boolean;
+  onDeleteFavorite?: (templateId: string) => void;
+  deletingFavoriteTemplateId?: string | null;
 }
 
 export function WizardStep3Style({
@@ -31,6 +33,8 @@ export function WizardStep3Style({
   templatePrompts,
   onAnalyzeCustomStyle,
   analyzingCustomStyle,
+  onDeleteFavorite,
+  deletingFavoriteTemplateId,
 }: WizardStep3StyleProps) {
   const { t } = useTranslation(["common", "dashboard", "templates"]);
 
@@ -48,6 +52,8 @@ export function WizardStep3Style({
           templatePrompts={templatePrompts}
           onAnalyzeCustomStyle={onAnalyzeCustomStyle}
           analyzingCustomStyle={analyzingCustomStyle}
+          onDeleteFavorite={onDeleteFavorite}
+          deletingFavoriteTemplateId={deletingFavoriteTemplateId}
         />
       </div>
 

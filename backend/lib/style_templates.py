@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import suppress
 from pathlib import Path
 from time import time
 from uuid import uuid4
@@ -265,6 +266,44 @@ def add_favorite_style_template(
 
 def _favorite_template_map(data_root: str | Path | None = None) -> dict[str, dict]:
     return {item["id"]: item for item in _load_favorite_style_items(data_root)}
+
+
+def get_favorite_style_template(template_id: str, data_root: str | Path | None = None) -> dict | None:
+    """返回用户收藏风格 payload；内置模板或未知 id 返回 None。"""
+    tpl_id = str(template_id or "").strip()
+    if not tpl_id.startswith("favorite_"):
+        return None
+    favorite = _favorite_template_map(data_root).get(tpl_id)
+    if favorite is None:
+        return None
+    return _template_payload(tpl_id, favorite)
+
+
+def delete_favorite_style_template(template_id: str, data_root: str | Path | None = None) -> bool:
+    """删除一个用户收藏风格及其缩略图；内置模板不可删除。"""
+    tpl_id = str(template_id or "").strip()
+    if not tpl_id.startswith("favorite_"):
+        return False
+
+    thumbnail_file: str | None = None
+    with _favorites_lock:
+        items = _load_favorite_style_items(data_root)
+        remaining: list[dict] = []
+        deleted = False
+        for item in items:
+            if item["id"] == tpl_id:
+                deleted = True
+                thumbnail_file = item.get("thumbnail_file")
+                continue
+            remaining.append(item)
+        if not deleted:
+            return False
+        _save_favorite_style_items(remaining, data_root)
+
+    if thumbnail_file:
+        with suppress(OSError, ValueError):
+            favorite_style_thumbnail_path(thumbnail_file, data_root).unlink(missing_ok=True)
+    return True
 
 
 def resolve_template_prompt(template_id: str, data_root: str | Path | None = None) -> str:

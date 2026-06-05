@@ -64,6 +64,7 @@ type AssetArchiveExportInfo = {
   projectsRoot: string;
   globalAssetsRoot?: string;
   styleFavoritesRoot?: string;
+  scriptSplittingTemplatesRoot?: string;
 };
 type GreetingKey =
   | "lobby_hero_greeting_morning"
@@ -1417,6 +1418,7 @@ export function ProjectsPage() {
         const importedFiles =
           (summary.asset_files ?? 0) +
           (summary.style_favorites_files ?? 0) +
+          (summary.script_splitting_template_files ?? 0) +
           (summary.global_config_files ?? 0);
         useAppStore
           .getState()
@@ -1840,11 +1842,13 @@ function AssetExportDialog({
       styleFavorites: true,
     },
     includeGlobalConfig: false,
+    includeScriptSplittingTemplates: true,
   });
 
   const selectedCount =
     Object.values(options.includeAssets).filter(Boolean).length +
-    (options.includeGlobalConfig ? 1 : 0);
+    (options.includeGlobalConfig ? 1 : 0) +
+    (options.includeScriptSplittingTemplates ? 1 : 0);
   const canExport = selectedCount > 0 && !exporting;
 
   const setAssetChecked = (key: keyof AssetArchiveExportOptions["includeAssets"], checked: boolean) => {
@@ -1930,6 +1934,32 @@ function AssetExportDialog({
         </div>
 
         <div className="rounded-xl border border-hairline-soft bg-bg/35 p-3.5">
+          <label
+            htmlFor="asset-export-script-splitting-templates"
+            aria-label={t("dashboard:asset_export_script_splitting_templates")}
+            className="mb-3 flex cursor-pointer items-start gap-3"
+          >
+            <input
+              id="asset-export-script-splitting-templates"
+              type="checkbox"
+              checked={options.includeScriptSplittingTemplates}
+              onChange={(event) =>
+                setOptions((current) => ({
+                  ...current,
+                  includeScriptSplittingTemplates: event.target.checked,
+                }))
+              }
+              className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-text">
+                {t("dashboard:asset_export_script_splitting_templates")}
+              </span>
+              <span className="mt-1 block text-[12px] leading-relaxed text-text-3">
+                {t("dashboard:asset_export_script_splitting_templates_hint")}
+              </span>
+            </span>
+          </label>
           <label
             htmlFor="asset-export-global-config"
             aria-label={t("dashboard:asset_export_global_config")}

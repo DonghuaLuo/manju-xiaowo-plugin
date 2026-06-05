@@ -278,6 +278,8 @@ export interface ImportAssetArchiveResponse {
     assets?: number;
     asset_files?: number;
     style_favorites_files?: number;
+    script_splitting_templates?: number;
+    script_splitting_template_files?: number;
     global_config?: boolean;
     global_config_rows?: Record<string, number>;
     global_config_files?: number;

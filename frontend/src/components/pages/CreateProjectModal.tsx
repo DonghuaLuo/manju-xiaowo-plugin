@@ -5,7 +5,7 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useLocation } from "wouter";
 import { Check, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { API, type ScriptSplittingTemplateInfo } from "@/api";
+import { API, type ScriptSplittingTemplateInfo, type StyleTemplateInfo } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
@@ -93,6 +93,23 @@ function resolutionOptionsForBackend(
   return res.options.length > 0 ? res.options : [...fallback];
 }
 
+function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
+  templates: StyleTemplate[];
+  prompts: Record<string, string>;
+} {
+  return {
+    prompts: Object.fromEntries(templates.map((tpl) => [tpl.id, tpl.prompt])),
+    templates: templates.map((tpl) => ({
+      id: tpl.id,
+      category: tpl.category,
+      thumbnailFile: tpl.thumbnail_file,
+      thumbnailUrl: tpl.thumbnail_url ?? null,
+      name: tpl.name ?? null,
+      tagline: tpl.tagline ?? null,
+    })),
+  };
+}
+
 function StepIndicator({ current }: { current: 1 | 2 | 3 }) {
   const { t } = useTranslation("templates");
   return (
@@ -169,7 +186,7 @@ function StepIndicator({ current }: { current: 1 | 2 | 3 }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function CreateProjectModal() {
-  const { t } = useTranslation(["dashboard", "common"]);
+  const { t } = useTranslation(["dashboard", "common", "templates"]);
   const [, navigate] = useLocation();
   const { setShowCreateModal } = useProjectsStore();
 
@@ -212,6 +229,7 @@ export function CreateProjectModal() {
   const [analyzingStyle, setAnalyzingStyle] = useState(false);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
+  const [deletingFavoriteTemplateId, setDeletingFavoriteTemplateId] = useState<string | null>(null);
   const [scriptSplittingTemplates, setScriptSplittingTemplates] = useState<ScriptSplittingTemplateInfo[]>([]);
 
   // Step2 的远端数据 hoist 到此处：只在 modal 挂载时 fetch 一次，
@@ -294,17 +312,8 @@ export function CreateProjectModal() {
       try {
         const result = await API.getStyleTemplates();
         if (cancelled) return;
-        const prompts = Object.fromEntries(
-          result.templates.map((tpl) => [tpl.id, tpl.prompt]),
-        );
-        setStyleTemplates(result.templates.map((tpl) => ({
-          id: tpl.id,
-          category: tpl.category,
-          thumbnailFile: tpl.thumbnail_file,
-          thumbnailUrl: tpl.thumbnail_url ?? null,
-          name: tpl.name ?? null,
-          tagline: tpl.tagline ?? null,
-        })));
+        const { templates, prompts } = normalizeStyleTemplatePayload(result.templates);
+        setStyleTemplates(templates);
         setStyleTemplatePrompts(prompts);
         setStyle((prev) => {
           if (prev.mode !== "template" || !prev.templateId || prev.stylePrompt.trim()) return prev;
@@ -380,6 +389,42 @@ export function CreateProjectModal() {
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, true);
+
+  const handleDeleteFavoriteStyle = async (templateId: string) => {
+    const confirmed = window.confirm(t("templates:delete_favorite_style_confirm", {
+      defaultValue: "删除后会从收藏列表移除。已创建项目不会受影响。确定删除？",
+    }));
+    if (!confirmed) return;
+
+    setDeletingFavoriteTemplateId(templateId);
+    try {
+      await API.deleteFavoriteStyleTemplate(templateId);
+      const result = await API.getStyleTemplates();
+      const { templates, prompts } = normalizeStyleTemplatePayload(result.templates);
+      setStyleTemplates(templates);
+      setStyleTemplatePrompts(prompts);
+      setStyle((prev) => {
+        if (prev.templateId !== templateId) return prev;
+        return {
+          ...prev,
+          mode: "template",
+          templateId: DEFAULT_TEMPLATE_ID,
+          activeCategory: "live",
+          stylePrompt: prompts[DEFAULT_TEMPLATE_ID] ?? "",
+        };
+      });
+      useAppStore.getState().pushToast(t("templates:delete_favorite_style_success", {
+        defaultValue: "已删除收藏风格",
+      }), "success");
+    } catch (err) {
+      useAppStore.getState().pushToast(t("templates:delete_favorite_style_failed", {
+        defaultValue: "删除收藏风格失败: {{message}}",
+        message: errMsg(err),
+      }), "error");
+    } finally {
+      setDeletingFavoriteTemplateId(null);
+    }
+  };
 
   const handleCreate = async () => {
     setCreating(true);
@@ -617,6 +662,8 @@ export function CreateProjectModal() {
               templatePrompts={styleTemplatePrompts}
               onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
               analyzingCustomStyle={analyzingStyle}
+              onDeleteFavorite={voidPromise(handleDeleteFavoriteStyle)}
+              deletingFavoriteTemplateId={deletingFavoriteTemplateId}
             />
           )}
         </div>

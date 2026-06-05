@@ -31,6 +31,8 @@ export default {
   asset_export_prop_library_hint: "グローバルな小道具アセットとメタデータを含めます",
   asset_export_style_favorites: "カスタムスタイルお気に入り",
   asset_export_style_favorites_hint: "保存済みのスタイルテンプレートと参照画像を含めます",
+  asset_export_script_splitting_templates: "分割テンプレートを書き出す",
+  asset_export_script_splitting_templates_hint: "保存済みのカスタム脚本分割テンプレートを含めます",
   asset_export_global_config: "グローバル設定も書き出す",
   asset_export_global_config_hint: "エージェント、プロバイダー、API 設定、その他のグローバル設定を含めます",
   asset_export_global_config_warning: "グローバル設定には API キーなどの機密情報が含まれる場合があります。ZIP は安全に保管してください。",

@@ -233,6 +233,7 @@ describe("ProjectsPage", () => {
       projectsRoot: "D:\\ArcReel\\projects",
       globalAssetsRoot: "D:\\ArcReel\\projects\\_global_assets",
       styleFavoritesRoot: "D:\\ArcReel\\projects\\_style_favorites",
+      scriptSplittingTemplatesRoot: "D:\\ArcReel\\projects\\_script_splitting_templates",
     });
 
     renderPage();
@@ -245,6 +246,7 @@ describe("ProjectsPage", () => {
     expect(screen.getByRole("checkbox", { name: /场景库/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /道具库/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /自定义风格收藏/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /导出拆分模板/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /同时导出全局配置/ })).not.toBeChecked();
     expect(await screen.findByText("D:\\ArcReel\\projects")).toBeInTheDocument();
   });
@@ -280,6 +282,7 @@ describe("ProjectsPage", () => {
           styleFavorites: true,
         },
         includeGlobalConfig: true,
+        includeScriptSplittingTemplates: true,
       });
     });
   });

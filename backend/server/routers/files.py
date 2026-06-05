@@ -34,6 +34,7 @@ from lib.source_loader import (
 )
 from lib.style_templates import (
     add_favorite_style_template,
+    delete_favorite_style_template,
     favorite_style_images_root,
     favorite_style_thumbnail_path,
     new_favorite_style_template_id,
@@ -953,6 +954,21 @@ async def create_favorite_style_template(
     except Exception as e:
         logger.exception("收藏风格失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/style-templates/favorites/{template_id}")
+async def delete_favorite_style_template_route(
+    template_id: str,
+    _user: CurrentUser,
+):
+    """删除一个用户收藏风格。"""
+    deleted = delete_favorite_style_template(
+        template_id,
+        data_root=get_project_manager().projects_root,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="收藏风格不存在")
+    return {"success": True}
 
 
 @router.post("/projects/{project_name}/style-image")

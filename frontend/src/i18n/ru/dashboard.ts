@@ -172,6 +172,8 @@ export default {
   asset_export_prop_library_hint: "Включает метаданные и изображения глобального реквизита",
   asset_export_style_favorites: "Избранные пользовательские стили",
   asset_export_style_favorites_hint: "Включает избранные шаблоны стиля и миниатюры",
+  asset_export_script_splitting_templates: "Экспортировать шаблоны деления",
+  asset_export_script_splitting_templates_hint: "Включает сохраненные пользовательские шаблоны деления сценария",
   asset_export_global_config: "Также экспортировать глобальную конфигурацию",
   asset_export_global_config_hint: "Включает настройки агента, API поставщиков, пользовательских поставщиков и моделей по умолчанию.",
   asset_export_global_config_warning: "Глобальная конфигурация содержит чувствительные API Key. Сохраняйте ее только в надежное место.",

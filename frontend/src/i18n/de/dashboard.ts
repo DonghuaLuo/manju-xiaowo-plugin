@@ -31,6 +31,8 @@ export default {
   asset_export_prop_library_hint: "Globale Requisiten-Assets und Metadaten einbeziehen",
   asset_export_style_favorites: "Eigene Stil-Favoriten",
   asset_export_style_favorites_hint: "Gespeicherte Stilvorlagen und Referenzbilder einbeziehen",
+  asset_export_script_splitting_templates: "Aufteilungsvorlagen exportieren",
+  asset_export_script_splitting_templates_hint: "Eigene gespeicherte Skript-Aufteilungsvorlagen einbeziehen",
   asset_export_global_config: "Globale Konfiguration ebenfalls exportieren",
   asset_export_global_config_hint: "Agenten, Anbieter, API-Konfigurationen und andere globale Einstellungen einbeziehen",
   asset_export_global_config_warning: "Die globale Konfiguration kann API-Schlüssel und andere sensible Daten enthalten. Bewahre das ZIP sicher auf.",

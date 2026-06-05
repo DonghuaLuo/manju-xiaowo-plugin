@@ -414,6 +414,7 @@ export function ProjectSettingsPage() {
   const [analyzingStyle, setAnalyzingStyle] = useState(false);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
+  const [deletingFavoriteTemplateId, setDeletingFavoriteTemplateId] = useState<string | null>(null);
   const initialRef = useRef<InitialProjectSettingsSnapshot>({
     videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null,
     textScript: "", textOverview: "", textStyle: "",
@@ -1199,6 +1200,44 @@ export function ProjectSettingsPage() {
     }
   }, [projectName, styleValue, t]);
 
+  const handleDeleteFavoriteStyle = useCallback(async (templateId: string) => {
+    const confirmed = window.confirm(t("delete_favorite_style_confirm", {
+      defaultValue: "删除后会从收藏列表移除。已创建项目不会受影响。确定删除？",
+    }));
+    if (!confirmed) return;
+
+    setDeletingFavoriteTemplateId(templateId);
+    try {
+      await API.deleteFavoriteStyleTemplate(templateId);
+      const templatesRes = await API.getStyleTemplates();
+      const { templates, prompts } = normalizeStyleTemplatePayload(templatesRes.templates);
+      setStyleTemplates(templates);
+      setStyleTemplatePrompts(prompts);
+      setStyleValue((prev) => {
+        if (!prev || prev.templateId !== templateId) return prev;
+        return {
+          ...prev,
+          mode: "template",
+          templateId: DEFAULT_TEMPLATE_ID,
+          activeCategory: "live",
+          uploadedFile: null,
+          uploadedPreview: null,
+          stylePrompt: prompts[DEFAULT_TEMPLATE_ID] ?? "",
+        };
+      });
+      useAppStore.getState().pushToast(t("delete_favorite_style_success", {
+        defaultValue: "已删除收藏风格",
+      }), "success");
+    } catch (e) {
+      useAppStore.getState().pushToast(t("delete_favorite_style_failed", {
+        defaultValue: "删除收藏风格失败: {{message}}",
+        message: errMsg(e),
+      }), "error");
+    } finally {
+      setDeletingFavoriteTemplateId(null);
+    }
+  }, [t]);
+
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
     setStyleValue({
@@ -1469,6 +1508,8 @@ export function ProjectSettingsPage() {
                 templatePrompts={styleTemplatePrompts}
                 onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
                 analyzingCustomStyle={analyzingStyle}
+                onDeleteFavorite={voidPromise(handleDeleteFavoriteStyle)}
+                deletingFavoriteTemplateId={deletingFavoriteTemplateId}
               />
             </SectionCard>
           )}
