@@ -32,6 +32,12 @@ from lib.custom_provider.endpoints import get_endpoint_spec
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.project_manager import ProjectManager
+from lib.script_splitting_templates import (
+    check_provider_compatibility,
+    ensure_project_script_splitting_snapshot,
+    provider_capability_hash,
+    provider_capability_profile,
+)
 from lib.text_backends.base import TextTaskType
 from lib.video_backends.base import VideoCapabilities
 
@@ -668,9 +674,10 @@ class ConfigResolver:
             if isinstance(gm, str) and gm:
                 generation_mode = gm
 
-        return {
+        payload = {
             "provider_id": provider_id,
             "model": model_id,
+            "task_kind": "video",
             "supported_durations": supported_durations,
             "max_duration": max_duration,
             "max_reference_images": max_reference_images,
@@ -685,6 +692,24 @@ class ConfigResolver:
             "content_mode": content_mode,
             "generation_mode": generation_mode,
         }
+        payload["constraints"] = {
+            "supported_aspect_ratios": ["9:16", "16:9", "1:1", "4:3", "3:4"],
+            "supported_durations": supported_durations,
+            "max_reference_images": max_reference_images,
+            "supported_resolutions": resolutions,
+            "duration_resolution_constraints": duration_resolution_constraints,
+            "supports_native_audio": bool(payload.get("supports_generate_audio")),
+        }
+        payload["provider_capability_profile"] = provider_capability_profile(payload)
+        payload["provider_capability_hash"] = provider_capability_hash(payload)
+        if project is not None:
+            ensure_project_script_splitting_snapshot(project, provider_capabilities=payload)
+            profile = project.get("script_splitting", {}).get("resolved_profile")
+            if isinstance(profile, dict):
+                payload["script_splitting_template_id"] = profile.get("id")
+                payload["script_splitting_hash"] = profile.get("hash")
+                payload["provider_compatibility"] = check_provider_compatibility(profile, payload)
+        return payload
 
     async def _resolve_default_image_backend(
         self, svc: ConfigService, session: AsyncSession, capability: Literal["t2i", "i2i"] = "t2i"

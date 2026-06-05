@@ -8,12 +8,14 @@ import {
   ChevronLeft,
   Film,
   Plug,
+  Scissors,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { AgentConfigTab } from "./AgentConfigTab";
 import { MediaModelSection } from "./settings/MediaModelSection";
 import { ProviderSection } from "./ProviderSection";
+import { ScriptSplittingTemplatesSection } from "./settings/ScriptSplittingTemplatesSection";
 import { UsageStatsSection } from "./settings/UsageStatsSection";
 
 // 全局设置页 · "Control Booth"
@@ -23,11 +25,12 @@ import { UsageStatsSection } from "./settings/UsageStatsSection";
 // Types
 // ---------------------------------------------------------------------------
 
-type SettingsSection = "agent" | "providers" | "media" | "usage";
+type SettingsSection = "agent" | "providers" | "media" | "script-splitting" | "usage";
 
 interface SectionDef {
   id: SettingsSection;
-  labelKey: string;
+  labelKey?: string;
+  label?: string;
   Icon: React.ComponentType<{ className?: string }>;
 }
 
@@ -47,6 +50,7 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: "providers", labelKey: "dashboard:providers", Icon: Plug },
       { id: "agent", labelKey: "dashboard:agents", Icon: Bot },
       { id: "media", labelKey: "dashboard:models", Icon: Film },
+      { id: "script-splitting", label: "拆分方案", Icon: Scissors },
     ],
   },
   {
@@ -70,6 +74,7 @@ export function SystemConfigPage() {
     const section = new URLSearchParams(search).get("section");
     if (section === "agent") return "agent";
     if (section === "media") return "media";
+    if (section === "script-splitting") return "script-splitting";
     if (section === "usage") return "usage";
     return "providers";
   }, [search]);
@@ -148,122 +153,123 @@ export function SystemConfigPage() {
       </header>
 
       {/* ─── Body: sidebar + content ─── */}
-      <div className="flex min-h-0 flex-1">
-        {/* Sidebar */}
-        <nav
-          aria-label={t("common:settings")}
-          className="w-[220px] shrink-0 overflow-y-auto border-r border-hairline-soft px-3 py-5"
-          style={{ background: "oklch(0.16 0.010 265 / 0.45)" }}
-        >
-          {SECTION_GROUPS.map((group, gi) => (
-            <div key={group.kicker} className={gi > 0 ? "mt-5" : undefined}>
-              <div className="mb-2 px-3 font-mono text-[9.5px] font-bold uppercase tracking-[0.16em] text-text-4">
-                {group.kicker}
-              </div>
-              {group.items.map(({ id, labelKey, Icon }) => {
-                const isActive = activeSection === id;
-                const hasIssue =
-                  (id === "providers" || id === "agent" || id === "media") &&
-                  configIssues.length > 0;
-
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveSection(id)}
-                    aria-current={isActive ? "page" : undefined}
-                    aria-pressed={isActive}
-                    className={
-                      "group relative mb-0.5 flex w-full items-center gap-2.5 rounded-[8px] border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
-                      (isActive
-                        ? "border-accent/35 bg-accent-dim text-text shadow-[inset_0_1px_0_oklch(1_0_0_/_0.04),0_0_22px_-10px_var(--color-accent-glow)]"
-                        : "border-transparent text-text-3 hover:border-hairline-soft hover:bg-bg-grad-a/55 hover:text-text")
-                    }
-                  >
-                    {/* Active rail — thin accent bar on the left edge */}
-                    <span
-                      aria-hidden
-                      className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-[2px] transition-opacity"
-                      style={{
-                        background:
-                          "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
-                        opacity: isActive ? 1 : 0,
-                      }}
-                    />
-                    <Icon
-                      className={
-                        "h-3.5 w-3.5 shrink-0 " +
-                        (isActive ? "text-accent-2" : "text-text-3 group-hover:text-text-2")
-                      }
-                    />
-                    <span className="flex-1 truncate">{t(labelKey)}</span>
-                    {hasIssue && (
-                      <span
-                        aria-label={t("dashboard:config_incomplete")}
-                        className="grid h-4 w-4 place-items-center rounded-full"
-                        style={{
-                          background: "oklch(0.30 0.10 25 / 0.22)",
-                          color: "var(--color-warm-bright)",
-                        }}
-                      >
-                        <AlertTriangle className="h-2.5 w-2.5" />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
-
-        {/* Content area — main is the scroll container.
-            providers section bypasses the centered padded wrapper so its sticky bottom bar
-            can truly hug the viewport edge (and sidebar can sticky-top across full height). */}
-        <main className="min-w-0 flex-1 overflow-y-auto">
-          {activeSection === "providers" ? (
-            <ProviderSection />
-          ) : (
-            <div className="mx-auto max-w-4xl px-8 py-8">
-              {/* Quick alert for config issues */}
-              {configIssues.length > 0 && (
-                <div
-                  className="mb-7 rounded-[10px] border p-4"
-                  style={{
-                    borderColor: "var(--color-warm-ring)",
-                    background: "var(--color-warm-tint)",
-                  }}
-                >
-                  <div className="mb-2 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-warm-bright">
-                    <AlertTriangle className="h-3.5 w-3.5" />
-                    {t("dashboard:config_issues")}
-                  </div>
-                  <p className="mb-2.5 text-[12px] leading-[1.55] text-text-2">
-                    {t("dashboard:config_issues_hint")}
-                  </p>
-                  <ul className="space-y-1.5">
-                    {configIssues.map((issue, idx) => (
-                      <li
-                        key={idx}
-                        className="flex items-start gap-2 text-[12px] text-text-3"
-                      >
-                        <span
-                          aria-hidden
-                          className="mt-1.5 h-[5px] w-[5px] shrink-0 rounded-full"
-                          style={{ background: "var(--color-warm)" }}
-                        />
-                        {t(`dashboard:${issue.label}`)}
-                      </li>
-                    ))}
-                  </ul>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <div className="mx-auto flex h-full w-full max-w-[1320px] px-6">
+          {/* Sidebar */}
+          <nav
+            aria-label={t("common:settings")}
+            className="w-[220px] shrink-0 overflow-y-auto border-l border-r border-hairline-soft px-3 py-5"
+            style={{ background: "oklch(0.16 0.010 265 / 0.45)" }}
+          >
+            {SECTION_GROUPS.map((group, gi) => (
+              <div key={group.kicker} className={gi > 0 ? "mt-5" : undefined}>
+                <div className="mb-2 px-3 font-mono text-[9.5px] font-bold uppercase tracking-[0.16em] text-text-4">
+                  {group.kicker}
                 </div>
-              )}
+                {group.items.map(({ id, labelKey, label, Icon }) => {
+                  const isActive = activeSection === id;
+                  const hasIssue =
+                    (id === "providers" || id === "agent" || id === "media") &&
+                    configIssues.length > 0;
 
-              {activeSection === "agent" && <AgentConfigTab visible />}
-              {activeSection === "media" && <MediaModelSection />}
-              {activeSection === "usage" && <UsageStatsSection />}
-            </div>
-          )}
-        </main>
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setActiveSection(id)}
+                      aria-current={isActive ? "page" : undefined}
+                      aria-pressed={isActive}
+                      className={
+                        "group relative mb-0.5 flex w-full items-center gap-2.5 rounded-[8px] border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+                        (isActive
+                          ? "border-accent/35 bg-accent-dim text-text shadow-[inset_0_1px_0_oklch(1_0_0_/_0.04),0_0_22px_-10px_var(--color-accent-glow)]"
+                          : "border-transparent text-text-3 hover:border-hairline-soft hover:bg-bg-grad-a/55 hover:text-text")
+                      }
+                    >
+                      {/* Active rail — thin accent bar on the left edge */}
+                      <span
+                        aria-hidden
+                        className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-[2px] transition-opacity"
+                        style={{
+                          background:
+                            "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
+                          opacity: isActive ? 1 : 0,
+                        }}
+                      />
+                      <Icon
+                        className={
+                          "h-3.5 w-3.5 shrink-0 " +
+                          (isActive ? "text-accent-2" : "text-text-3 group-hover:text-text-2")
+                        }
+                      />
+                      <span className="flex-1 truncate">{labelKey ? t(labelKey) : label}</span>
+                      {hasIssue && (
+                        <span
+                          aria-label={t("dashboard:config_incomplete")}
+                          className="grid h-4 w-4 place-items-center rounded-full"
+                          style={{
+                            background: "oklch(0.30 0.10 25 / 0.22)",
+                            color: "var(--color-warm-bright)",
+                          }}
+                        >
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+
+          {/* Content area — main is the scroll container inside the centered settings board. */}
+          <main className="min-w-0 flex-1 overflow-y-auto border-r border-hairline-soft">
+            {activeSection === "providers" ? (
+              <ProviderSection />
+            ) : (
+              <div className="w-full px-8 py-8">
+                {/* Quick alert for config issues */}
+                {configIssues.length > 0 && (
+                  <div
+                    className="mb-7 rounded-[10px] border p-4"
+                    style={{
+                      borderColor: "var(--color-warm-ring)",
+                      background: "var(--color-warm-tint)",
+                    }}
+                  >
+                    <div className="mb-2 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-warm-bright">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      {t("dashboard:config_issues")}
+                    </div>
+                    <p className="mb-2.5 text-[12px] leading-[1.55] text-text-2">
+                      {t("dashboard:config_issues_hint")}
+                    </p>
+                    <ul className="space-y-1.5">
+                      {configIssues.map((issue, idx) => (
+                        <li
+                          key={idx}
+                          className="flex items-start gap-2 text-[12px] text-text-3"
+                        >
+                          <span
+                            aria-hidden
+                            className="mt-1.5 h-[5px] w-[5px] shrink-0 rounded-full"
+                            style={{ background: "var(--color-warm)" }}
+                          />
+                          {t(`dashboard:${issue.label}`)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {activeSection === "agent" && <AgentConfigTab visible />}
+                {activeSection === "media" && <MediaModelSection />}
+                {activeSection === "script-splitting" && <ScriptSplittingTemplatesSection />}
+                {activeSection === "usage" && <UsageStatsSection />}
+              </div>
+            )}
+          </main>
+        </div>
       </div>
     </div>
   );

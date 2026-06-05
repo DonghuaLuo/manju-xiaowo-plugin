@@ -9,6 +9,8 @@ import {
   type GenerationRoutePreviewRequest,
   type ProviderRecommendation,
   type QualityStatsResponse,
+  type ScriptSplittingTemplateInfo,
+  type ScriptSplittingTemplatePreview,
   type StyleTemplateInfo,
   type VideoCapabilitiesResponse,
 } from "@/api";
@@ -24,6 +26,11 @@ import {
 } from "@/utils/provider-models";
 import { ModelConfigSection } from "@/components/shared/ModelConfigSection";
 import { StylePicker, type StylePickerValue } from "@/components/shared/StylePicker";
+import {
+  ScriptSplittingTemplateSelector,
+  defaultScriptSplittingTemplateId,
+  scriptSplittingTemplateSupportsGenerationMode,
+} from "@/components/shared/ScriptSplittingTemplateSelector";
 import { SelectMenu } from "@/components/ui/SelectMenu";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import type {
@@ -150,6 +157,26 @@ function normalizeStyleTemplatePayload(templates: StyleTemplateInfo[]): {
 type SourceLanguage = "zh" | "en" | "vi";
 type ImageProfileKey = "asset" | "storyboard_draft" | "storyboard_final" | "grid";
 type VideoProfileKey = "video_draft" | "video_final" | "reference_video_draft" | "reference_video_final";
+
+interface InitialProjectSettingsSnapshot {
+  videoBackend: string;
+  imageBackendT2I: string;
+  imageBackendI2I: string;
+  audioOverride: boolean | null;
+  textScript: string;
+  textOverview: string;
+  textStyle: string;
+  aspectRatio: string;
+  generationMode: string;
+  videoContinuityPolicy: VideoContinuityPolicy;
+  defaultDuration: number | null;
+  episodeTargetUnits: string;
+  sourceLanguage: SourceLanguage;
+  videoResolution: string | null;
+  imageResolution: string | null;
+  generationProfiles: string;
+  shotTierProfiles: string;
+}
 
 const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
@@ -313,6 +340,7 @@ export function ProjectSettingsPage() {
   const [textOverview, setTextOverview] = useState<string>("");
   const [textStyle, setTextStyle] = useState<string>("");
   const [aspectRatio, setAspectRatio] = useState<string>("");
+  const [contentMode, setContentMode] = useState<"narration" | "drama">("narration");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("storyboard");
   const [videoContinuityPolicy, setVideoContinuityPolicy] = useState<VideoContinuityPolicy>("auto");
   const [defaultDuration, setDefaultDuration] = useState<number | null>(null);
@@ -330,6 +358,12 @@ export function ProjectSettingsPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [videoCapabilities, setVideoCapabilities] = useState<VideoCapabilitiesResponse | null>(null);
+  const [scriptSplittingTemplates, setScriptSplittingTemplates] = useState<ScriptSplittingTemplateInfo[]>([]);
+  const [scriptSplittingTemplateId, setScriptSplittingTemplateId] = useState<string>("");
+  const [initialScriptSplittingTemplateId, setInitialScriptSplittingTemplateId] = useState("");
+  const [scriptSplittingPreview, setScriptSplittingPreview] = useState<ScriptSplittingTemplatePreview | null>(null);
+  const [scriptSplittingPreviewLoading, setScriptSplittingPreviewLoading] = useState(false);
+  const [changingScriptSplittingTemplate, setChangingScriptSplittingTemplate] = useState(false);
   const [projectTitle, setProjectTitle] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [routePreview, setRoutePreview] = useState<{
@@ -347,16 +381,16 @@ export function ProjectSettingsPage() {
   const [analyzingStyle, setAnalyzingStyle] = useState(false);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
-  const initialRef = useRef({
-    videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null as boolean | null,
+  const initialRef = useRef<InitialProjectSettingsSnapshot>({
+    videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null,
     textScript: "", textOverview: "", textStyle: "",
     aspectRatio: "", generationMode: "storyboard",
-    videoContinuityPolicy: "auto" as VideoContinuityPolicy,
-    defaultDuration: null as number | null,
+    videoContinuityPolicy: "auto",
+    defaultDuration: null,
     episodeTargetUnits: String(DEFAULT_EPISODE_TARGET_UNITS),
     sourceLanguage: "zh",
-    videoResolution: null as string | null,
-    imageResolution: null as string | null,
+    videoResolution: null,
+    imageResolution: null,
     generationProfiles: generationProfilesSignature(),
     shotTierProfiles: shotTierProfilesSignature(),
   });
@@ -370,14 +404,27 @@ export function ProjectSettingsPage() {
       API.getSystemConfig(),
       API.getProject(projectName),
       API.getStyleTemplates().catch(() => ({ success: false, templates: [] as StyleTemplateInfo[] })),
+      API.getScriptSplittingTemplates().catch(() => ({
+        success: false,
+        templates: [] as ScriptSplittingTemplateInfo[],
+      })),
       getProviderModels().catch(() => [] as ProviderInfo[]),
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
       API.getVideoCapabilities(projectName).catch(() => null),
-    ]).then(([configRes, projectRes, styleTemplatesRes, providerList, customProviderList, videoCaps]) => {
+    ]).then(([
+      configRes,
+      projectRes,
+      styleTemplatesRes,
+      scriptTemplatesRes,
+      providerList,
+      customProviderList,
+      videoCaps,
+    ]) => {
       if (disposed) return;
       const { templates, prompts: templatePrompts } = normalizeStyleTemplatePayload(styleTemplatesRes.templates);
       setStyleTemplates(templates);
       setStyleTemplatePrompts(templatePrompts);
+      setScriptSplittingTemplates(scriptTemplatesRes.templates);
 
       setOptions({
         video_backends: configRes.options?.video_backends ?? [],
@@ -419,6 +466,24 @@ export function ProjectSettingsPage() {
       // Mirror that here so the UI reflects the actually-effective ratio.
       const ar = rawAr || "9:16";
       const gm = normalizeMode(project.generation_mode);
+      const contentMode = project.content_mode === "drama" ? "drama" : "narration";
+      const rawScriptSplittingTemplateId =
+        typeof project.script_splitting_template_id === "string" && project.script_splitting_template_id
+          ? project.script_splitting_template_id
+          : "";
+      const rawScriptSplittingTemplate = scriptTemplatesRes.templates.find(
+        (tpl) => tpl.id === rawScriptSplittingTemplateId,
+      );
+      const currentScriptSplittingTemplateId =
+        rawScriptSplittingTemplateId
+        && rawScriptSplittingTemplate?.content_mode === contentMode
+        && scriptSplittingTemplateSupportsGenerationMode(rawScriptSplittingTemplate, gm)
+          ? rawScriptSplittingTemplateId
+          : defaultScriptSplittingTemplateId(
+              contentMode,
+              scriptTemplatesRes.templates,
+              gm,
+            );
       const vcp = normalizeVideoContinuityPolicy(project.video_continuity_policy);
       const dd = project.default_duration != null ? (project.default_duration as number) : null;
       const targetUnits = normalizeEpisodeTargetUnits(project.episode_target_units);
@@ -433,7 +498,10 @@ export function ProjectSettingsPage() {
       setTextOverview(to);
       setTextStyle(tst);
       setAspectRatio(ar);
+      setContentMode(contentMode);
       setGenerationMode(gm);
+      setScriptSplittingTemplateId(currentScriptSplittingTemplateId);
+      setInitialScriptSplittingTemplateId(currentScriptSplittingTemplateId);
       setVideoContinuityPolicy(vcp);
       setDefaultDuration(dd);
       setEpisodeTargetUnits(targetUnitsInput);
@@ -533,6 +601,9 @@ export function ProjectSettingsPage() {
   const normalizedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles);
   const normalizedGenerationProfilesSignature = generationProfilesSignature(normalizedGenerationProfiles);
   const normalizedShotTierProfilesSignature = shotTierProfilesSignature(normalizedShotTierProfiles);
+  const scriptSplittingTemplateDirty =
+    Boolean(scriptSplittingTemplateId)
+    && scriptSplittingTemplateId !== initialScriptSplittingTemplateId;
   const videoProfileRows: Array<[VideoProfileKey, string]> = [
     ["video_draft", t("generation_profile_video_draft")],
     ["video_final", t("generation_profile_video_final")],
@@ -620,6 +691,7 @@ export function ProjectSettingsPage() {
     imageResolution !== initialRef.current.imageResolution ||
     normalizedGenerationProfilesSignature !== initialRef.current.generationProfiles ||
     normalizedShotTierProfilesSignature !== initialRef.current.shotTierProfiles ||
+    scriptSplittingTemplateDirty ||
     styleIsDirty;
   /* eslint-enable react-hooks/refs */
 
@@ -664,6 +736,44 @@ export function ProjectSettingsPage() {
     };
   }, [options, projectName, routePreviewRequest]);
 
+  useEffect(() => {
+    if (!projectName || !scriptSplittingTemplateId) return;
+    if (!scriptSplittingTemplateDirty) {
+      const timer = window.setTimeout(() => {
+        setScriptSplittingPreview(null);
+        setScriptSplittingPreviewLoading(false);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      setScriptSplittingPreviewLoading(true);
+      voidCall(API.previewScriptSplittingTemplateChange(projectName, scriptSplittingTemplateId)
+        .then((res) => {
+          if (disposed) return;
+          setScriptSplittingPreview(res.preview);
+        })
+        .catch((error: unknown) => {
+          if (disposed) return;
+          setScriptSplittingPreview(null);
+          useAppStore.getState().pushToast(
+            t("script_splitting_preview_failed", {
+              defaultValue: "拆分方案预览失败: {{message}}",
+              message: errMsg(error),
+            }),
+            "error",
+          );
+        })
+        .finally(() => {
+          if (!disposed) setScriptSplittingPreviewLoading(false);
+        }));
+    }, 250);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [projectName, scriptSplittingTemplateDirty, scriptSplittingTemplateId, t]);
+
   const routePreviewIssues = useMemo(() => groupRoutePreviewIssues(
     routePreview.routes,
     t("unknown_error", { defaultValue: "未知错误" }),
@@ -695,7 +805,6 @@ export function ProjectSettingsPage() {
     }
     return lookupStoryboardVideoStartImageSupport(effectiveVideoBackendForContinuity, customProviders) === false;
   }, [customProviders, effectiveVideoBackendForContinuity, generationMode, videoCapabilities]);
-
   const updateImageProfile = (
     key: ImageProfileKey,
     patch: Partial<ImageGenerationProfile>,
@@ -933,9 +1042,62 @@ export function ProjectSettingsPage() {
     }
   }, [styleValue?.stylePrompt, t]);
 
+  const handleScriptSplittingTemplateChange = useCallback((templateId: string) => {
+    setScriptSplittingTemplateId(templateId);
+  }, []);
+
+  const handleApplyScriptSplittingTemplate = useCallback(async () => {
+    if (!scriptSplittingTemplateId || !scriptSplittingTemplateDirty) {
+      return;
+    }
+    setChangingScriptSplittingTemplate(true);
+    try {
+      const result = await API.changeScriptSplittingTemplate(
+        projectName,
+        scriptSplittingTemplateId,
+        false,
+        "apply_keep_drafts",
+      );
+      const nextId = result.project.script_splitting_template_id || scriptSplittingTemplateId;
+      setScriptSplittingTemplateId(nextId);
+      setInitialScriptSplittingTemplateId(nextId);
+      setScriptSplittingPreview(null);
+      const refreshedVideoCaps = await API.getVideoCapabilities(projectName).catch(() => null);
+      setVideoCapabilities(refreshedVideoCaps);
+      useAppStore.getState().pushToast(
+        t("script_splitting_template_saved", { defaultValue: "拆分方案已应用" }),
+        "success",
+      );
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(
+        t("script_splitting_template_save_failed", {
+          defaultValue: "拆分方案应用失败: {{message}}",
+          message: errMsg(e),
+        }),
+        "error",
+      );
+    } finally {
+      setChangingScriptSplittingTemplate(false);
+    }
+  }, [projectName, scriptSplittingTemplateDirty, scriptSplittingTemplateId, t]);
+
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
+      let savedScriptSplittingTemplateId = initialScriptSplittingTemplateId;
+      if (scriptSplittingTemplateDirty && scriptSplittingTemplateId) {
+        const result = await API.changeScriptSplittingTemplate(
+          projectName,
+          scriptSplittingTemplateId,
+          false,
+          "apply_keep_drafts",
+        );
+        savedScriptSplittingTemplateId = result.project.script_splitting_template_id || scriptSplittingTemplateId;
+        setScriptSplittingTemplateId(savedScriptSplittingTemplateId);
+        setInitialScriptSplittingTemplateId(savedScriptSplittingTemplateId);
+        setScriptSplittingPreview(null);
+      }
+
       // resolution 的 key 用 effective backend（override ‖ global default），
       // 否则"跟随全局默认"路径下用户选的分辨率不会被写入。
       const effectiveVideo = videoBackend || globalDefaults.video || "";
@@ -997,7 +1159,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
+  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I]);
 
   return (
     <div
@@ -1022,7 +1184,7 @@ export function ProjectSettingsPage() {
             "inset 0 1px 0 oklch(1 0 0 / 0.05), 0 6px 24px -12px oklch(0 0 0 / 0.45)",
         }}
       >
-        <div className="mx-auto flex max-w-3xl items-center gap-4 px-6 py-4">
+        <div className="mx-auto flex w-full max-w-[980px] items-center gap-4 px-6 py-4">
           <button
             onClick={() => guardedNavigate(`/app/projects/${projectName}`)}
             className="inline-flex items-center gap-1.5 rounded-md border border-hairline-soft bg-bg-grad-a/45 px-2.5 py-1.5 text-[12px] text-text-3 transition-colors hover:border-hairline hover:bg-bg-grad-a hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -1058,7 +1220,7 @@ export function ProjectSettingsPage() {
 
       {/* ─── Scrollable body ─── */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-6 py-7 pb-24 space-y-5">
+        <div className="mx-auto w-full max-w-[980px] space-y-5 px-6 py-7 pb-24">
           <div>
             <div className="font-mono text-[9.5px] font-bold uppercase tracking-[0.16em] text-text-3">
               {t("model_config")}
@@ -1130,6 +1292,85 @@ export function ProjectSettingsPage() {
                 onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
                 analyzingCustomStyle={analyzingStyle}
               />
+            </SectionCard>
+          )}
+
+          {scriptSplittingTemplates.length > 0 && (
+            <SectionCard
+              kicker="Script Split"
+              title={t("script_splitting_template_section_title", {
+                defaultValue: "拆分方案",
+              })}
+              footer={
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={voidPromise(handleApplyScriptSplittingTemplate)}
+                    disabled={
+                      changingScriptSplittingTemplate
+                      || scriptSplittingPreviewLoading
+                      || !scriptSplittingTemplateDirty
+                    }
+                    className={ACCENT_BTN_CLS}
+                    style={ACCENT_BUTTON_STYLE}
+                  >
+                    {changingScriptSplittingTemplate && (
+                      <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
+                    )}
+                    {changingScriptSplittingTemplate
+                      ? t("common:saving")
+                      : t("script_splitting_apply_template", { defaultValue: "应用拆分方案" })}
+                  </button>
+                  {scriptSplittingPreviewLoading && (
+                    <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-text-4">
+                      <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
+                      preview
+                    </span>
+                  )}
+                  {scriptSplittingPreview && scriptSplittingTemplateDirty && (
+                    <span className="text-[11.5px] leading-[1.45] text-text-3">
+                      {t("script_splitting_preview_future_only_summary", {
+                        defaultValue: "仅影响之后未生成的分集；已生成内容保持不变。",
+                      })}
+                    </span>
+                  )}
+                </div>
+              }
+            >
+              <ScriptSplittingTemplateSelector
+                value={scriptSplittingTemplateId}
+                contentMode={contentMode}
+                generationMode={generationMode}
+                templates={scriptSplittingTemplates}
+                onChange={handleScriptSplittingTemplateChange}
+                requireGenerationModeSupport
+              />
+              {scriptSplittingPreview && scriptSplittingTemplateDirty && (
+                <div className="mt-3 space-y-1.5 rounded-[10px] border border-white/10 bg-white/[0.035] p-3 text-[12px] leading-[1.55] text-text-3">
+                  <p>
+                    {t("script_splitting_future_only_detail", {
+                      defaultValue: "新方案会作为之后分集的拆分规则；已有 Step 1、JSON 剧本、分镜图、视频和剪映草稿都不会被标记重建。",
+                    })}
+                  </p>
+                  {(scriptSplittingPreview.preserved_existing_asset_count ?? 0) > 0 ? (
+                    <p>
+                      {t("script_splitting_preserved_existing_count", {
+                        defaultValue: "已检测到 {{count}} 项历史产物，将继续保留。",
+                        count: scriptSplittingPreview.preserved_existing_asset_count,
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              {videoCapabilities?.provider_compatibility?.warnings?.length ? (
+                <div className="mt-3 rounded-[10px] border border-amber-400/25 bg-amber-400/10 p-3">
+                  {videoCapabilities.provider_compatibility.warnings.map((warning) => (
+                    <p key={warning} className="text-[12px] leading-[1.5] text-amber-100">
+                      {warning}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
             </SectionCard>
           )}
 
@@ -1666,12 +1907,12 @@ export function ProjectSettingsPage() {
                   </legend>
                   <GenerationModeSelector
                     value={generationMode}
-                    onChange={setGenerationMode}
+                    onChange={() => {}}
                     readOnly
                   />
                   <p className="mt-2 text-[11.5px] leading-[1.45] text-text-4">
                     {t("generation_mode_locked_hint", {
-                      defaultValue: "已创建项目的生成模式固定，无法在项目设置中修改。",
+                      defaultValue: "已创建项目的生成方式固定，不能在项目设置中修改；拆分方案只能在兼容当前生成方式的范围内切换。",
                     })}
                   </p>
                 </fieldset>
@@ -1745,7 +1986,7 @@ export function ProjectSettingsPage() {
           boxShadow: "0 -8px 28px -12px oklch(0 0 0 / 0.55)",
         }}
       >
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-6 py-3">
+        <div className="mx-auto flex w-full max-w-[980px] items-center justify-between gap-3 px-6 py-3">
           <div className="min-w-0 flex items-center gap-2 text-[11.5px] text-text-3">
             <span
               aria-hidden

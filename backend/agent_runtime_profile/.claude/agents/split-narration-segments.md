@@ -49,6 +49,13 @@ mcp__arcreel__get_video_capabilities({})
 ### Step 1: 读取项目信息和小说原文
 
 使用 Read 工具读取 `project.json`（相对 session cwd），了解项目概述和已有角色/场景/道具。
+同时读取 `script_splitting_template_id`、`script_splitting.resolved_profile_hash` 和
+`script_splitting.resolved_profile`。如果 `resolved_profile.legacy_passthrough=true`，
+继续使用本文下方的旧版说书片段拆分规则和 Markdown 表头，不要把其中的
+`output_fields` 改写成新的列；只把模板 ID 和 hash 写入文件头。如果不是 legacy
+passthrough，则拆分时必须优先遵守 resolved_profile 中的 `split_rules`、
+`forbidden_patterns`、`output_fields` 和 `quality_gates`。如果项目缺少
+`script_splitting`，先报告主 agent 需要重新打开/刷新项目以补默认快照，不要自行发明模板。
 
 使用 Read 工具读取本集小说文件 `source/episode_{N}.txt`。
 
@@ -90,6 +97,13 @@ mcp__arcreel__get_video_capabilities({})
 ```
 
 使用 Write 工具写入文件。
+
+文件顶部附加模板元数据，便于 Step 2 dry-run 和后续排错：
+
+```markdown
+<!-- script_splitting_template_id: <template_id> -->
+<!-- script_splitting_hash: <resolved_profile_hash> -->
+```
 
 ### Step 4: 返回摘要
 

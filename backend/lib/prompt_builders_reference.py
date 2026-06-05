@@ -9,6 +9,26 @@
 
 from __future__ import annotations
 
+from lib.script_splitting_templates import render_profile_prompt_section
+
+
+def _render_reference_profile_prompt_section(profile: dict | None) -> str:
+    if not profile or profile.get("legacy_passthrough"):
+        return ""
+    contract = profile.get("locked_contract") if isinstance(profile.get("locked_contract"), dict) else {}
+    if contract.get("unit_name") == "video_unit":
+        return render_profile_prompt_section(profile)
+
+    return f"""# 拆分方案参考
+
+当前拆分方案：{profile.get("id")} / {profile.get("name")}
+模板 hash：{profile.get("hash")}
+定位：{profile.get("description")}
+
+当前生成方式固定输出 ReferenceVideoScript，step1_units 结构仍为 video_unit / shots / references。
+当前模板不是 video_unit 契约；为避免改变旧 reference_video units 结构，本 prompt 只记录模板身份和定位，不注入该模板的 scene/segment 输出字段或拆分规则。
+"""
+
 
 def _format_asset_names(assets: dict | None) -> str:
     if not assets:
@@ -33,6 +53,7 @@ def build_reference_video_prompt(
     max_duration: int | None = None,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
+    script_splitting_profile: dict | None = None,
 ) -> str:
     """构建参考生视频模式的 LLM Prompt。
 
@@ -49,6 +70,8 @@ def build_reference_video_prompt(
     character_names = list(characters.keys())
     scene_names = list(scenes.keys())
     prop_names = list(props.keys())
+    profile_block = _render_reference_profile_prompt_section(script_splitting_profile)
+    profile_section = f"{profile_block}\n" if profile_block else ""
 
     durations_desc = "/".join(str(d) for d in supported_durations) + "s"
     max_refs_line = (
@@ -71,7 +94,7 @@ def build_reference_video_prompt(
 **输出语言**：所有字符串值必须使用 {target_language}；JSON 键名 / 枚举值保持英文。
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段**。
 
-# 上下文
+{profile_section}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}

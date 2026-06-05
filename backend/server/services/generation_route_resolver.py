@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import ConfigResolver, ProviderModel
+from lib.script_splitting_templates import provider_capability_hash
 from server.services.resolution_resolver import resolve_resolution
 
 GenerationQuality = Literal["draft", "final", "custom"]
@@ -729,8 +730,13 @@ async def _resolve_video_route(
     supports_seed: bool | None = None
     service_tiers: list[str] = []
     max_reference_images: int | None = None
+    provider_capability_hash_value = ""
     try:
         caps = await resolver.video_capabilities_for_model(resolved.provider_id, resolved.model_id, project)
+        caps_for_hash = dict(caps)
+        caps_for_hash.setdefault("provider_id", resolved.provider_id)
+        caps_for_hash.setdefault("model", resolved.model_id)
+        provider_capability_hash_value = provider_capability_hash(caps_for_hash)
         supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
         supported_durations = [int(item) for item in caps.get("supported_durations") or []]
         duration_resolution_constraints = {
@@ -868,6 +874,7 @@ async def _resolve_video_route(
         duration_resolution_constraints=duration_resolution_constraints,
         warnings=warnings,
         source_version=payload.get("source_version") if payload else None,
+        provider_capability_hash=provider_capability_hash_value,
     )
     return GenerationRoute(
         task_kind=task_kind,
@@ -911,6 +918,7 @@ def _build_metadata(
     duration_resolution_constraints: dict[str, list[int]] | None = None,
     warnings: list[dict[str, Any]] | None = None,
     source_version: object = None,
+    provider_capability_hash: str | None = None,
 ) -> dict[str, Any]:
     route = compact_generation_payload(
         {
@@ -929,6 +937,7 @@ def _build_metadata(
             "supported_durations": supported_durations,
             "duration_resolution_constraints": duration_resolution_constraints,
             "warnings": warnings or None,
+            "provider_capability_hash": provider_capability_hash,
         }
     )
     return compact_generation_payload(
@@ -940,5 +949,6 @@ def _build_metadata(
             "shot_tier": shot_tier,
             "shot_tier_strategy": shot_tier_strategy or None,
             "source_version": source_version,
+            "provider_capability_hash": provider_capability_hash,
         }
     )

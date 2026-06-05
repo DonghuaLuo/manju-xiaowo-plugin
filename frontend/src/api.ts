@@ -117,8 +117,8 @@ interface ProviderInputImageMetadata {
 }
 
 export interface VideoContinuityMetadata {
-  requested_policy?: VideoContinuityPolicy | string;
-  effective_policy?: "start_only" | "end_frame" | "reference_assisted" | string;
+  requested_policy?: string;
+  effective_policy?: string;
   start_storyboard_id?: string;
   end_storyboard_id?: string;
   submitted_end_image?: string;
@@ -161,8 +161,10 @@ export interface VersionInfo {
     supported_durations?: number[];
     duration_resolution_constraints?: Record<string, number[]>;
     warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+    provider_capability_hash?: string | null;
   };
   generation_route_warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
+  provider_capability_hash?: string | null;
   shot_tier?: "S" | "A" | "B" | null;
   shot_tier_strategy?: Record<string, unknown> | null;
   provider_input_images?: Record<
@@ -301,6 +303,7 @@ export interface CreateProjectPayload {
   source_language?: "zh" | "en" | "vi";
   episode_target_units?: number | null;
   generation_mode?: GenerationMode;
+  script_splitting_template_id?: string | null;
   default_duration?: number | null;
   style_template_id?: string | null;
   video_backend?: string | null;
@@ -366,6 +369,162 @@ export interface GenerationRoutePreviewResponse {
   routes: GenerationRoutePreviewItem[];
 }
 
+export interface ScriptSplittingProviderCompatibility {
+  status: "ok" | "warn" | "block" | "unknown";
+  provider_id?: string | null;
+  model?: string | null;
+  capabilities?: string[];
+  missing_required?: string[];
+  missing_preferred?: string[];
+  warnings?: string[];
+}
+
+export interface ScriptSplittingGenerationModeCompatibility {
+  status: "ok" | "warn" | "block";
+  generation_mode: string;
+  warnings?: string[];
+}
+
+export interface ScriptSplittingTemplateInfo {
+  id: string;
+  version?: number | null;
+  source?: string;
+  base_template_id?: string | null;
+  derived_from_template_id?: string | null;
+  creation_mode?: "improve" | "new_style" | null;
+  content_mode: "narration" | "drama";
+  name: string;
+  description?: string;
+  supported_generation_modes?: GenerationMode[];
+  recommended_generation_modes?: GenerationMode[];
+  default_generation_mode?: GenerationMode | null;
+  required_capabilities?: string[];
+  preferred_capabilities?: string[];
+  output_fields?: string[];
+  split_rules?: string[];
+  forbidden_patterns?: string[];
+  user_overlay?: {
+    intent_brief?: string;
+    derivation_note?: string;
+    tone_preferences?: string[];
+    extra_split_rules?: string[];
+    extra_forbidden_patterns?: string[];
+    example_source?: string;
+    example_expected_output?: string;
+  };
+  hash?: string;
+  generation_mode_compatibility?: ScriptSplittingGenerationModeCompatibility;
+  provider_compatibility?: ScriptSplittingProviderCompatibility;
+}
+
+export interface ScriptSplittingTemplateValidationIssue {
+  id: string;
+  check_type: string;
+  severity: "block" | "warn";
+  field: string;
+  message: string;
+  repair_hint?: string;
+  autofix_allowed?: boolean;
+}
+
+export interface ScriptSplittingTemplateValidation {
+  ok: boolean;
+  errors: ScriptSplittingTemplateValidationIssue[];
+  warnings: ScriptSplittingTemplateValidationIssue[];
+  profile?: ScriptSplittingTemplateInfo;
+}
+
+export interface ScriptSplittingTemplatesResponse {
+  success: boolean;
+  templates: ScriptSplittingTemplateInfo[];
+}
+
+export interface ScriptSplittingTemplateUpsertPayload {
+  id?: string | null;
+  base_template_id?: string | null;
+  derived_from_template_id?: string | null;
+  creation_mode?: "improve" | "new_style" | null;
+  name?: string | null;
+  description?: string | null;
+  supported_generation_modes?: GenerationMode[] | null;
+  recommended_generation_modes?: GenerationMode[] | null;
+  intent_brief?: string | null;
+  derivation_note?: string | null;
+  tone_preferences?: string[] | null;
+  extra_split_rules?: string[] | null;
+  extra_forbidden_patterns?: string[] | null;
+  example_source?: string | null;
+  example_expected_output?: string | null;
+}
+
+export interface ScriptSplittingTemplateMutationResponse {
+  success: boolean;
+  template: ScriptSplittingTemplateInfo;
+  validation?: ScriptSplittingTemplateValidation;
+}
+
+export interface ScriptSplittingTemplateExportResponse {
+  success: boolean;
+  schema: string;
+  template: ScriptSplittingTemplateInfo;
+}
+
+export interface ScriptSplittingTemplatePreview {
+  preview: boolean;
+  current_template_id?: string | null;
+  current_hash?: string | null;
+  next_template_id: string;
+  next_hash?: string;
+  current_generation_mode?: GenerationMode | null;
+  next_generation_mode?: GenerationMode | null;
+  generation_mode_changed?: boolean;
+  generation_mode_compatibility?: ScriptSplittingGenerationModeCompatibility;
+  provider_compatibility?: ScriptSplittingProviderCompatibility;
+  affected_assets: string[];
+  affected_asset_count?: number;
+  affected_asset_type_count?: number;
+  existing_outputs?: Record<string, {
+    exists?: boolean | null;
+    count?: number | null;
+    paths?: string[];
+    tracked?: boolean;
+    reason?: string | null;
+  }>;
+  rebuild_chain?: Array<{
+    asset: string;
+    exists?: boolean | null;
+    count?: number | null;
+    tracked?: boolean;
+    reason?: string | null;
+  }>;
+  regeneration_chain?: string[];
+  preserved_existing_assets?: string[];
+  preserved_existing_asset_count?: number;
+  preserved_existing_asset_type_count?: number;
+  preserved_existing_chain?: Array<{
+    asset: string;
+    exists?: boolean | null;
+    count?: number | null;
+    tracked?: boolean;
+    reason?: string | null;
+  }>;
+  existing_assets_policy?: string;
+  future_generation_policy?: string;
+  has_generated_videos?: boolean;
+  has_jianying_draft?: boolean | null;
+  jianying_draft_tracking?: string | null;
+  requires_confirmation?: boolean;
+  available_modes?: ScriptSplittingTemplateApplyMode[];
+  suggested_action: string;
+}
+
+export type ScriptSplittingTemplateApplyMode = "preview" | "apply_keep_drafts" | "apply_rebuild_step1";
+
+export interface ScriptSplittingTemplateChangeResponse {
+  success: boolean;
+  project: ProjectData;
+}
+
 export interface VideoCapabilitiesResponse {
   provider_id: string;
   model: string;
@@ -395,6 +554,9 @@ export interface VideoCapabilitiesResponse {
   default_duration?: number | null;
   content_mode?: string | null;
   generation_mode?: string | null;
+  script_splitting_template_id?: string | null;
+  script_splitting_hash?: string | null;
+  provider_compatibility?: ScriptSplittingProviderCompatibility;
 }
 
 export interface QualityRatingRequest {
@@ -1086,6 +1248,9 @@ class API {
     if ("generation_mode" in updates) {
       throw new Error("项目创建后不支持修改 generation_mode");
     }
+    if ("script_splitting_template_id" in updates || "script_splitting" in updates) {
+      throw new Error("请使用专用接口修改拆分方案");
+    }
     return this.request(`/projects/${encodeURIComponent(name)}`, {
       method: "PATCH",
       body: JSON.stringify(updates),
@@ -1101,6 +1266,72 @@ class API {
   /** 三级解析（项目 > 系统设置 > 系统默认）后的视频模型能力。 */
   static async getVideoCapabilities(name: string): Promise<VideoCapabilitiesResponse> {
     return this.request(`/projects/${encodeURIComponent(name)}/video-capabilities`);
+  }
+
+  static async getScriptSplittingTemplates(
+    contentMode?: "narration" | "drama",
+  ): Promise<ScriptSplittingTemplatesResponse> {
+    const query = contentMode ? `?content_mode=${encodeURIComponent(contentMode)}` : "";
+    return this.request(`/script-splitting-templates${query}`);
+  }
+
+  static async saveScriptSplittingTemplate(
+    payload: ScriptSplittingTemplateUpsertPayload,
+  ): Promise<ScriptSplittingTemplateMutationResponse> {
+    return this.request("/script-splitting-templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  static async importScriptSplittingTemplate(
+    template: Record<string, unknown>,
+  ): Promise<ScriptSplittingTemplateMutationResponse> {
+    return this.request("/script-splitting-templates/import", {
+      method: "POST",
+      body: JSON.stringify({ template }),
+    });
+  }
+
+  static async exportScriptSplittingTemplate(templateId: string): Promise<ScriptSplittingTemplateExportResponse> {
+    return this.request(`/script-splitting-templates/${encodeURIComponent(templateId)}/export`);
+  }
+
+  static async deleteScriptSplittingTemplate(
+    templateId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request(`/script-splitting-templates/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  static async previewScriptSplittingTemplateChange(
+    name: string,
+    templateId: string,
+    generationMode?: GenerationMode | null,
+  ): Promise<{ success: boolean; preview: ScriptSplittingTemplatePreview }> {
+    return this.request(`/projects/${encodeURIComponent(name)}/script-splitting-template/preview`, {
+      method: "POST",
+      body: JSON.stringify({ template_id: templateId, generation_mode: generationMode ?? undefined }),
+    });
+  }
+
+  static async changeScriptSplittingTemplate(
+    name: string,
+    templateId: string,
+    confirm = false,
+    mode: ScriptSplittingTemplateApplyMode = "apply_keep_drafts",
+    generationMode?: GenerationMode | null,
+  ): Promise<ScriptSplittingTemplateChangeResponse> {
+    return this.request(`/projects/${encodeURIComponent(name)}/script-splitting-template/apply`, {
+      method: "POST",
+      body: JSON.stringify({
+        template_id: templateId,
+        generation_mode: generationMode ?? undefined,
+        confirm,
+        mode,
+      }),
+    });
   }
 
   static async previewGenerationRoutes(

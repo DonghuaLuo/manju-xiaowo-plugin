@@ -165,7 +165,7 @@ describe("WizardStep2Models", () => {
         error={null}
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(/参考视频预览模式需要|Reference/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/参考视频模式需要|Reference/i);
     const next = screen.getByRole("button", { name: /下一步|Next/i });
     expect(next).toBeDisabled();
     fireEvent.click(next);

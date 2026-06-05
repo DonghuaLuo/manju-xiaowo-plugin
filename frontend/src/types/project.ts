@@ -144,6 +144,46 @@ export interface ProjectData {
   content_mode: "narration" | "drama";
   style: string;
   style_template_id?: string | null;
+  script_splitting_template_id?: string | null;
+  script_splitting?: {
+    template_id?: string | null;
+    resolved_profile_hash?: string | null;
+    resolved_profile?: {
+      id?: string | null;
+      name?: string | null;
+      version?: number | null;
+      hash?: string | null;
+      content_mode?: string | null;
+      recommended_generation_modes?: string[];
+      required_capabilities?: string[];
+      preferred_capabilities?: string[];
+    };
+    provider_compatibility?: {
+      status?: string;
+      provider_id?: string | null;
+      model?: string | null;
+      missing_required?: string[];
+      missing_preferred?: string[];
+      warnings?: string[];
+    } | null;
+    asset_staleness?: {
+      status?: "current" | "stale";
+      reason?: string;
+      mode?: string;
+      previous_template_id?: string | null;
+      previous_hash?: string | null;
+      current_template_id?: string | null;
+      current_hash?: string | null;
+      affected_assets?: string[];
+      preserved_existing_assets?: string[];
+      rebuild_required_assets?: string[];
+      existing_assets_policy?: string;
+      future_generation_policy?: string;
+      suggested_action?: string;
+      created_at?: string;
+    } | null;
+  } | null;
+  migrated_from_missing_script_splitting?: boolean;
   style_image?: string;
   style_description?: string;
   overview?: ProjectOverview;

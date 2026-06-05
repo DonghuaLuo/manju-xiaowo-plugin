@@ -42,6 +42,12 @@ from lib.providers import (
     PROVIDER_OPENAI,
     PROVIDER_VIDU,
 )
+from lib.script_splitting_templates import (
+    assert_script_splitting_assets_current,
+    check_provider_compatibility,
+    current_profile,
+    script_splitting_asset_metadata,
+)
 from lib.storyboard_sequence import (
     build_previous_storyboard_reference,
     find_storyboard_item,
@@ -51,7 +57,8 @@ from lib.storyboard_sequence import (
 )
 from lib.thumbnail import extract_video_thumbnail
 from lib.version_manager import VersionManager
-from lib.video_backends.base import VideoCapabilityError
+from lib.video_backends.base import VideoCapability, VideoCapabilityError
+from lib.video_input_preflight import run_video_input_preflight
 from server.services.generation_route_resolver import (
     GenerationRoute,
     coerce_video_duration_for_options,
@@ -87,6 +94,172 @@ _END_FRAME_SKIP_TRANSITIONS = {"fade", "dissolve"}
 
 def get_project_manager() -> ProjectManager:
     return pm
+
+
+def _video_backend_caps_payload(
+    generator: Any,
+    *,
+    provider_id: str | None = None,
+    model: str | None = None,
+    resolved_caps: dict[str, Any] | None = None,
+    supported_durations: list[int] | None = None,
+    supported_resolutions: list[str] | None = None,
+    duration_resolution_constraints: dict[str, list[int]] | None = None,
+) -> dict[str, Any]:
+    backend = getattr(generator, "_video_backend", None)
+    backend_caps = getattr(backend, "video_capabilities", None)
+    raw_capabilities = getattr(backend, "capabilities", set())
+    capability_set = raw_capabilities() if callable(raw_capabilities) else raw_capabilities
+    capability_set = set(capability_set or [])
+    if isinstance(resolved_caps, dict):
+        capability_set.update(str(item) for item in resolved_caps.get("capabilities") or [])
+
+    resolved_provider_id = provider_id or (resolved_caps or {}).get("provider_id") or getattr(backend, "name", None)
+    resolved_model = model or (resolved_caps or {}).get("model") or getattr(backend, "model", None)
+    if resolved_provider_id or resolved_model or backend is not None or supported_durations:
+        capability_set.add(VideoCapability.IMAGE_TO_VIDEO)
+
+    durations = supported_durations
+    if durations is None and isinstance(resolved_caps, dict):
+        durations = [int(item) for item in resolved_caps.get("supported_durations") or []]
+    resolutions = supported_resolutions
+    if resolutions is None and isinstance(resolved_caps, dict):
+        resolutions = [
+            str(item)
+            for item in resolved_caps.get("resolutions") or resolved_caps.get("supported_resolutions") or []
+        ]
+    duration_constraints = duration_resolution_constraints
+    if duration_constraints is None and isinstance(resolved_caps, dict):
+        duration_constraints = {
+            str(key): [int(item) for item in value or []]
+            for key, value in (resolved_caps.get("duration_resolution_constraints") or {}).items()
+        }
+
+    def _resolved_bool(*keys: str, backend_value: Any = None) -> bool | None:
+        if isinstance(resolved_caps, dict):
+            for key in keys:
+                if key in resolved_caps:
+                    return bool(resolved_caps[key])
+        if backend is not None:
+            return bool(backend_value)
+        return None
+
+    max_reference_images = None
+    if isinstance(resolved_caps, dict) and resolved_caps.get("max_reference_images") is not None:
+        max_reference_images = resolved_caps.get("max_reference_images")
+    elif backend_caps is not None:
+        max_reference_images = getattr(backend_caps, "max_reference_images", None)
+
+    supports_generate_audio = None
+    if isinstance(resolved_caps, dict) and "supports_generate_audio" in resolved_caps:
+        supports_generate_audio = bool(resolved_caps["supports_generate_audio"])
+    elif backend is not None or (isinstance(resolved_caps, dict) and "capabilities" in resolved_caps):
+        supports_generate_audio = VideoCapability.GENERATE_AUDIO in capability_set
+    return {
+        "provider_id": resolved_provider_id,
+        "model": resolved_model,
+        "capabilities": sorted(str(item) for item in capability_set),
+        "supported_durations": durations or [],
+        "resolutions": resolutions or [],
+        "duration_resolution_constraints": duration_constraints or {},
+        "max_reference_images": max_reference_images,
+        "supports_start_image": _resolved_bool(
+            "supports_start_image",
+            "supports_first_frame",
+            backend_value=getattr(backend_caps, "first_frame", False),
+        ),
+        "supports_first_frame": _resolved_bool(
+            "supports_first_frame",
+            "supports_start_image",
+            backend_value=getattr(backend_caps, "first_frame", False),
+        ),
+        "supports_end_image": _resolved_bool(
+            "supports_end_image",
+            "supports_last_frame",
+            backend_value=getattr(backend_caps, "last_frame", False),
+        ),
+        "supports_last_frame": _resolved_bool(
+            "supports_last_frame",
+            "supports_end_image",
+            backend_value=getattr(backend_caps, "last_frame", False),
+        ),
+        "supports_reference_images": _resolved_bool(
+            "supports_reference_images",
+            backend_value=getattr(backend_caps, "reference_images", False),
+        ),
+        "supports_reference_with_start_image": _resolved_bool(
+            "supports_reference_with_start_image",
+            backend_value=getattr(backend_caps, "reference_images_with_start_image", False),
+        ),
+        "supports_generate_audio": supports_generate_audio,
+        "constraints": {
+            "supported_aspect_ratios": ["9:16", "16:9", "1:1", "4:3", "3:4"],
+            "supported_durations": durations or [],
+            "supported_resolutions": resolutions or [],
+            "duration_resolution_constraints": duration_constraints or {},
+            "max_reference_images": max_reference_images,
+        },
+    }
+
+
+def _assert_video_preflight_ok(
+    *,
+    project: dict[str, Any],
+    generator: Any,
+    aspect_ratio: str,
+    duration_seconds: Any,
+    reference_images: list[Path] | None = None,
+    first_frame_path: Path | str | None = None,
+    last_frame_path: Path | str | None = None,
+    generate_audio: bool | None = None,
+    provider_id: str | None = None,
+    model: str | None = None,
+    provider_capabilities: dict[str, Any] | None = None,
+    supported_durations: list[int] | None = None,
+    supported_resolutions: list[str] | None = None,
+    duration_resolution_constraints: dict[str, list[int]] | None = None,
+) -> dict[str, Any]:
+    request = {
+        "aspect_ratio": aspect_ratio,
+        "duration_seconds": duration_seconds,
+        "reference_images_count": len(reference_images or []),
+        "reference_images": [str(path) for path in (reference_images or [])],
+    }
+    if first_frame_path:
+        request["first_frame_path"] = str(first_frame_path)
+    if last_frame_path:
+        request["last_frame_path"] = str(last_frame_path)
+    if generate_audio is not None:
+        request["generate_audio"] = bool(generate_audio)
+
+    capabilities = _video_backend_caps_payload(
+        generator,
+        provider_id=provider_id,
+        model=model,
+        resolved_caps=provider_capabilities,
+        supported_durations=supported_durations,
+        supported_resolutions=supported_resolutions,
+        duration_resolution_constraints=duration_resolution_constraints,
+    )
+    provider_compatibility = check_provider_compatibility(current_profile(project), capabilities)
+    if provider_compatibility.get("status") == "block":
+        missing = ", ".join(provider_compatibility.get("missing_required") or [])
+        raise ValueError(f"当前视频模型缺少拆分方案必需能力: {missing}")
+
+    result = run_video_input_preflight(
+        project=project,
+        capabilities=capabilities,
+        request=request,
+    )
+    result["provider_compatibility"] = provider_compatibility
+    if result.get("status") == "block":
+        messages = [
+            str(check.get("message"))
+            for check in result.get("checks", [])
+            if isinstance(check, dict) and check.get("status") == "block" and check.get("message")
+        ]
+        raise ValueError("视频生成预检失败：" + "；".join(messages))
+    return result
 
 
 def invalidate_backend_cache() -> None:
@@ -1340,6 +1513,12 @@ async def execute_storyboard_task(
         _project = get_project_manager().load_project(project_name)
         _project_path = get_project_manager().get_project_path(project_name)
         _script = get_project_manager().load_script(project_name, script_file)
+        assert_script_splitting_assets_current(
+            _project,
+            _script,
+            script_file=script_file,
+            asset_kind="storyboard",
+        )
         _items, _id_field, _char_field, _scene_field, _prop_field = get_storyboard_items(_script)
 
         _resolved = find_storyboard_item(_items, _id_field, resource_id)
@@ -1494,6 +1673,12 @@ async def execute_video_task(
         _project = _pm.load_project(project_name)
         _project_path = _pm.get_project_path(project_name)
         _script = _pm.load_script(project_name, script_file)
+        assert_script_splitting_assets_current(
+            _project,
+            _script,
+            script_file=script_file,
+            asset_kind="video",
+        )
         _items, _id_field, _char_field, _, _ = get_storyboard_items(_script)
         _resolved = find_storyboard_item(_items, _id_field, resource_id)
         _item = _resolved[0] if _resolved else {}
@@ -1546,6 +1731,7 @@ async def execute_video_task(
         supported_durations = route.supported_durations
         resolution = route.resolution
         duration_seconds = route.duration_seconds
+        provider_capabilities = None
         version_metadata = dict(route.metadata)
         if route.generate_audio is not None:
             version_metadata["generate_audio"] = route.generate_audio
@@ -1571,8 +1757,12 @@ async def execute_video_task(
         supported_resolutions: list[str] = []
         supported_durations: list[int] = []
         duration_resolution_constraints: dict[str, list[int]] = {}
+        provider_capabilities: dict[str, Any] | None = None
         try:
             caps = await _resolver.video_capabilities_for_model(registry_provider_id, model_name or "", project)
+            provider_capabilities = dict(caps)
+            provider_capabilities.setdefault("provider_id", registry_provider_id)
+            provider_capabilities.setdefault("model", model_name)
             supported_resolutions = [str(item) for item in caps.get("resolutions") or []]
             supported_durations = [int(d) for d in caps.get("supported_durations") or []]
             duration_resolution_constraints = {
@@ -1583,6 +1773,7 @@ async def execute_video_task(
             supported_resolutions = []
             supported_durations = []
             duration_resolution_constraints = {}
+            provider_capabilities = None
 
         resolution = await resolve_resolution(
             project,
@@ -1634,6 +1825,24 @@ async def execute_video_task(
         payload=effective_payload,
     )
     version_metadata["video_continuity"] = continuity_meta
+    version_metadata["video_input_preflight"] = _assert_video_preflight_ok(
+        project=project,
+        generator=generator,
+        aspect_ratio=aspect_ratio,
+        duration_seconds=duration_seconds,
+        reference_images=continuity_reference_images,
+        first_frame_path=storyboard_file,
+        last_frame_path=end_image,
+        generate_audio=version_metadata.get("generate_audio"),
+        provider_id=registry_provider_id,
+        model=model_name,
+        provider_capabilities=provider_capabilities,
+        supported_durations=supported_durations,
+        supported_resolutions=route.supported_resolutions if route else supported_resolutions,
+        duration_resolution_constraints=(
+            route.duration_resolution_constraints if route else duration_resolution_constraints
+        ),
+    )
 
     _, version, _, video_uri = await generator.generate_video_async(
         prompt=prompt_text,
@@ -2048,6 +2257,13 @@ async def execute_grid_task(
 
         _needs_i2i = bool(reference_images)
         project = await asyncio.to_thread(get_project_manager().load_project, project_name)
+        script = await asyncio.to_thread(get_project_manager().load_script, project_name, script_file)
+        assert_script_splitting_assets_current(
+            project,
+            script,
+            script_file=script_file,
+            asset_kind="grid",
+        )
         aspect_ratio = payload.get("grid_aspect_ratio") or get_aspect_ratio(project, "storyboards")
         route = await _maybe_resolve_generation_route(
             project_name=project_name,
@@ -2133,6 +2349,7 @@ async def execute_grid_task(
                 cell.save(cell_path, format="PNG")
                 cell_metadata = {
                     **version_metadata,
+                    **script_splitting_asset_metadata(project),
                     "generation_quality": "grid",
                     "generation_profile_key": "grid",
                     "source_grid_id": resource_id,

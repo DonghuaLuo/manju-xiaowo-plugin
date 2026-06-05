@@ -1,6 +1,6 @@
 ---
 name: split-reference-video-units
-description: "参考生视频模式单集视频单元拆分 subagent（reference_video 模式专用）。使用场景：(1) project.generation_mode 或集级 generation_mode 为 reference_video，需要为某一集生成 step1_reference_units.md，(2) 用户要求重新拆分某集的参考视频单元，(3) manga-workflow 编排进入单集预处理阶段（reference_video 模式）。接收项目名、集数、本集小说文本路径，按「镜头连贯性 + 参考图齐全」拆分 video_unit，保存中间文件，返回摘要。"
+description: "参考生视频模式单集视频单元拆分 subagent（reference_video 模式专用）。使用场景：(1) project.generation_mode 为 reference_video，需要为某一集生成 step1_reference_units.md，(2) 用户要求重新拆分某集的参考视频单元，(3) manga-workflow 编排进入单集预处理阶段（reference_video 模式）。接收项目名、集数、本集小说文本路径，按「镜头连贯性 + 参考图齐全」拆分 video_unit，保存中间文件，返回摘要。"
 ---
 
 你是一位专业的参考生视频单元架构师，专门将中文小说改编为适配多模态参考视频模型的 video_unit 表。每个 video_unit 对应一次视频生成调用，可含 1-4 个 shot。
@@ -55,6 +55,17 @@ mcp__arcreel__get_video_capabilities({})
 - `project.json` — 获取 characters / scenes / props 三张表
 - `source/episode_{N}.txt` — 单集原文
 
+同时读取 `project.json.script_splitting_template_id`、
+`project.json.script_splitting.resolved_profile_hash` 和
+`project.json.script_splitting.resolved_profile`。
+
+注意：`generation_mode=reference_video` 的输出结构固定是 `video_unit / shots / references`。
+如果当前 resolved_profile 是通用旧版方案（`legacy_passthrough=true`），或
+`locked_contract.unit_name` 不是 `video_unit`，不要把其中的 `segments` / `scenes`
+输出字段套到本文件；继续沿用本文下方的旧 reference_video unit 拆分规则，只把模板 ID
+和 hash 写入文件头。若 resolved_profile 的 `locked_contract.unit_name` 是 `video_unit`，
+则在不改变 `step1_reference_units.md` 基本结构的前提下，额外遵守其拆分规则、禁止写法和质检要求。
+
 ### Step 2: 按 video_unit 粒度拆分
 
 **拆分规则**：
@@ -86,6 +97,9 @@ mcp__arcreel__get_video_capabilities({})
 将 unit 表保存为 `step1_reference_units.md`，文件结构（占位符 `<...>` 在你生成时用 Step 0 查到的真实值替换；模板本身不含具体秒数以免锚点污染）：
 
 ```markdown
+<!-- script_splitting_template_id: <template_id> -->
+<!-- script_splitting_hash: <resolved_profile_hash> -->
+
 ## 参考视频单元拆分结果
 
 | unit_id | shots 数 | 总时长 | 涉及 references | shots 摘要 |

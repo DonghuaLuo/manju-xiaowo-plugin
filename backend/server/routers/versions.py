@@ -22,6 +22,7 @@ from lib.project_change_hints import emit_project_change_batch, project_change_s
 from lib.project_manager import ProjectManager
 from lib.resource_paths import resource_relative_path
 from lib.script_editor import ScriptEditError
+from lib.script_splitting_templates import script_splitting_asset_metadata
 from lib.storyboard_sequence import find_storyboard_item, get_storyboard_items
 from lib.thumbnail import extract_video_thumbnail
 from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
@@ -255,9 +256,13 @@ def _script_media_version_payload(
         if resolved is None:
             raise ValueError(f"未找到当前分镜/场景: {resource_id}")
         item, _ = resolved
+        splitting_metadata = script_splitting_asset_metadata(project)
         if resource_type == "storyboards":
             prompt = _normalize_storyboard_prompt(item.get("image_prompt"), project.get("style", ""))
-            return prompt, {"aspect_ratio": get_aspect_ratio(project, "storyboards")}
+            return prompt, {
+                "aspect_ratio": get_aspect_ratio(project, "storyboards"),
+                **splitting_metadata,
+            }
 
         prompt = _normalize_video_prompt(
             item.get("video_prompt"),
@@ -269,7 +274,9 @@ def _script_media_version_payload(
         duration_seconds = _coerce_duration_seconds(item.get("duration_seconds"))
         if duration_seconds is None:
             duration_seconds = _coerce_duration_seconds(project.get("default_duration"))
-        metadata = {"duration_seconds": duration_seconds} if duration_seconds is not None else {}
+        metadata = dict(splitting_metadata)
+        if duration_seconds is not None:
+            metadata["duration_seconds"] = duration_seconds
         return prompt, metadata
     except (ValueError, ScriptEditError):
         raise

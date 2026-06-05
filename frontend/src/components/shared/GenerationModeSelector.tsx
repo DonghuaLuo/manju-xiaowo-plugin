@@ -1,5 +1,10 @@
 import { useTranslation } from "react-i18next";
-import type { GenerationMode } from "@/utils/generation-mode";
+import {
+  GENERATION_MODES,
+  generationModeDescription,
+  generationModeLabel,
+  type GenerationMode,
+} from "@/utils/generation-mode";
 
 export interface GenerationModeSelectorProps {
   value: GenerationMode;
@@ -16,8 +21,6 @@ export interface GenerationModeSelectorProps {
 
 const EMPTY_DISABLED: readonly GenerationMode[] = Object.freeze([]);
 
-const MODES = ["storyboard", "reference_video", "grid"] as const satisfies readonly GenerationMode[];
-
 export function GenerationModeSelector({
   value,
   onChange,
@@ -28,20 +31,6 @@ export function GenerationModeSelector({
 }: GenerationModeSelectorProps) {
   const { t } = useTranslation("dashboard");
 
-  const labelFor = (m: GenerationMode): string =>
-    m === "storyboard"
-      ? t("mode_storyboard")
-      : m === "grid"
-        ? t("mode_grid")
-        : t("mode_reference_video");
-
-  const descFor = (m: GenerationMode): string =>
-    m === "storyboard"
-      ? t("mode_storyboard_desc")
-      : m === "grid"
-        ? t("mode_grid_desc")
-        : t("mode_reference_video_desc");
-
   return (
     <div className="space-y-2">
       <div
@@ -49,7 +38,7 @@ export function GenerationModeSelector({
         aria-label={t("generation_mode")}
         className={size === "sm" ? "inline-flex gap-1" : "flex gap-3"}
       >
-        {MODES.map((m) => {
+        {GENERATION_MODES.map((m) => {
           const modeDisabled = disabledModes.includes(m);
           const disabled = readOnly || modeDisabled;
           const selected = value === m;
@@ -85,13 +74,13 @@ export function GenerationModeSelector({
                 }}
                 className="sr-only"
               />
-              {labelFor(m)}
+              {generationModeLabel(m, t)}
             </label>
           );
         })}
       </div>
       {size === "lg" && (
-        <p className="text-[12px] leading-[1.55] text-text-3">{descFor(value)}</p>
+        <p className="text-[12px] leading-[1.55] text-text-3">{generationModeDescription(value, t)}</p>
       )}
     </div>
   );

@@ -14,6 +14,7 @@ MediaGenerator 中间层
 """
 
 import asyncio
+import json
 import logging
 import tempfile
 from pathlib import Path
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 from lib.db.base import DEFAULT_USER_ID
 from lib.gemini_shared import RateLimiter
 from lib.resource_paths import resource_relative_path
+from lib.script_splitting_templates import provider_capability_hash, script_splitting_asset_metadata
 from lib.usage_tracker import UsageTracker
 from lib.version_manager import VersionManager
 
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 _BASE64_INPUT_WARN_BYTES = 8 * 1024 * 1024
 _BASE64_INPUT_LIMIT_BYTES = 16 * 1024 * 1024
 _BASE64_SENSITIVE_VIDEO_PROVIDERS = frozenset({"vidu", "newapi", "v2-video-generations"})
+_SCRIPT_SPLITTING_ASSET_TYPES = frozenset({"storyboards", "videos", "reference_videos", "grids"})
 
 
 class MediaGenerator:
@@ -77,6 +80,56 @@ class MediaGenerator:
 
         # 初始化 UsageTracker（使用全局 async session factory）
         self.usage_tracker = UsageTracker()
+
+    def _script_splitting_version_metadata(self) -> dict[str, Any]:
+        project_file = self.project_path / "project.json"
+        try:
+            with open(project_file, encoding="utf-8") as f:
+                project = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+        return {
+            key: value
+            for key, value in script_splitting_asset_metadata(project).items()
+            if value is not None
+        }
+
+    def _apply_script_splitting_version_metadata(
+        self,
+        resource_type: str,
+        version_metadata: dict[str, Any],
+    ) -> None:
+        if resource_type not in _SCRIPT_SPLITTING_ASSET_TYPES:
+            return
+        for key, value in self._script_splitting_version_metadata().items():
+            version_metadata.setdefault(key, value)
+
+    def _apply_provider_capability_version_metadata(
+        self,
+        version_metadata: dict[str, Any],
+        caps: Any | None = None,
+    ) -> None:
+        backend = self._video_backend
+        if backend is None:
+            return
+        if caps is None:
+            caps = getattr(backend, "video_capabilities", None)
+        capability_values = getattr(backend, "capabilities", None) or []
+        payload = {
+            "provider_id": getattr(backend, "name", None),
+            "model": getattr(backend, "model", None),
+            "capabilities": sorted(str(item) for item in capability_values),
+            "max_reference_images": getattr(caps, "max_reference_images", None),
+            "supports_first_frame": bool(getattr(caps, "first_frame", False)),
+            "supports_last_frame": bool(getattr(caps, "last_frame", False)),
+            "supports_reference_images": bool(getattr(caps, "reference_images", False)),
+            "supports_reference_with_start_image": bool(
+                getattr(caps, "reference_images_with_start_image", False)
+            ),
+        }
+        capability_hash = provider_capability_hash(payload)
+        if capability_hash:
+            version_metadata.setdefault("provider_capability_hash", capability_hash)
 
     @staticmethod
     def _sync(coro):
@@ -180,6 +233,7 @@ class MediaGenerator:
         """
         from lib.image_backends.base import ImageGenerationRequest, ReferenceImage
 
+        self._apply_script_splitting_version_metadata(resource_type, version_metadata)
         output_path = self._get_output_path(resource_type, resource_id)
         self._ensure_parent_dir(output_path)
 
@@ -368,6 +422,7 @@ class MediaGenerator:
         Returns:
             (output_path, version_number, video_ref, video_uri) 四元组
         """
+        self._apply_script_splitting_version_metadata(resource_type, version_metadata)
         output_path = self._get_output_path(resource_type, resource_id)
         self._ensure_parent_dir(output_path)
 
@@ -472,6 +527,7 @@ class MediaGenerator:
             actual_end_image = None
             actual_reference_images = reference_images
             caps = self._video_backend.video_capabilities
+            self._apply_provider_capability_version_metadata(version_metadata, caps)
 
             if end_image and self._video_backend:
                 if caps.last_frame:
@@ -707,6 +763,7 @@ class MediaGenerator:
 
         Returns: (output_path, version_number, video_ref, video_uri) 四元组。
         """
+        self._apply_script_splitting_version_metadata(resource_type, version_metadata)
         output_path = self._get_output_path(resource_type, resource_id)
         self._ensure_parent_dir(output_path)
 
@@ -721,6 +778,10 @@ class MediaGenerator:
 
         if self._video_backend is None:
             raise RuntimeError("video_backend not configured")
+        self._apply_provider_capability_version_metadata(
+            version_metadata,
+            getattr(self._video_backend, "video_capabilities", None),
+        )
 
         if self._config is not None:
             configured_generate_audio = await self._config.video_generate_audio(self.project_name)

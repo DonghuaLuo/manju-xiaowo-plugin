@@ -4,6 +4,17 @@ import { useTranslation } from "react-i18next";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, radioCardClass } from "@/components/ui/darkroom-tokens";
 import { FieldLabel } from "@/components/ui/FieldLabel";
+import {
+  ScriptSplittingTemplateSelector,
+  defaultScriptSplittingTemplateId,
+  disabledGenerationModesForTemplate,
+  firstRecommendedGenerationMode,
+  scriptSplittingContentModeDescription,
+  scriptSplittingContentModeLabel,
+  scriptSplittingTemplateSupportsGenerationMode,
+  type ScriptSplittingContentMode,
+} from "@/components/shared/ScriptSplittingTemplateSelector";
+import type { ScriptSplittingTemplateInfo } from "@/api";
 import type { GenerationMode } from "@/utils/generation-mode";
 
 export interface WizardStep1Value {
@@ -11,6 +22,7 @@ export interface WizardStep1Value {
   contentMode: "narration" | "drama";
   aspectRatio: "9:16" | "16:9";
   generationMode: GenerationMode;
+  scriptSplittingTemplateId?: string | null;
 }
 
 export interface WizardStep1BasicsProps {
@@ -18,6 +30,7 @@ export interface WizardStep1BasicsProps {
   onChange: (next: WizardStep1Value) => void;
   onNext: () => void;
   onCancel: () => void;
+  scriptSplittingTemplates?: ScriptSplittingTemplateInfo[];
 }
 
 export function WizardStep1Basics({
@@ -25,12 +38,16 @@ export function WizardStep1Basics({
   onChange,
   onNext,
   onCancel,
+  scriptSplittingTemplates = [],
 }: WizardStep1BasicsProps) {
   const { t } = useTranslation(["common", "dashboard", "templates"]);
   const [titleError, setTitleError] = useState("");
   const reactId = useId();
   const titleId = `${reactId}-title`;
   const titleErrorId = `${reactId}-title-error`;
+  const selectedScriptSplittingTemplate = scriptSplittingTemplates.find(
+    (tpl) => tpl.id === value.scriptSplittingTemplateId,
+  );
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitleError("");
@@ -43,6 +60,39 @@ export function WizardStep1Basics({
       return;
     }
     onNext();
+  };
+
+  const changeContentMode = (contentMode: ScriptSplittingContentMode) => {
+    const templateId = defaultScriptSplittingTemplateId(
+      contentMode,
+      scriptSplittingTemplates,
+    );
+    const template = scriptSplittingTemplates.find((tpl) => tpl.id === templateId);
+    onChange({
+      ...value,
+      contentMode,
+      generationMode: firstRecommendedGenerationMode(template, value.generationMode),
+      scriptSplittingTemplateId: templateId || null,
+    });
+  };
+
+  const changeScriptSplittingTemplate = (templateId: string) => {
+    const template = scriptSplittingTemplates.find((tpl) => tpl.id === templateId);
+    onChange({
+      ...value,
+      generationMode: firstRecommendedGenerationMode(template, value.generationMode),
+      scriptSplittingTemplateId: templateId,
+    });
+  };
+
+  const changeGenerationMode = (generationMode: GenerationMode) => {
+    if (
+      selectedScriptSplittingTemplate
+      && !scriptSplittingTemplateSupportsGenerationMode(selectedScriptSplittingTemplate, generationMode)
+    ) {
+      return;
+    }
+    onChange({ ...value, generationMode });
   };
 
   return (
@@ -89,10 +139,10 @@ export function WizardStep1Basics({
               name="contentMode"
               value="narration"
               checked={value.contentMode === "narration"}
-              onChange={() => onChange({ ...value, contentMode: "narration" })}
+              onChange={() => changeContentMode("narration")}
               className="sr-only"
             />
-            {t("dashboard:narration_visuals")}
+            {scriptSplittingContentModeLabel("narration", t)}
           </label>
           <label className={radioCardClass(value.contentMode === "drama")}>
             <input
@@ -100,18 +150,27 @@ export function WizardStep1Basics({
               name="contentMode"
               value="drama"
               checked={value.contentMode === "drama"}
-              onChange={() => onChange({ ...value, contentMode: "drama" })}
+              onChange={() => changeContentMode("drama")}
               className="sr-only"
             />
-            {t("dashboard:drama_animation")}
+            {scriptSplittingContentModeLabel("drama", t)}
           </label>
         </div>
         <p className="mt-2 text-[11.5px] leading-[1.55] text-text-3">
-          {value.contentMode === "narration"
-            ? t("dashboard:content_mode_narration_desc")
-            : t("dashboard:content_mode_drama_desc")}
+          {scriptSplittingContentModeDescription(value.contentMode, t)}
         </p>
       </div>
+
+      {/* Script splitting template */}
+      <ScriptSplittingTemplateSelector
+        value={value.scriptSplittingTemplateId}
+        contentMode={value.contentMode}
+        generationMode={value.generationMode}
+        templates={scriptSplittingTemplates}
+        onChange={changeScriptSplittingTemplate}
+        label={t("dashboard:script_splitting_preset_label", { defaultValue: "选择拆分方案" })}
+        showHash={false}
+      />
 
       {/* Aspect Ratio */}
       <div>
@@ -167,7 +226,8 @@ export function WizardStep1Basics({
         <FieldLabel>{t("dashboard:generation_mode")}</FieldLabel>
         <GenerationModeSelector
           value={value.generationMode}
-          onChange={(next) => onChange({ ...value, generationMode: next })}
+          onChange={changeGenerationMode}
+          disabledModes={disabledGenerationModesForTemplate(selectedScriptSplittingTemplate)}
         />
       </div>
 

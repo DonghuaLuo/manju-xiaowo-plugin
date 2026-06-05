@@ -12,4 +12,5 @@ backend/compile/
 *.log
 /MIGRATION_CONSTRAINTS.md
 /backend/logs/
-/backend/tests/
+/backend/tests/*
+!/backend/tests/test_script_splitting_mvp.py

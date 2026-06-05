@@ -20,6 +20,7 @@ from lib.prompt_builders import append_video_negative_tail
 from lib.reference_video import assemble_shots_text, render_prompt_for_backend
 from lib.reference_video.errors import MissingReferenceError, RequestPayloadTooLargeError
 from lib.script_models import ReferenceResource
+from lib.script_splitting_templates import assert_script_splitting_assets_current
 from lib.thumbnail import extract_video_thumbnail
 from server.services.generation_route_resolver import (
     coerce_video_duration_for_options,
@@ -27,6 +28,7 @@ from server.services.generation_route_resolver import (
     duration_options_for_resolution,
 )
 from server.services.generation_tasks import (
+    _assert_video_preflight_ok,
     _maybe_resolve_generation_route,
     assert_duration_supported,
     get_media_generator,
@@ -238,6 +240,12 @@ async def execute_reference_video_task(
         project = pm.load_project(project_name)
         project_path = pm.get_project_path(project_name)
         script = pm.load_script(project_name, script_file)
+        assert_script_splitting_assets_current(
+            project,
+            script,
+            script_file=script_file,
+            asset_kind="reference_video",
+        )
         units = script.get("video_units") or []
         unit = next((u for u in units if u.get("unit_id") == resource_id), None)
         if unit is None:
@@ -408,6 +416,17 @@ async def execute_reference_video_task(
     if len(constrained_refs) < len(unit_refs):
         unit_for_prompt = {**unit, "references": unit_refs[: len(constrained_refs)]}
     rendered_prompt = _render_unit_prompt(unit_for_prompt)
+    version_metadata["video_input_preflight"] = _assert_video_preflight_ok(
+        project=project,
+        generator=generator,
+        aspect_ratio=str(project.get("aspect_ratio") or "9:16"),
+        duration_seconds=effective_duration,
+        reference_images=constrained_refs,
+        generate_audio=version_metadata.get("generate_audio"),
+        supported_durations=effective_supported_durations,
+        supported_resolutions=supported_resolutions,
+        duration_resolution_constraints=duration_resolution_constraints,
+    )
 
     # 7. 首次调用直接传源资产图，让统一输入图准备层记录真实源路径/MIME。
     #    请求体过大时仍从源图重试，只调整准备层参数，避免临时 JPEG 被二次压缩。

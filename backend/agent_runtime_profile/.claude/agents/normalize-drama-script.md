@@ -60,6 +60,13 @@ mcp__arcreel__get_video_capabilities({})
 
 使用 Glob 工具检查 `drafts/episode_{N}/` 是否存在。
 使用 Read 工具读取 `project.json` 了解角色/场景/道具列表。
+同时确认 `script_splitting_template_id`、`script_splitting.resolved_profile_hash` 和
+`script_splitting.resolved_profile` 已存在。首次生成时
+`mcp__arcreel__normalize_drama_script` 会按 resolved_profile 生成 prompt；如果
+`resolved_profile.legacy_passthrough=true`，首次生成和后续手工修改都保持本文旧版场景表表头、
+字段和 `segment_break` 语义，不要套用新的输出字段；只保留模板 ID 和 hash。如果不是 legacy
+passthrough，后续手工修改已有 `step1_normalized_script.md` 时，也必须遵守 resolved_profile
+中的拆分规则、禁止写法和输出字段。
 
 **Step 2**: 调用文本模型生成规范化剧本
 
@@ -85,6 +92,9 @@ mcp__arcreel__normalize_drama_script({"episode": N, "source": "source/episode_N.
 **Step 1**: 读取现有剧本
 
 使用 Read 工具读取 `drafts/episode_{N}/step1_normalized_script.md`。
+读取文件顶部的 `script_splitting_template_id` / `script_splitting_hash` 注释；若缺失或与
+`project.json.script_splitting.resolved_profile_hash` 不一致，先在修改摘要中标记“拆分方案已变化”，
+不要静默沿用旧规则。
 
 **Step 2**: 根据主 agent 传入的修改要求
 
@@ -128,6 +138,7 @@ mcp__arcreel__normalize_drama_script({"episode": N, "source": "source/episode_N.
 
 > 填值规则：`<duration>` 必须取自 Step 0 查得的 `supported_durations`。
 > `<集号>` 由 `mcp__arcreel__normalize_drama_script` 工具在调用时按当前 episode 注入到 prompt；本示例使用占位符是为了避免误把 `E1` 当作硬编码值。
+> 文件顶部应保留 `script_splitting_template_id` 和 `script_splitting_hash` HTML 注释，供后续 JSON 剧本记录 hash。
 
 ## 注意事项
 

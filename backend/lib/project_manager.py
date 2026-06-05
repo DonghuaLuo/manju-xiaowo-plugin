@@ -38,6 +38,7 @@ from lib.profile_manifest import (
 )
 from lib.project_change_hints import emit_project_change_hint
 from lib.script_editor import ScriptEditError, resolve_items
+from lib.script_splitting_templates import ensure_project_script_splitting_snapshot
 from lib.style_templates import LEGACY_STYLE_MAP, resolve_template_prompt
 
 logger = logging.getLogger(__name__)
@@ -240,7 +241,9 @@ class ProjectManager:
         # 持久化 content_mode 到 project.json，让后续 sync_all_agent_profiles 启动遍历能恢复模式。
         # server 路径随后会调 create_project_metadata 覆盖为完整版（也含 content_mode）。
         try:
-            atomic_write_json(project_dir / self.PROJECT_FILE, {"content_mode": content_mode})
+            project_stub: dict[str, Any] = {"content_mode": content_mode}
+            ensure_project_script_splitting_snapshot(project_stub)
+            atomic_write_json(project_dir / self.PROJECT_FILE, project_stub)
             self.sync_agent_profile(project_dir, content_mode=content_mode)
         except Exception:
             # sync 失败时回滚 project_dir，避免残缺目录阻塞重试（同名 create 撞 FileExistsError）
@@ -671,6 +674,7 @@ class ProjectManager:
                     self._apply_episode_sync(project, script, norm)
                 self._migrate_legacy_resolution_on_save(project)
                 self._migrate_legacy_style(project)
+                ensure_project_script_splitting_snapshot(project)
                 self._touch_metadata(project)
                 atomic_write_json(self._get_project_file_path(project_name), project)
                 emit_project_change_hint(project_name, changed_paths=[self.PROJECT_FILE])
@@ -1325,8 +1329,12 @@ class ProjectManager:
                 project = json.load(f)
             if self._migrate_legacy_style(project):
                 # 不走 save_project 以避免触发 _touch_metadata 污染 updated_at。
-                atomic_write_json(project_file, project)
                 migrated = True
+            if ensure_project_script_splitting_snapshot(project, mark_migrated_from_missing=True):
+                # 旧项目兼容补快照，不触碰 updated_at，避免打开项目就制造业务修改时间噪音。
+                migrated = True
+            if migrated:
+                atomic_write_json(project_file, project)
         if migrated:
             emit_project_change_hint(
                 project_name,
@@ -1386,6 +1394,7 @@ class ProjectManager:
         project_file = self._get_project_file_path(project_name)
 
         self._migrate_legacy_resolution_on_save(project)
+        ensure_project_script_splitting_snapshot(project)
         self._touch_metadata(project)
 
         with self._project_lock(project_name):
@@ -1424,6 +1433,7 @@ class ProjectManager:
             mutate_fn(project)
             self._migrate_legacy_resolution_on_save(project)
             self._migrate_legacy_style(project)
+            ensure_project_script_splitting_snapshot(project)
             self._touch_metadata(project)
             atomic_write_json(project_file, project)
 
@@ -1478,6 +1488,7 @@ class ProjectManager:
         aspect_ratio: str | None = "9:16",
         default_duration: int | None = None,
         style_template_id: str | None = None,
+        script_splitting_template_id: str | None = None,
         extras: dict | None = None,
     ) -> dict:
         """
@@ -1514,6 +1525,8 @@ class ProjectManager:
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         }
+        if script_splitting_template_id is not None:
+            project["script_splitting_template_id"] = script_splitting_template_id
         if default_duration is not None:
             project["default_duration"] = default_duration
         if style_template_id is not None:
@@ -1524,6 +1537,7 @@ class ProjectManager:
             if "image_backend" in extras:
                 raise ValueError("image_backend 已废弃，请改用 image_provider_t2i / image_provider_i2i")
             project.update(extras)
+        ensure_project_script_splitting_snapshot(project)
 
         self.save_project(project_name, project)
         return project

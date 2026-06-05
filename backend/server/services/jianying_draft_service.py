@@ -36,6 +36,7 @@ _TRANSITION_MAP: dict[str, TransitionType] = {
 }
 
 from lib.project_manager import ProjectManager
+from lib.script_splitting_templates import script_splitting_asset_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,47 @@ class JianyingDraftService:
             "missing_ids": missing_ids,
             "missing_items": missing_items,
         }
+
+    @staticmethod
+    def _build_export_manifest(
+        *,
+        project_name: str,
+        episode: int,
+        project: dict[str, Any],
+        script: dict[str, Any],
+        script_file: str,
+        clips: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        script_meta = script.get("metadata") if isinstance(script.get("metadata"), dict) else {}
+        video_version_map: dict[str, Any] = {}
+        for clip in clips:
+            clip_id = str(clip.get("id") or "")
+            if not clip_id:
+                continue
+            version_meta = clip.get("version_metadata")
+            version_meta = version_meta if isinstance(version_meta, dict) else {}
+            video_version_map[clip_id] = {
+                "resource_type": clip.get("resource_type"),
+                "video_clip": clip.get("video_clip"),
+                "version": version_meta.get("version"),
+                "storyboard_version": version_meta.get("storyboard_version"),
+                "provider_capability_hash": version_meta.get("provider_capability_hash"),
+                "script_splitting_hash": version_meta.get("script_splitting_hash"),
+                "script_splitting_template_id": version_meta.get("script_splitting_template_id"),
+            }
+
+        manifest = {
+            "kind": "manju_jianying_export_manifest",
+            "project_name": project_name,
+            "episode": episode,
+            "script_file": script_file,
+            "script_version": script_meta.get("updated_at") or script_meta.get("created_at"),
+            "video_version_map": video_version_map,
+        }
+        manifest.update(script_splitting_asset_metadata(project))
+        if script.get("script_splitting_hash"):
+            manifest.setdefault("script_splitting_hash", script.get("script_splitting_hash"))
+        return manifest
 
     @staticmethod
     def _get_current_version_metadata(project_dir: Path, resource_type: str, resource_id: str) -> dict[str, Any]:
@@ -381,7 +423,7 @@ class JianyingDraftService:
         project_dir = self.pm.get_project_path(project_name)
 
         # 1. 定位剧本
-        script_data, _ = self._find_episode_script(project_name, project, episode)
+        script_data, script_filename = self._find_episode_script(project_name, project, episode)
 
         # 2. 收集已完成视频
         content_mode = script_data.get("content_mode", "narration")
@@ -389,6 +431,14 @@ class JianyingDraftService:
         if not clips:
             raise ValueError(f"第 {episode} 集没有已完成的视频片段，请先生成视频")
         summary = self._build_export_summary(episode, clips, missing_items)
+        export_manifest = self._build_export_manifest(
+            project_name=project_name,
+            episode=episode,
+            project=project,
+            script=script_data,
+            script_file=script_filename,
+            clips=clips,
+        )
 
         # 3. 画布尺寸（项目未设 aspect_ratio 时从首个视频自动检测）
         width, height = self._resolve_canvas_size(project, clips[0]["abs_path"])
@@ -440,6 +490,10 @@ class JianyingDraftService:
             # 8. 剪映 6+ 使用 draft_info.json，低版本使用 draft_content.json
             if use_draft_info_name:
                 draft_content_path.rename(draft_dir / "draft_info.json")
+            (draft_dir / "manju_export_manifest.json").write_text(
+                json.dumps(export_manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
             return tmp_dir, draft_dir, resolved_draft_name, summary
         except Exception:

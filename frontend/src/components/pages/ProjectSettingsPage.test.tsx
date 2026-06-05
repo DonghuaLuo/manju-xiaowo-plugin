@@ -68,6 +68,11 @@ describe("ProjectSettingsPage – style picker", () => {
         },
       ],
     });
+    vi.spyOn(API, "getScriptSplittingTemplates").mockResolvedValue({
+      success: true,
+      templates: [],
+    });
+    vi.spyOn(API, "getVideoCapabilities").mockRejectedValue(new Error("no capabilities"));
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });
@@ -310,11 +315,52 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
-  it("locks generation_mode for existing projects and omits it from save payloads", async () => {
+  it("locks generation_mode and applies only compatible script-splitting template changes", async () => {
+    vi.mocked(API.getScriptSplittingTemplates).mockResolvedValue({
+      success: true,
+      templates: [
+        {
+          id: "drama_legacy_scene_default",
+          source: "builtin",
+          content_mode: "drama",
+          name: "通用拆分方案",
+          description: "通用剧情拆分方案",
+          version: 1,
+          hash: "sha256:old",
+          supported_generation_modes: ["storyboard", "reference_video", "grid"],
+          recommended_generation_modes: ["storyboard", "reference_video", "grid"],
+          default_generation_mode: "storyboard",
+          required_capabilities: [],
+          preferred_capabilities: [],
+          output_fields: [],
+          split_rules: [],
+          forbidden_patterns: [],
+        },
+        {
+          id: "drama_web_short_hook",
+          source: "builtin",
+          content_mode: "drama",
+          name: "短剧爽点节奏",
+          description: "高密度冲突、强钩子、强反转。",
+          version: 1,
+          hash: "sha256:hook",
+          supported_generation_modes: ["storyboard", "reference_video"],
+          recommended_generation_modes: ["storyboard", "reference_video"],
+          default_generation_mode: "storyboard",
+          required_capabilities: [],
+          preferred_capabilities: [],
+          output_fields: [],
+          split_rules: [],
+          forbidden_patterns: [],
+        },
+      ],
+    });
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo",
+        content_mode: "drama",
         generation_mode: "storyboard",
+        script_splitting_template_id: "drama_legacy_scene_default",
         episodes: [],
         characters: {},
         clues: {},
@@ -325,28 +371,59 @@ describe("ProjectSettingsPage – style picker", () => {
       success: true,
       project: { title: "Demo" } as unknown as Awaited<ReturnType<typeof API.updateProject>>["project"],
     });
+    vi.spyOn(API, "previewScriptSplittingTemplateChange").mockResolvedValue({
+      success: true,
+      preview: {
+        preview: true,
+        next_template_id: "drama_web_short_hook",
+        current_generation_mode: "storyboard",
+        next_generation_mode: "storyboard",
+        generation_mode_changed: false,
+        affected_assets: [],
+        suggested_action: "future_episodes_only",
+      },
+    });
+    const changeSpy = vi.spyOn(API, "changeScriptSplittingTemplate").mockResolvedValue({
+      success: true,
+      project: {
+        title: "Demo",
+        generation_mode: "storyboard",
+        script_splitting_template_id: "drama_web_short_hook",
+      } as unknown as Awaited<ReturnType<typeof API.changeScriptSplittingTemplate>>["project"],
+    });
 
     renderAt("/app/projects/demo/settings");
 
-    const referenceVideoRadio = await screen.findByRole("radio", { name: /参考视频预览|Reference Video Preview/i });
+    const referenceVideoRadio = await screen.findByRole("radio", { name: /参考视频|Reference Video Preview/i });
     const storyboardRadio = screen.getByRole("radio", { name: /图生视频|Image-to-Video/i });
     expect(referenceVideoRadio).not.toBeChecked();
-    expect(referenceVideoRadio).toBeDisabled();
     expect(storyboardRadio).toBeChecked();
-    expect(storyboardRadio).toBeDisabled();
+    expect(referenceVideoRadio).toBeDisabled();
 
     fireEvent.click(referenceVideoRadio);
     expect(referenceVideoRadio).not.toBeChecked();
     expect(storyboardRadio).toBeChecked();
 
-    const saveBtn = screen.getByRole("button", { name: /^(保存|Save)$/i });
-    fireEvent.click(saveBtn);
+    fireEvent.click(screen.getByRole("combobox", { name: /拆分方案模板|Script splitting template/i }));
+    fireEvent.click(screen.getByRole("option", { name: /短剧爽点节奏/ }));
 
     await waitFor(() => {
-      expect(API.updateProject).toHaveBeenCalled();
+      expect(API.previewScriptSplittingTemplateChange).toHaveBeenCalledWith("demo", "drama_web_short_hook");
     });
-    const payload = vi.mocked(API.updateProject).mock.calls.at(-1)?.[1] ?? {};
-    expect(payload).not.toHaveProperty("generation_mode");
+
+    const applyBtn = screen.getByRole("button", { name: /应用拆分方案|Apply script splitting/i });
+    expect(applyBtn).not.toBeDisabled();
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
+      expect(changeSpy.mock.calls.at(-1)).toEqual([
+        "demo",
+        "drama_web_short_hook",
+        false,
+        "apply_keep_drafts",
+      ]);
+    });
+    expect(API.updateProject).not.toHaveBeenCalledWith("demo", expect.objectContaining({ generation_mode: expect.anything() }));
   });
 });
 describe("ProjectSettingsPage – model_settings resolution", () => {

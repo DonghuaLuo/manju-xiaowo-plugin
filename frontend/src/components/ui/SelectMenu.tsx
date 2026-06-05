@@ -6,6 +6,7 @@ import { DROPDOWN_PANEL_CLS, SELECT_MENU_PANEL_STYLE } from "@/components/ui/dar
 export interface SelectMenuOption {
   value: string;
   label: ReactNode;
+  description?: ReactNode;
   hint?: ReactNode;
   disabled?: boolean;
 }
@@ -198,6 +199,7 @@ export function SelectMenu({
           {options.map((option, index) => {
             const selectedOption = option.value === value;
             const active = index === activeIndex;
+            const hasDescription = Boolean(option.description);
             return (
               <button
                 key={option.value}
@@ -208,7 +210,9 @@ export function SelectMenu({
                 disabled={option.disabled}
                 onClick={() => selectOption(option)}
                 onMouseEnter={() => setActiveIndex(index)}
-                className="focus-ring flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[oklch(1_0_0_/_0.08)] disabled:cursor-not-allowed disabled:opacity-45"
+                className={`focus-ring flex w-full gap-2 rounded-md px-2 text-left transition-colors hover:bg-[oklch(1_0_0_/_0.08)] disabled:cursor-not-allowed disabled:opacity-45 ${
+                  hasDescription ? "items-start py-2" : "items-center py-1.5"
+                }`}
                 style={{
                   background:
                     selectedOption || active
@@ -216,21 +220,30 @@ export function SelectMenu({
                       : "transparent",
                 }}
               >
-                <span
-                  className="min-w-0 flex-1 truncate text-[12.5px] font-semibold"
-                  style={{
-                    color: selectedOption ? "var(--color-accent-2)" : "var(--color-text-2)",
-                  }}
-                >
-                  {option.label}
+                <span className="min-w-0 flex-1">
+                  <span
+                    className="block truncate text-[12.5px] font-semibold"
+                    style={{
+                      color: selectedOption ? "var(--color-accent-2)" : "var(--color-text-2)",
+                    }}
+                  >
+                    {option.label}
+                  </span>
+                  {hasDescription && (
+                    <span className="mt-0.5 block whitespace-normal text-[11.5px] leading-[1.45] text-text-4">
+                      {option.description}
+                    </span>
+                  )}
                 </span>
                 {option.hint && (
-                  <span className="ml-auto shrink-0 font-mono text-[10.5px] text-text-4">
+                  <span className={`ml-auto shrink-0 font-mono text-[10.5px] text-text-4 ${hasDescription ? "mt-0.5" : ""}`}>
                     {option.hint}
                   </span>
                 )}
                 <Check
-                  className={`h-3.5 w-3.5 shrink-0 text-accent-2 ${selectedOption ? "opacity-100" : "opacity-0"}`}
+                  className={`h-3.5 w-3.5 shrink-0 text-accent-2 ${hasDescription ? "mt-0.5" : ""} ${
+                    selectedOption ? "opacity-100" : "opacity-0"
+                  }`}
                   aria-hidden="true"
                 />
               </button>

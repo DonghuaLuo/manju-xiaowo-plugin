@@ -176,7 +176,7 @@ export function WizardStep2Models({
             >
               {t("dashboard:reference_video_model_requires_reference_images", {
                 defaultValue:
-                  "参考视频预览模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格模式。",
+                  "参考视频模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格分镜。",
               })}
             </div>
           ) : null}

@@ -19,6 +19,7 @@ from lib.db import async_session_factory
 from lib.project_manager import effective_mode
 from lib.prompt_builders_script import build_normalize_prompt
 from lib.script_generator import ScriptGenerator
+from lib.script_splitting_templates import current_profile, ensure_project_script_splitting_snapshot
 from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from server.agent_runtime.sdk_tools._context import ToolContext, fetch_video_caps, tool_error, tool_result_text
@@ -161,6 +162,26 @@ def _resolve_step1_path(project_path: Path, episode: int, project_data: dict[str
     return drafts_path / "step1_segments.md", "片段拆分 (Step 1)"
 
 
+def _ensure_step1_script_splitting_comments(step1_path: Path, project_data: dict[str, Any]) -> None:
+    try:
+        profile = current_profile(project_data)
+        template_id = profile.get("id")
+        script_hash = profile.get("hash")
+    except Exception:
+        return
+    if not template_id or not script_hash:
+        return
+    content = step1_path.read_text(encoding="utf-8")
+    head = "\n".join(content.splitlines()[:8])
+    if "script_splitting_hash:" in head and "script_splitting_template_id:" in head:
+        return
+    comments = (
+        f"<!-- script_splitting_template_id: {template_id} -->\n"
+        f"<!-- script_splitting_hash: {script_hash} -->\n\n"
+    )
+    step1_path.write_text(comments + content.lstrip(), encoding="utf-8")
+
+
 def generate_episode_script_tool(ctx: ToolContext):
     @tool(
         "generate_episode_script",
@@ -193,6 +214,7 @@ def generate_episode_script_tool(ctx: ToolContext):
                     "content": [{"type": "text", "text": f"❌ 未找到 Step 1 文件: {step1_path}\n   请先完成 {hint}"}],
                     "is_error": True,
                 }
+            _ensure_step1_script_splitting_comments(step1_path, project_data)
 
             if dry_run:
                 generator = ScriptGenerator(project_path)
@@ -294,6 +316,8 @@ def normalize_drama_script_tool(ctx: ToolContext):
                 return {"content": [{"type": "text", "text": "❌ 小说原文为空"}], "is_error": True}
 
             default_duration, supported_durations = await _fetch_caps_with_fallback(project)
+            ensure_project_script_splitting_snapshot(project)
+            script_profile = current_profile(project)
             prompt = build_normalize_prompt(
                 novel_text=novel_text,
                 project_overview=project.get("overview", {}),
@@ -304,6 +328,7 @@ def normalize_drama_script_tool(ctx: ToolContext):
                 default_duration=default_duration,
                 supported_durations=supported_durations,
                 episode=episode,
+                script_splitting_profile=script_profile,
             )
 
             if dry_run:
@@ -320,11 +345,16 @@ def normalize_drama_script_tool(ctx: ToolContext):
             drafts_dir = project_path / "drafts" / f"episode_{episode}"
             drafts_dir.mkdir(parents=True, exist_ok=True)
             step1_path = drafts_dir / "step1_normalized_script.md"
-            step1_path.write_text(response.strip(), encoding="utf-8")
+            step1_content = (
+                f"<!-- script_splitting_template_id: {script_profile.get('id')} -->\n"
+                f"<!-- script_splitting_hash: {script_profile.get('hash')} -->\n\n"
+                f"{response.strip()}"
+            )
+            step1_path.write_text(step1_content, encoding="utf-8")
 
             scene_count = sum(
                 1
-                for line in response.split("\n")
+                for line in step1_content.split("\n")
                 if line.strip().startswith("|") and "场景 ID" not in line and "---" not in line
             )
             return {

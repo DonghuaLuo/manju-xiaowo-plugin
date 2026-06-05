@@ -27,13 +27,17 @@ skills:
 
 使用 Read 工具读取 `project.json`（相对 session cwd），确认：
 - content_mode 字段（narration 或 drama）
+- generation_mode 字段（storyboard / grid / reference_video）
 - characters、scenes、props 已有数据
 
 使用 Glob 工具确认中间文件存在：
-- narration 模式：`drafts/episode_{N}/step1_segments.md`
-- drama 模式：`drafts/episode_{N}/step1_normalized_script.md`
+- `generation_mode=reference_video`：`drafts/episode_{N}/step1_reference_units.md`
+- 非 reference_video 且 `content_mode=narration`：`drafts/episode_{N}/step1_segments.md`
+- 非 reference_video 且 `content_mode=drama`：`drafts/episode_{N}/step1_normalized_script.md`
 
 如果中间文件不存在，报告错误并说明需要先运行哪个预处理 subagent。
+实际使用的 Step 1 路径最终由 `mcp__arcreel__generate_episode_script` 按项目级
+`content_mode` / `generation_mode` 决定；若人工检查与工具错误信息不一致，以工具返回为准。
 
 ### Step 2: 调用工具生成 JSON 剧本
 
@@ -48,9 +52,11 @@ mcp__arcreel__generate_episode_script({"episode": {N}})
 使用 Read 工具读取生成的 `scripts/episode_{N}.json`，
 确认：
 - 文件存在且为有效 JSON
-- 包含 episode、content_mode 字段
-- narration 模式：segments 数组不为空
-- drama 模式：scenes 数组不为空
+- 包含 episode、content_mode、generation_mode 字段
+- 顶层包含 script_splitting_template_id、script_splitting_hash 字段
+- `generation_mode=reference_video`：video_units 数组不为空
+- 非 reference_video 且 `content_mode=narration`：segments 数组不为空
+- 非 reference_video 且 `content_mode=drama`：scenes 数组不为空
 
 ### Step 4: 返回摘要
 
@@ -61,8 +67,8 @@ mcp__arcreel__generate_episode_script({"episode": {N}})
 
 | 统计项 | 数值 |
 |--------|------|
-| 内容模式 | narration/drama |
-| 总片段/场景数 | XX 个 |
+| 内容模式 / 生成方式 | narration/drama / storyboard/grid/reference_video |
+| 总片段/场景/unit 数 | XX 个 |
 | 总时长 | X 分 X 秒 |
 | 生成模型 | {脚本输出中实际使用的模型名} |
 

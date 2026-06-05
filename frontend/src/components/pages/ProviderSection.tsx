@@ -145,7 +145,7 @@ export function ProviderSection() {
 
   if (loadError) {
     return (
-      <div role="alert" className="flex flex-col items-start gap-2.5 px-6 py-8">
+      <div role="alert" className="flex w-full flex-col items-start gap-2.5 px-8 py-8">
         <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-warm">
           {t("common:load_failed")}
         </span>
@@ -163,7 +163,7 @@ export function ProviderSection() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 px-6 py-8 text-text-3">
+      <div className="flex w-full items-center gap-2 px-8 py-8 text-text-3">
         <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-accent-2" aria-hidden />
         <span className="font-mono text-[11px] uppercase tracking-[0.14em]">
           {t("loading_providers")}
@@ -173,7 +173,7 @@ export function ProviderSection() {
   }
 
   return (
-    <div className="flex">
+    <div className="flex w-full">
       {/* Provider list sidebar */}
       <nav
         aria-label={t("provider_list")}

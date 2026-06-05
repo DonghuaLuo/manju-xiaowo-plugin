@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import "@/i18n"; // ensure i18n resources loaded
 import { WizardStep1Basics } from "./WizardStep1Basics";
+import type { ScriptSplittingTemplateInfo } from "@/api";
 
 const baseValue = {
   title: "",
@@ -9,6 +10,44 @@ const baseValue = {
   aspectRatio: "9:16" as const,
   generationMode: "storyboard" as const,
 };
+
+const scriptSplittingTemplates: ScriptSplittingTemplateInfo[] = [
+  {
+    id: "narration_storyboard",
+    content_mode: "narration",
+    name: "图生视频方案",
+    description: "先生成分镜图，再生成视频。",
+    supported_generation_modes: ["storyboard"],
+    recommended_generation_modes: ["storyboard"],
+  },
+  {
+    id: "narration_grid",
+    content_mode: "narration",
+    name: "宫格方案",
+    description: "快速批量生成宫格分镜。",
+    supported_generation_modes: ["grid", "storyboard"],
+    recommended_generation_modes: ["grid", "storyboard"],
+    default_generation_mode: "grid",
+  },
+  {
+    id: "drama_legacy_scene_default",
+    content_mode: "drama",
+    name: "通用拆分方案",
+    description: "把剧情拆成清晰可生成的视觉场景。",
+    supported_generation_modes: ["storyboard", "reference_video", "grid"],
+    recommended_generation_modes: ["storyboard", "reference_video", "grid"],
+    default_generation_mode: "storyboard",
+  },
+  {
+    id: "drama_reference",
+    content_mode: "drama",
+    name: "剧情参考视频方案",
+    description: "剧情模式下优先使用参考视频。",
+    supported_generation_modes: ["reference_video", "storyboard"],
+    recommended_generation_modes: ["reference_video", "storyboard"],
+    default_generation_mode: "reference_video",
+  },
+];
 
 describe("WizardStep1Basics", () => {
   it("disables Next button when title is empty", () => {
@@ -57,12 +96,44 @@ describe("WizardStep1Basics", () => {
         onChange={onChange}
         onNext={() => {}}
         onCancel={() => {}}
+        scriptSplittingTemplates={scriptSplittingTemplates}
       />,
     );
-    // click drama option (剧集模式)
-    fireEvent.click(screen.getByText(/剧集模式|Drama Mode/));
+    // click drama option (剧情模式)
+    fireEvent.click(screen.getByText(/剧情模式|Drama Mode/));
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ contentMode: "drama" }),
+      expect.objectContaining({
+        contentMode: "drama",
+        generationMode: "storyboard",
+        scriptSplittingTemplateId: "drama_legacy_scene_default",
+      }),
+    );
+  });
+
+  it("selecting a script splitting template selects its first recommended generation mode", () => {
+    const onChange = vi.fn();
+    render(
+      <WizardStep1Basics
+        value={{
+          ...baseValue,
+          title: "demo",
+          scriptSplittingTemplateId: "narration_storyboard",
+        }}
+        onChange={onChange}
+        onNext={() => {}}
+        onCancel={() => {}}
+        scriptSplittingTemplates={scriptSplittingTemplates}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: /选择拆分方案/ }));
+    fireEvent.click(screen.getByRole("option", { name: /宫格方案/ }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationMode: "grid",
+        scriptSplittingTemplateId: "narration_grid",
+      }),
     );
   });
 
@@ -93,11 +164,36 @@ describe("WizardStep1Basics", () => {
         onCancel={() => {}}
       />,
     );
-    // click 宫格分镜快速版 / Grid Fast Storyboards
-    fireEvent.click(screen.getByText(/Grid Fast Storyboards|宫格分镜快速版/));
+    // click 宫格分镜 / Grid Fast Storyboards
+    fireEvent.click(screen.getByRole("radio", { name: /Grid Fast Storyboards|宫格分镜/ }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ generationMode: "grid" }),
     );
+  });
+
+  it("disables generation modes unsupported by the selected script splitting template", () => {
+    const onChange = vi.fn();
+    render(
+      <WizardStep1Basics
+        value={{
+          ...baseValue,
+          title: "demo",
+          scriptSplittingTemplateId: "narration_storyboard",
+        }}
+        onChange={onChange}
+        onNext={() => {}}
+        onCancel={() => {}}
+        scriptSplittingTemplates={scriptSplittingTemplates}
+      />,
+    );
+
+    const referenceVideoRadio = screen.getByRole("radio", { name: /Reference Video Preview|参考视频/ });
+    const gridRadio = screen.getByRole("radio", { name: /Grid Fast Storyboards|宫格分镜/ });
+    expect(referenceVideoRadio).toBeDisabled();
+    expect(gridRadio).toBeDisabled();
+
+    fireEvent.click(referenceVideoRadio);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("emits onChange when title input changes", () => {
@@ -168,7 +264,7 @@ describe("WizardStep1Basics", () => {
         onCancel={() => {}}
       />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: /Reference Video Preview|参考视频预览/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Reference Video Preview|参考视频/ }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ generationMode: "reference_video" }));
   });
 });

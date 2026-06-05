@@ -5,7 +5,7 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useLocation } from "wouter";
 import { Check, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { API } from "@/api";
+import { API, type ScriptSplittingTemplateInfo } from "@/api";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useAppStore } from "@/stores/app-store";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
@@ -18,6 +18,10 @@ import {
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
 import { lookupVideoContinuitySupport } from "@/utils/provider-models";
+import {
+  defaultScriptSplittingTemplateId,
+  firstRecommendedGenerationMode,
+} from "@/components/shared/ScriptSplittingTemplateSelector";
 import { WizardStep1Basics, type WizardStep1Value } from "./create-project/WizardStep1Basics";
 import { WizardStep2Models, type WizardStep2Data } from "./create-project/WizardStep2Models";
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
@@ -157,6 +161,7 @@ export function CreateProjectModal() {
     contentMode: "narration",
     aspectRatio: "9:16",
     generationMode: "storyboard",
+    scriptSplittingTemplateId: null,
   });
 
   const [models, setModels] = useState<ModelConfigValue>({
@@ -188,6 +193,7 @@ export function CreateProjectModal() {
   const [analyzingStyle, setAnalyzingStyle] = useState(false);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
+  const [scriptSplittingTemplates, setScriptSplittingTemplates] = useState<ScriptSplittingTemplateInfo[]>([]);
 
   // Step2 的远端数据 hoist 到此处：只在 modal 挂载时 fetch 一次，
   // 前进/后退切 step 时 Step2 unmount/mount 不再触发 HTTP。
@@ -269,6 +275,37 @@ export function CreateProjectModal() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    voidCall((async () => {
+      try {
+        const result = await API.getScriptSplittingTemplates();
+        if (cancelled) return;
+        setScriptSplittingTemplates(result.templates);
+        setBasics((prev) => {
+          if (prev.scriptSplittingTemplateId) return prev;
+          const templateId = defaultScriptSplittingTemplateId(
+            prev.contentMode,
+            result.templates,
+          );
+          const template = result.templates.find((tpl) => tpl.id === templateId);
+          return templateId
+            ? {
+                ...prev,
+                generationMode: firstRecommendedGenerationMode(template, prev.generationMode),
+                scriptSplittingTemplateId: templateId,
+              }
+            : prev;
+        });
+      } catch {
+        // 后端创建项目会在未传模板 ID 时选择内容模式默认模板。
+      }
+    })());
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // blob: URL 所有权集中在此：StylePicker 只通过 onChange 更换引用，
   // revoke 统一由本 effect 在 URL 变更或 unmount 时触发。非 blob: 跳过。
   useEffect(() => {
@@ -314,7 +351,7 @@ export function CreateProjectModal() {
         useAppStore.getState().pushToast(
           t("dashboard:reference_video_model_requires_reference_images", {
             defaultValue:
-              "参考视频预览模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格模式。",
+              "参考视频模式需要支持参考图的视频模型。请切换到支持 reference images 的模型，或返回选择图生视频 / 宫格分镜。",
           }),
           "error",
         );
@@ -343,6 +380,7 @@ export function CreateProjectModal() {
         content_mode: basics.contentMode,
         aspect_ratio: basics.aspectRatio,
         generation_mode: basics.generationMode,
+        script_splitting_template_id: basics.scriptSplittingTemplateId || null,
         video_continuity_policy: videoContinuityPolicy,
         default_duration: models.defaultDuration,
         style_template_id: style.mode === "template" ? style.templateId : null,
@@ -494,6 +532,7 @@ export function CreateProjectModal() {
               onChange={setBasics}
               onNext={() => setStep(2)}
               onCancel={handleClose}
+              scriptSplittingTemplates={scriptSplittingTemplates}
             />
           )}
           {step === 2 && (

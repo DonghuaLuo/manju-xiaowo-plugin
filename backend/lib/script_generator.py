@@ -29,6 +29,7 @@ from lib.script_models import (
     NarrationEpisodeScript,
     ReferenceVideoScript,
 )
+from lib.script_splitting_templates import current_hash, current_profile, ensure_project_script_splitting_snapshot
 from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from lib.text_metrics import count_reading_units
@@ -83,6 +84,7 @@ class ScriptGenerator:
 
         # 加载 project.json
         self.project_json = self._load_project_json()
+        ensure_project_script_splitting_snapshot(self.project_json)
         self.content_mode = self.project_json.get("content_mode", "narration")
 
     def _effective_generation_mode(self, episode: int) -> str:
@@ -117,6 +119,7 @@ class ScriptGenerator:
 
         gen_mode = self._effective_generation_mode(episode)
         caps = await self._fetch_video_capabilities()
+        profile = self._refresh_script_splitting_snapshot(caps)
 
         step1_md = self._load_step1(episode)
 
@@ -138,6 +141,7 @@ class ScriptGenerator:
                 max_duration=self._resolve_max_duration(caps),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
             schema = ReferenceVideoScript
         elif self.content_mode == "narration":
@@ -153,6 +157,7 @@ class ScriptGenerator:
                 default_duration=self.project_json.get("default_duration"),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
             schema = NarrationEpisodeScript
         else:
@@ -168,6 +173,7 @@ class ScriptGenerator:
                 default_duration=self.project_json.get("default_duration"),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
             schema = DramaEpisodeScript
 
@@ -229,6 +235,7 @@ class ScriptGenerator:
         """
         gen_mode = self._effective_generation_mode(episode)
         caps = await self._fetch_video_capabilities()
+        profile = self._refresh_script_splitting_snapshot(caps)
         step1_md = self._load_step1(episode)
         characters = self.project_json.get("characters", {})
         scenes = self.project_json.get("scenes", {})
@@ -248,6 +255,7 @@ class ScriptGenerator:
                 max_duration=self._resolve_max_duration(caps),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
         elif self.content_mode == "narration":
             return build_narration_prompt(
@@ -262,6 +270,7 @@ class ScriptGenerator:
                 default_duration=self.project_json.get("default_duration"),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
         else:
             return build_drama_prompt(
@@ -276,7 +285,12 @@ class ScriptGenerator:
                 default_duration=self.project_json.get("default_duration"),
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
+                script_splitting_profile=profile,
             )
+
+    def _refresh_script_splitting_snapshot(self, caps: dict | None = None) -> dict:
+        ensure_project_script_splitting_snapshot(self.project_json, provider_capabilities=caps)
+        return current_profile(self.project_json)
 
     async def _fetch_video_capabilities(self) -> dict | None:
         """从 ConfigResolver 解析视频模型能力；失败时返 None，由 _resolve_* fallback 到 project.json 直读。
@@ -435,6 +449,10 @@ class ScriptGenerator:
         # CLI 参数 --episode 是集号唯一真相源。schema 已从 AI 输出中移除 episode 字段，
         # 这里负责落盘前补上。
         script_data["episode"] = int(episode)
+        profile = current_profile(self.project_json)
+        script_hash = current_hash(self.project_json)
+        script_data["script_splitting_template_id"] = profile.get("id")
+        script_data["script_splitting_hash"] = script_hash
 
         # 兜底改写 segment/scene/unit ID 中的 E\d+ 前缀，避免 LLM 写错集号导致文件
         # 名跨集冲突（如 storyboards/scene_E1S01.png 被 E2 重新覆盖）。
@@ -502,6 +520,7 @@ class ScriptGenerator:
         script_data["metadata"]["created_at"] = now
         script_data["metadata"]["updated_at"] = now
         script_data["metadata"]["generator"] = self.generator.model if self.generator else "unknown"
+        script_data["metadata"]["script_splitting_hash"] = script_hash
 
         # 计算统计信息（episode 级角色/场景/道具聚合由 StatusCalculator 读时计算）
         if gen_mode == "reference_video":

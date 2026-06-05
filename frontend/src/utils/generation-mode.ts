@@ -7,7 +7,11 @@
 
 export type GenerationMode = "storyboard" | "grid" | "reference_video";
 
-const CANONICAL: readonly GenerationMode[] = ["storyboard", "grid", "reference_video"];
+export const GENERATION_MODES = ["storyboard", "reference_video", "grid"] as const satisfies readonly GenerationMode[];
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+const CANONICAL: readonly GenerationMode[] = GENERATION_MODES;
 
 /** All recognized input strings (canonical + legacy alias). */
 const RECOGNIZED = new Set<string>(["single", ...CANONICAL]);
@@ -32,4 +36,30 @@ export function effectiveMode(
   const proj = project?.generation_mode;
   if (typeof proj === "string" && RECOGNIZED.has(proj)) return normalizeMode(proj);
   return "storyboard";
+}
+
+export function generationModeLabel(mode: GenerationMode, t: Translate): string {
+  if (mode === "storyboard") {
+    return t("mode_storyboard", { defaultValue: "图生视频" });
+  }
+  if (mode === "grid") {
+    return t("mode_grid", { defaultValue: "宫格分镜" });
+  }
+  return t("mode_reference_video", { defaultValue: "参考视频" });
+}
+
+export function generationModeDescription(mode: GenerationMode, t: Translate): string {
+  if (mode === "storyboard") {
+    return t("mode_storyboard_desc", {
+      defaultValue: "推荐正式成片：先生成分镜图，再逐镜头图生视频。",
+    });
+  }
+  if (mode === "grid") {
+    return t("mode_grid_desc", {
+      defaultValue: "快速批量生成宫格分镜，适合先看整体画风和节奏。",
+    });
+  }
+  return t("mode_reference_video_desc", {
+    defaultValue: "跳过分镜，用角色/场景/道具参考图直接生成片段。",
+  });
 }

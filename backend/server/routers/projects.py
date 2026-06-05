@@ -35,9 +35,21 @@ from lib.i18n import Translator
 from lib.profile_manifest import ContentMode
 from lib.project_change_hints import project_change_source
 from lib.project_manager import ProjectManager
+from lib.script_splitting_templates import (
+    delete_custom_script_splitting_template,
+    export_script_splitting_template,
+    list_script_splitting_templates,
+    mark_template_change_stale_assets,
+    preview_template_change,
+    resolve_script_splitting_profile,
+    snapshot_from_profile,
+    upsert_custom_script_splitting_template,
+    validate_script_splitting_template,
+)
 from lib.status_calculator import StatusCalculator
 from lib.style_templates import is_known_template, list_style_templates, resolve_template_prompt
 from lib.upload_utils import copy_upload_file, local_upload_path, read_upload_bytes
+from lib.video_input_preflight import run_video_input_preflight
 from server.auth import CurrentUser, create_download_token, verify_download_token
 from server.routers._validators import validate_backend_value
 from server.services.asset_archive import (
@@ -95,6 +107,7 @@ class CreateProjectRequest(BaseModel):
     episode_target_units: int | None = 1000
     source_language: Literal["zh", "en", "vi"] | None = "zh"
     generation_mode: GenerationMode = "storyboard"
+    script_splitting_template_id: str | None = None
     # ===== 新增 =====
     style_template_id: str | None = None
     video_backend: str | None = None
@@ -134,6 +147,7 @@ class UpdateProjectRequest(BaseModel):
     episode_target_units: int | None = None
     source_language: Literal["zh", "en", "vi"] | None = None
     generation_mode: str | None = None
+    script_splitting_template_id: str | None = None
     video_backend: str | None = None
     image_backend: str | None = None
     image_provider_t2i: str | None = None
@@ -151,6 +165,45 @@ class UpdateProjectRequest(BaseModel):
     video_continuity_policy: VideoContinuityPolicy | None = None
 
 
+class ScriptSplittingTemplateChangeRequest(BaseModel):
+    template_id: str
+    generation_mode: GenerationMode | None = None
+    confirm: bool = False
+    mode: Literal["preview", "apply_keep_drafts", "apply_rebuild_step1"] = "apply_keep_drafts"
+
+
+class ScriptSplittingTemplateUpsertRequest(BaseModel):
+    id: str | None = None
+    base_template_id: str | None = None
+    derived_from_template_id: str | None = None
+    creation_mode: Literal["improve", "new_style"] | None = None
+    name: str | None = None
+    description: str | None = None
+    supported_generation_modes: list[GenerationMode] | None = None
+    recommended_generation_modes: list[GenerationMode] | None = None
+    intent_brief: str | None = None
+    derivation_note: str | None = None
+    tone_preferences: list[str] | None = None
+    extra_split_rules: list[str] | None = None
+    extra_forbidden_patterns: list[str] | None = None
+    example_source: str | None = None
+    example_expected_output: str | None = None
+
+
+class ScriptSplittingTemplateImportRequest(BaseModel):
+    template: dict[str, Any]
+
+
+class VideoInputPreflightRequest(BaseModel):
+    aspect_ratio: str | None = None
+    duration_seconds: int | None = None
+    generate_audio: bool | None = None
+    reference_images_count: int | None = None
+    reference_images: list[str] | None = None
+    first_frame_path: str | None = None
+    last_frame_path: str | None = None
+
+
 def _validate_episode_target_units(value: int | None) -> int | None:
     if value is None:
         return None
@@ -164,6 +217,89 @@ async def get_style_templates(_user: CurrentUser):
     """返回后端注册的预设风格清单，prompt 以后端为唯一来源。"""
     manager = get_project_manager()
     return {"success": True, "templates": list_style_templates(data_root=_manager_data_root(manager))}
+
+
+@router.get("/script-splitting-templates")
+async def get_script_splitting_templates(
+    _user: CurrentUser,
+    content_mode: ContentMode | None = Query(None),
+):
+    """返回内置和用户拆分方案模板清单。"""
+    manager = get_project_manager()
+    return {
+        "success": True,
+        "templates": list_script_splitting_templates(content_mode, data_root=_manager_data_root(manager)),
+    }
+
+
+@router.post("/script-splitting-templates")
+async def upsert_script_splitting_template(
+    req: ScriptSplittingTemplateUpsertRequest,
+    _user: CurrentUser,
+):
+    """复制内置模板并保存为用户拆分方案。"""
+    try:
+        manager = get_project_manager()
+        template = upsert_custom_script_splitting_template(
+            req.model_dump(exclude_none=True),
+            data_root=_manager_data_root(manager),
+            source="user_generated",
+        )
+        validation = validate_script_splitting_template(template)
+        return {"success": True, "template": template, "validation": validation}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/script-splitting-templates/import")
+async def import_script_splitting_template(
+    req: ScriptSplittingTemplateImportRequest,
+    _user: CurrentUser,
+):
+    """导入一个经过校验的用户拆分方案 JSON。"""
+    try:
+        manager = get_project_manager()
+        template = upsert_custom_script_splitting_template(
+            req.template,
+            data_root=_manager_data_root(manager),
+            source="imported",
+        )
+        validation = validate_script_splitting_template(template)
+        return {"success": True, "template": template, "validation": validation}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/script-splitting-templates/{template_id}/export")
+async def export_script_splitting_template_payload(
+    template_id: str,
+    _user: CurrentUser,
+):
+    """导出拆分方案模板 JSON。"""
+    try:
+        manager = get_project_manager()
+        payload = export_script_splitting_template(template_id, data_root=_manager_data_root(manager))
+        return {"success": True, **payload}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/script-splitting-templates/{template_id}")
+async def delete_script_splitting_template(
+    template_id: str,
+    _user: CurrentUser,
+):
+    """删除用户拆分方案模板；内置模板不可删除。"""
+    try:
+        manager = get_project_manager()
+        deleted = delete_custom_script_splitting_template(template_id, data_root=_manager_data_root(manager))
+        if not deleted:
+            raise HTTPException(status_code=404, detail="拆分方案模板不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _cleanup_temp_file(path: str) -> None:
@@ -516,6 +652,12 @@ async def create_project(
             if req.image_backend:
                 raise HTTPException(status_code=400, detail=_t("deprecated_image_backend"))
             episode_target_units = _validate_episode_target_units(req.episode_target_units)
+            resolve_script_splitting_profile(
+                req.content_mode or "narration",
+                req.generation_mode,
+                req.script_splitting_template_id,
+                data_root=_manager_data_root(manager),
+            )
 
             # 与 update 路径对称：校验所有 backend 字段
             for field_name in (
@@ -569,6 +711,7 @@ async def create_project(
                     aspect_ratio=req.aspect_ratio,
                     default_duration=req.default_duration,
                     style_template_id=req.style_template_id,
+                    script_splitting_template_id=req.script_splitting_template_id,
                     extras=extras or None,
                 )
             return {"success": True, "name": project_name, "project": project}
@@ -605,6 +748,142 @@ async def get_video_capabilities(
             status_code=422,
             detail=_t("video_capabilities_unresolved", name=name, reason=str(exc)),
         ) from exc
+
+
+@router.post("/projects/{name}/script-splitting-template/preview")
+async def preview_script_splitting_template_change(
+    name: str,
+    req: ScriptSplittingTemplateChangeRequest,
+    _user: CurrentUser,
+    _t: Translator,
+):
+    """预览拆分方案切换；已生成产物保留，仅未来未生成分集使用新方案。"""
+    try:
+        project = await asyncio.to_thread(get_project_manager().load_project, name)
+        current_generation_mode = (
+            project.get("generation_mode") if project.get("generation_mode") in {"storyboard", "grid", "reference_video"} else "storyboard"
+        )
+        if req.generation_mode and req.generation_mode != current_generation_mode:
+            raise HTTPException(status_code=400, detail=_t("project_generation_mode_not_editable"))
+        resolver = ConfigResolver(async_session_factory)
+        try:
+            provider_capabilities = await resolver.video_capabilities_for_project(project)
+        except ValueError:
+            provider_capabilities = None
+        return {
+            "success": True,
+            "preview": preview_template_change(
+                project,
+                req.template_id,
+                provider_capabilities=provider_capabilities,
+                data_root=_manager_data_root(get_project_manager()),
+                project_path=get_project_manager().get_project_path(name),
+            ),
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=_t("project_not_found", name=name))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{name}/script-splitting-template/apply")
+@router.post("/projects/{name}/script-splitting-template")
+async def change_script_splitting_template(
+    name: str,
+    req: ScriptSplittingTemplateChangeRequest,
+    _user: CurrentUser,
+    _t: Translator,
+):
+    """通过专用动作切换项目拆分方案；切换只影响未来未生成分集。"""
+    try:
+        project_for_caps = await asyncio.to_thread(get_project_manager().load_project, name)
+        current_generation_mode = (
+            project_for_caps.get("generation_mode")
+            if project_for_caps.get("generation_mode") in {"storyboard", "grid", "reference_video"}
+            else "storyboard"
+        )
+        if req.generation_mode and req.generation_mode != current_generation_mode:
+            raise HTTPException(status_code=400, detail=_t("project_generation_mode_not_editable"))
+        resolver = ConfigResolver(async_session_factory)
+        try:
+            provider_capabilities = await resolver.video_capabilities_for_project(project_for_caps)
+        except ValueError:
+            provider_capabilities = None
+        if req.mode == "preview":
+            return {
+                "success": True,
+                "preview": preview_template_change(
+                    project_for_caps,
+                    req.template_id,
+                    provider_capabilities=provider_capabilities,
+                    data_root=_manager_data_root(get_project_manager()),
+                    project_path=get_project_manager().get_project_path(name),
+                ),
+            }
+
+        def _sync():
+            manager = get_project_manager()
+
+            def _mutate(project: dict) -> None:
+                preview = preview_template_change(
+                    project,
+                    req.template_id,
+                    provider_capabilities=provider_capabilities,
+                    data_root=_manager_data_root(manager),
+                    project_path=manager.get_project_path(name),
+                )
+                profile = resolve_script_splitting_profile(
+                    project.get("content_mode"),
+                    project.get("generation_mode"),
+                    req.template_id,
+                    provider_capabilities=provider_capabilities,
+                    data_root=_manager_data_root(manager),
+                )
+                project["script_splitting_template_id"] = profile["id"]
+                project["script_splitting"] = snapshot_from_profile(profile)
+                mark_template_change_stale_assets(
+                    project,
+                    preview=preview,
+                    mode=req.mode,
+                    data_root=_manager_data_root(manager),
+                )
+
+            with project_change_source("webui"):
+                project = manager.update_project(name, _mutate)
+            return {"success": True, "project": project}
+
+        return await asyncio.to_thread(_sync)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=_t("project_not_found", name=name))
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{name}/video-input-preflight")
+async def video_input_preflight(
+    name: str,
+    req: VideoInputPreflightRequest,
+    _user: CurrentUser,
+    _t: Translator,
+):
+    """视频生成前规则型检查。视觉判断首版返回 manual / vision_ai_pending。"""
+    try:
+        project = await asyncio.to_thread(get_project_manager().load_project, name)
+        resolver = ConfigResolver(async_session_factory)
+        try:
+            capabilities = await resolver.video_capabilities_for_project(project)
+        except ValueError:
+            capabilities = None
+        result = run_video_input_preflight(
+            project=project,
+            capabilities=capabilities,
+            request=req.model_dump(exclude_none=True),
+        )
+        return {"success": True, "preflight": result}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=_t("project_not_found", name=name))
 
 
 @router.get("/projects/{name}")
@@ -680,6 +959,11 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                 raise HTTPException(
                     status_code=400,
                     detail=_t("project_generation_mode_not_editable"),
+                )
+            if "script_splitting_template_id" in req.model_fields_set:
+                raise HTTPException(
+                    status_code=400,
+                    detail="普通项目 PATCH 不支持直接修改拆分方案，请使用专用模板切换接口",
                 )
 
             # legacy image_backend 已退役（拆为 image_provider_t2i/i2i）；写路径直接拒绝，
