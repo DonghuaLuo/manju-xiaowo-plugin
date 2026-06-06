@@ -108,10 +108,11 @@ def _parse_project_provider(raw: object, media_type: str) -> tuple[str, str] | N
 
 
 def _seedance_model_family(model_id: str) -> str:
-    model = model_id.lower()
-    if "seedance-2" in model or "seedance2" in model or "seedance-2.0" in model:
+    from lib.video_backends.ark import ArkVideoBackend
+
+    if ArkVideoBackend._is_seedance_2(model_id):
         return "seedance_2"
-    if "seedance-1-0" in model or "seedance-1.0" in model:
+    if ArkVideoBackend._is_seedance_1_0(model_id):
         return "seedance_1_0"
     return "seedance_1_5"
 

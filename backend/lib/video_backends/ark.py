@@ -32,38 +32,10 @@ class ArkVideoBackend:
 
     DEFAULT_MODEL = "doubao-seedance-1-5-pro-251215"
 
-    # Seedance 2.0 系列不接受 service_tier 参数；FLEX_TIER 必须从能力集中剔除，
-    # 否则 _create_task 会触发上游 400。ark 与 ark-agent-plan 各用不同的模型 ID
-    # 命名（dash + 日期戳 vs. dot 简洁版），两套都要纳入。
-    _SEEDANCE_2_BASE_CAPABILITIES: set[VideoCapability] = {
-        VideoCapability.TEXT_TO_VIDEO,
-        VideoCapability.IMAGE_TO_VIDEO,
-        VideoCapability.GENERATE_AUDIO,
-        VideoCapability.SEED_CONTROL,
-    }
-
-    _SEEDANCE_1_BASE_CAPABILITIES: set[VideoCapability] = {
+    _BASE_CAPABILITIES: set[VideoCapability] = {
         VideoCapability.TEXT_TO_VIDEO,
         VideoCapability.IMAGE_TO_VIDEO,
         VideoCapability.SEED_CONTROL,
-        VideoCapability.FLEX_TIER,
-    }
-
-    _MODEL_CAPABILITIES: dict[str, set[VideoCapability]] = {
-        "doubao-seedance-2-0-260128": _SEEDANCE_2_BASE_CAPABILITIES,
-        "doubao-seedance-2-0-fast-260128": _SEEDANCE_2_BASE_CAPABILITIES,
-        "doubao-seedance-2.0": _SEEDANCE_2_BASE_CAPABILITIES,
-        "doubao-seedance-2.0-fast": _SEEDANCE_2_BASE_CAPABILITIES,
-        "doubao-seedance-1-0-pro-250528": _SEEDANCE_1_BASE_CAPABILITIES,
-        "doubao-seedance-1-0-pro-fast-251015": _SEEDANCE_1_BASE_CAPABILITIES,
-    }
-
-    _DEFAULT_CAPABILITIES: set[VideoCapability] = {
-        VideoCapability.TEXT_TO_VIDEO,
-        VideoCapability.IMAGE_TO_VIDEO,
-        VideoCapability.GENERATE_AUDIO,
-        VideoCapability.SEED_CONTROL,
-        VideoCapability.FLEX_TIER,
     }
 
     def __init__(
@@ -75,7 +47,7 @@ class ArkVideoBackend:
     ):
         self._client = create_ark_client(api_key=api_key, base_url=base_url)
         self._model = model or self.DEFAULT_MODEL
-        self._capabilities = self._MODEL_CAPABILITIES.get(self._model, self._DEFAULT_CAPABILITIES)
+        self._capabilities = self._capabilities_for_model(self._model)
 
     @property
     def name(self) -> str:
@@ -89,11 +61,32 @@ class ArkVideoBackend:
     def capabilities(self) -> set[VideoCapability]:
         return self._capabilities
 
+    @classmethod
+    def _capabilities_for_model(cls, model: str) -> set[VideoCapability]:
+        capabilities = set(cls._BASE_CAPABILITIES)
+        if not cls._is_seedance_1_0(model):
+            capabilities.add(VideoCapability.GENERATE_AUDIO)
+        # Seedance 2.0 系列不接受 service_tier 参数；FLEX_TIER 必须从能力集中剔除。
+        # 用子串兼容 doubao-/dreamina- 等前缀，但只声明已验证的 2-0 / 2.0 版本。
+        if not cls._is_seedance_2(model):
+            capabilities.add(VideoCapability.FLEX_TIER)
+        return capabilities
+
+    @staticmethod
+    def _is_seedance_2(model: str) -> bool:
+        model_lower = model.lower()
+        return "seedance-2-0" in model_lower or "seedance-2.0" in model_lower
+
+    @staticmethod
+    def _is_seedance_1_0(model: str) -> bool:
+        model_lower = model.lower()
+        return "seedance-1-0" in model_lower or "seedance-1.0" in model_lower
+
     @staticmethod
     def video_capabilities_for_model(model: str) -> VideoCapabilities:
         """按 model_id 纯计算 caps，不构造 Ark SDK client。"""
         model_lower = model.lower()
-        if "seedance-2" in model_lower or "seedance2" in model_lower:
+        if ArkVideoBackend._is_seedance_2(model):
             return VideoCapabilities(
                 last_frame=True,
                 reference_images=True,
