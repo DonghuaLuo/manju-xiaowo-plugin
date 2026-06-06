@@ -145,6 +145,7 @@ MESSAGES = {
     "image_capability_missing_i2i": "{provider}/{model} does not support image-to-image; configure a default model that supports image edits",
     "image_capability_missing_t2i": "{provider}/{model} does not support text-to-image; configure a default model that supports text-to-image",
     "image_dashscope_4k_t2i_only": "Model {model}: 4K output is only supported by wan2.7-image-pro for text-to-image; use 2K or lower",
+    "image_reference_images_too_many": "Model {model} supports at most {max_reference_images} reference images, but {count} were submitted; remove references or choose a model with a higher limit",
     "image_reference_images_unreadable": "Model {model} has reference images that are missing or unreadable; generation aborted: {names}; check the reference image paths",
     # Video Capability
     "video_duration_invalid": "Video duration {duration} is not a valid integer number of seconds",

@@ -199,7 +199,6 @@ export function generationProfilesSignature(profiles?: GenerationProfiles | null
 }
 
 export const SHOT_TIERS = ["S", "A", "B"] as const satisfies readonly ShotTier[];
-export const REFERENCE_IMAGE_POLICIES = ["full_context", "balanced", "lean"] as const;
 const VIDEO_CONTINUITY_PROFILE_POLICIES = ["auto", "start_only", "end_frame", "reference_assisted"] as const;
 
 export type ShotTierProfiles = Partial<Record<ShotTier, ShotTierProfile>>;
@@ -217,7 +216,6 @@ export function createDefaultShotTierProfiles(
     S: {
       label: "hero",
       retry_budget: 1,
-      reference_image_policy: "full_context",
       video_continuity_policy: "auto",
       prefer_final_storyboard_source: true,
       profiles: {
@@ -234,7 +232,6 @@ export function createDefaultShotTierProfiles(
     A: {
       label: "standard",
       retry_budget: 1,
-      reference_image_policy: "balanced",
       video_continuity_policy: "auto",
       prefer_final_storyboard_source: true,
       profiles: {},
@@ -242,7 +239,6 @@ export function createDefaultShotTierProfiles(
     B: {
       label: "utility",
       retry_budget: 1,
-      reference_image_policy: "lean",
       video_continuity_policy: "start_only",
       prefer_final_storyboard_source: false,
       profiles: {

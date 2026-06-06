@@ -113,6 +113,9 @@ def _ark_image_pricing(model_id: str, per_image: float) -> PerImageFlat:
     return PerImageFlat(rates={model_id: per_image}, default_model=model_id, currency="CNY")
 
 
+ARK_SEEDREAM_MAX_REFERENCE_IMAGES = 14
+
+
 # Ark 视频费率（元/百万 token），按 (service_tier, 是否生成音频)。
 def _ark_video_pricing(model_id: str, rates: dict[tuple[str, bool], float]) -> PerTokenVideo:
     return PerTokenVideo(rates={model_id: rates}, default_model=model_id)
@@ -379,24 +382,28 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
+                max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
 
                 pricing=_ark_image_pricing("doubao-seedream-5-0-lite-260128", 0.22),),
             "doubao-seedream-5-0-260128": ModelInfo(
                 display_name="Seedream 5.0",
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
+                max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
 
                 pricing=_ark_image_pricing("doubao-seedream-5-0-260128", 0.22),),
             "doubao-seedream-4-5-251128": ModelInfo(
                 display_name="Seedream 4.5",
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
+                max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
 
                 pricing=_ark_image_pricing("doubao-seedream-4-5-251128", 0.25),),
             "doubao-seedream-4-0-250828": ModelInfo(
                 display_name="Seedream 4.0",
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
+                max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
 
                 pricing=_ark_image_pricing("doubao-seedream-4-0-250828", 0.20),),
             # --- video ---
@@ -539,6 +546,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
+                max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
             ),
             # --- video ---
             "doubao-seedance-1.5-pro": ModelInfo(
@@ -676,6 +684,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 resolutions=["512px", "1K", "2K"],
+                max_reference_images=16,
 
                 pricing=_openai_image_pricing(
                     "gpt-image-2",
@@ -735,6 +744,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 resolutions=["1080p", "2K", "4K"],
+                max_reference_images=7,
 
                 pricing=ViduDelegate(),),
             "viduq1": ModelInfo(
@@ -742,6 +752,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["image_to_image"],
                 resolutions=["1080p"],
+                max_reference_images=7,
 
                 pricing=ViduDelegate(),),
             # --- video ---
@@ -835,6 +846,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 resolutions=["2048*2048", "2688*1536", "1536*2688", "2368*1728", "1728*2368"],
+                max_reference_images=3,
                 pricing=_dashscope_image_pricing("qwen-image-2.0", 0.2),
             ),
             "qwen-image-2.0-pro": ModelInfo(
@@ -842,6 +854,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 resolutions=["2048*2048", "2688*1536", "1536*2688", "2368*1728", "1728*2368"],
+                max_reference_images=3,
                 pricing=_dashscope_image_pricing("qwen-image-2.0-pro", 0.5),
             ),
             "qwen-image-edit-plus": ModelInfo(
@@ -849,6 +862,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["image_to_image"],
                 resolutions=["2048*2048", "2048*1152", "1152*2048", "2048*1536", "1536*2048"],
+                max_reference_images=3,
                 pricing=_dashscope_image_pricing("qwen-image-edit-plus", 0.2),
             ),
             "qwen-image-edit-max": ModelInfo(
@@ -856,6 +870,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["image_to_image"],
                 resolutions=["2048*2048", "2048*1152", "1152*2048", "2048*1536", "1536*2048"],
+                max_reference_images=3,
                 pricing=_dashscope_image_pricing("qwen-image-edit-max", 0.5),
             ),
             "wan2.7-image": ModelInfo(
@@ -863,6 +878,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 resolutions=["1K", "2K"],
+                max_reference_images=9,
                 pricing=_dashscope_image_pricing("wan2.7-image", 0.2),
             ),
             "wan2.7-image-pro": ModelInfo(
@@ -870,6 +886,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 resolutions=["1K", "2K", "4K"],
+                max_reference_images=9,
                 pricing=_dashscope_image_pricing("wan2.7-image-pro", 0.5),
             ),
             "happyhorse-1.0-i2v": ModelInfo(

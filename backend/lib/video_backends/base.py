@@ -101,6 +101,42 @@ async def persist_api_call_id(task_id: str, call_id: int) -> None:
         raise
 
 
+@with_retry_async(
+    max_attempts=3,
+    backoff_seconds=_PERSIST_BACKOFF_SECONDS,
+    retry_if=lambda e: isinstance(e, _PERSIST_RETRYABLE_ERRORS),
+)
+async def _persist_task_payload_fields_with_retry(task_id: str, fields: dict[str, object]) -> bool:
+    from lib.generation_queue import get_generation_queue
+
+    queue = get_generation_queue()
+    persist = getattr(queue, "persist_task_payload_fields", None)
+    if persist is None:
+        return False
+    await persist(task_id, fields)
+    return True
+
+
+async def persist_task_payload_fields(task_id: str, fields: dict[str, object]) -> None:
+    """Persist restart resume context before provider submit."""
+    if not fields:
+        return
+    try:
+        persisted = await _persist_task_payload_fields_with_retry(task_id, fields)
+        if persisted:
+            logger.info("task payload 恢复上下文已持久化 task_id=%s fields=%s", task_id, sorted(fields))
+        else:
+            logger.debug("当前队列不支持恢复上下文字段持久化 task_id=%s fields=%s", task_id, sorted(fields))
+    except Exception as exc:
+        logger.error(
+            "task_payload_fields_persist_failed task_id=%s fields=%s error=%s",
+            task_id,
+            sorted(fields),
+            exc,
+        )
+        raise
+
+
 class ResumeExpiredError(RuntimeError):
     """Provider 端 job 已过期或未找到——重启自愈无法接续，须走 mark_failed。
 

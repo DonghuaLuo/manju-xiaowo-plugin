@@ -8,9 +8,11 @@ import {
   SegmentRefsEditModal,
   type SegmentRefsChanges,
 } from "@/components/ui/SegmentRefsEditModal";
+import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { Character, Prop, Scene } from "@/types";
 import { type AssetKind, SHEET_FIELD } from "@/types/reference-video";
+import { errMsg } from "@/utils/async";
 import { colorForName } from "@/utils/color";
 import { WARM_TONE } from "@/utils/severity-tone";
 
@@ -18,6 +20,8 @@ type CharField = "characters_in_segment" | "characters_in_scene";
 
 interface ReferencesSectionProps {
   projectName: string;
+  segmentId: string;
+  scriptFile?: string;
   contentMode: "narration" | "drama";
   characterNames: string[];
   sceneNames: string[];
@@ -70,6 +74,8 @@ function popoverImageSize(kind: AssetKind): string {
 
 export function ReferencesSection({
   projectName,
+  segmentId,
+  scriptFile,
   contentMode,
   characterNames,
   sceneNames,
@@ -85,6 +91,7 @@ export function ReferencesSection({
   const scenes = useMemo(() => project?.scenes ?? EMPTY_DICT, [project]);
   const props = useMemo(() => project?.props ?? EMPTY_DICT, [project]);
   const [open, setOpen] = useState(false);
+  const pushToast = useAppStore((s) => s.pushToast);
 
   const charField: CharField =
     contentMode === "drama" ? "characters_in_scene" : "characters_in_segment";
@@ -115,6 +122,25 @@ export function ReferencesSection({
     }
     setSaving(true);
     try {
+      if (!scriptFile) {
+        const message = t("segment_refs_missing_script_file", {
+          defaultValue: "缺少剧本文件，无法检查参考图上限，请刷新项目后重试。",
+        });
+        pushToast(message, "warning");
+        throw new Error(message);
+      }
+      try {
+        await API.previewStoryboardReferenceUsage(projectName, segmentId, {
+          script_file: scriptFile,
+          characters: changes.characters ?? characterNames,
+          scenes: changes.scenes ?? sceneNames,
+          props: changes.props ?? propNames,
+        });
+      } catch (err) {
+        const message = errMsg(err);
+        pushToast(message, "warning");
+        throw new Error(message);
+      }
       await onSave(patch);
       setOpen(false);
     } finally {

@@ -61,6 +61,12 @@ def _current_version_metadata(project_dir: Path, resource_type: str, resource_id
 def _metadata_defaults(metadata: dict[str, Any]) -> dict[str, Any]:
     route = metadata.get("generation_route")
     route = route if isinstance(route, dict) else {}
+    strategy = metadata.get("shot_tier_strategy")
+    if not isinstance(strategy, dict):
+        strategy = route.get("shot_tier_strategy")
+    strategy = strategy if isinstance(strategy, dict) else {}
+    reference_policy = metadata.get("provider_image_reference_policy")
+    reference_policy = reference_policy if isinstance(reference_policy, dict) else {}
     return {
         "provider": route.get("provider"),
         "model": route.get("model"),
@@ -68,6 +74,14 @@ def _metadata_defaults(metadata: dict[str, Any]) -> dict[str, Any]:
         "generation_profile_key": metadata.get("generation_profile_key"),
         "shot_tier": metadata.get("shot_tier") or route.get("shot_tier"),
         "resolution": route.get("resolution") or metadata.get("resolution"),
+        "task_kind": route.get("task_kind"),
+        "media_type": route.get("media_type"),
+        "service_tier": route.get("service_tier"),
+        "shot_tier_strategy_label": strategy.get("label"),
+        "retry_budget": strategy.get("retry_budget"),
+        "video_continuity_policy": strategy.get("video_continuity_policy"),
+        "reference_image_count": reference_policy.get("reference_image_count"),
+        "reference_image_submitted_count": reference_policy.get("reference_image_submitted_count"),
     }
 
 
@@ -89,6 +103,91 @@ def _normalize_dimensions(dimensions: dict[str, int] | None) -> dict[str, int]:
         if 1 <= score <= 5:
             normalized[key.strip()] = score
     return normalized
+
+
+def _score_of(item: dict[str, Any]) -> float | None:
+    score = item.get("rating")
+    return float(score) if isinstance(score, int | float) else None
+
+
+def _dimension_average_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    dimension_scores: dict[str, list[float]] = {}
+    for item in items:
+        dimensions = item.get("dimensions")
+        if not isinstance(dimensions, dict):
+            continue
+        for key, value in dimensions.items():
+            if isinstance(value, int | float):
+                dimension_scores.setdefault(str(key), []).append(float(value))
+    return [
+        {"key": name, "count": len(values), "average_rating": _avg(values)}
+        for name, values in sorted(dimension_scores.items())
+    ]
+
+
+def _group_value(item: dict[str, Any], group_key: str) -> tuple[str, dict[str, Any]]:
+    unknown = "unknown"
+    if group_key == "project":
+        key = str(item.get("project_name") or unknown)
+        return key, {
+            "project_name": key,
+            "project_title": item.get("project_title") or key,
+            "label": item.get("project_title") or key,
+        }
+    if group_key == "provider_model":
+        provider = str(item.get("provider") or unknown)
+        model = str(item.get("model") or unknown)
+        return f"{provider}/{model}", {
+            "provider": provider,
+            "model": model,
+            "label": f"{provider} / {model}",
+        }
+    if group_key == "model_shot_tier":
+        provider = str(item.get("provider") or unknown)
+        model = str(item.get("model") or unknown)
+        shot_tier = str(item.get("shot_tier") or unknown)
+        return f"{provider}/{model}/{shot_tier}", {
+            "provider": provider,
+            "model": model,
+            "shot_tier": shot_tier,
+            "label": f"{provider} / {model} · {shot_tier}",
+        }
+    value = str(item.get(group_key) or unknown)
+    return value, {"label": value, group_key: value}
+
+
+def _group_stats(items: list[dict[str, Any]], group_key: str) -> list[dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    metadata_by_key: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if _score_of(item) is None:
+            continue
+        key, metadata = _group_value(item, group_key)
+        buckets.setdefault(key, []).append(item)
+        metadata_by_key.setdefault(key, metadata)
+
+    rows: list[dict[str, Any]] = []
+    for key, bucket_items in buckets.items():
+        scores = [_score_of(item) for item in bucket_items]
+        valid_scores = [score for score in scores if score is not None]
+        rows.append(
+            {
+                "key": key,
+                **metadata_by_key.get(key, {}),
+                "count": len(valid_scores),
+                "average_rating": _avg(valid_scores),
+                "dimension_averages": _dimension_average_items(bucket_items),
+            }
+        )
+
+    return sorted(
+        rows,
+        key=lambda item: (
+            -int(item.get("count") or 0),
+            -(float(item.get("average_rating")) if item.get("average_rating") is not None else -1),
+            str(item.get("label") or item.get("key") or ""),
+        ),
+    )
 
 
 class QualityMetricsService:
@@ -139,6 +238,14 @@ class QualityMetricsService:
             "generation_profile_key": defaults.get("generation_profile_key"),
             "shot_tier": shot_tier or defaults.get("shot_tier"),
             "resolution": defaults.get("resolution"),
+            "task_kind": defaults.get("task_kind"),
+            "media_type": defaults.get("media_type"),
+            "service_tier": defaults.get("service_tier"),
+            "shot_tier_strategy_label": defaults.get("shot_tier_strategy_label"),
+            "retry_budget": defaults.get("retry_budget"),
+            "video_continuity_policy": defaults.get("video_continuity_policy"),
+            "reference_image_count": defaults.get("reference_image_count"),
+            "reference_image_submitted_count": defaults.get("reference_image_submitted_count"),
             "user_id": user_id,
             "updated_at": now,
         }
@@ -207,6 +314,76 @@ class QualityMetricsService:
                 for key, bucket in groups.items()
             },
             "ratings": items[-100:],
+        }
+
+    def _enrich_rating(self, project_name: str, project: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+        project_dir = self.pm.get_project_path(project_name)
+        metadata = _current_version_metadata(
+            project_dir,
+            str(item.get("resource_type") or ""),
+            str(item.get("resource_id") or ""),
+            item.get("version"),
+        )
+        defaults = _metadata_defaults(metadata)
+        title = project.get("title")
+        enriched = dict(item)
+        enriched["project_name"] = project_name
+        enriched["project_title"] = str(title).strip() if isinstance(title, str) and title.strip() else project_name
+        for key, value in defaults.items():
+            if enriched.get(key) in (None, "") and value not in (None, ""):
+                enriched[key] = value
+        return enriched
+
+    def get_global_analysis(self) -> dict[str, Any]:
+        ratings: list[dict[str, Any]] = []
+        total_projects = 0
+
+        for project_name in self.pm.list_projects():
+            try:
+                project = self.pm.load_project(project_name)
+            except Exception:
+                continue
+            total_projects += 1
+            raw_ratings = _load_json(self._metrics_path(project_name)).get("ratings")
+            if not isinstance(raw_ratings, list):
+                continue
+            for item in raw_ratings:
+                if not isinstance(item, dict) or _score_of(item) is None:
+                    continue
+                ratings.append(self._enrich_rating(project_name, project, item))
+
+        scores = [_score_of(item) for item in ratings]
+        valid_scores = [score for score in scores if score is not None]
+        rated_projects = {str(item.get("project_name")) for item in ratings if item.get("project_name")}
+        rated_models = {
+            f"{item.get('provider') or 'unknown'}/{item.get('model') or 'unknown'}"
+            for item in ratings
+            if item.get("provider") or item.get("model")
+        }
+
+        group_keys = [
+            "project",
+            "provider",
+            "model",
+            "provider_model",
+            "model_shot_tier",
+            "resource_type",
+            "generation_quality",
+            "generation_profile_key",
+            "shot_tier",
+            "service_tier",
+            "resolution",
+            "video_continuity_policy",
+        ]
+        return {
+            "count": len(valid_scores),
+            "average_rating": _avg(valid_scores),
+            "project_count": len(rated_projects),
+            "total_projects": total_projects,
+            "rated_model_count": len(rated_models),
+            "dimension_averages": _dimension_average_items(ratings),
+            "groups": {key: _group_stats(ratings, key) for key in group_keys},
+            "ratings": ratings[-200:],
         }
 
     def list_ratings(

@@ -7,6 +7,7 @@ import {
   Bot,
   ChevronLeft,
   Film,
+  LineChart,
   Plug,
   Scissors,
 } from "lucide-react";
@@ -15,6 +16,7 @@ import { useConfigStatusStore } from "@/stores/config-status-store";
 import { AgentConfigTab } from "./AgentConfigTab";
 import { MediaModelSection } from "./settings/MediaModelSection";
 import { ProviderSection } from "./ProviderSection";
+import { QualityAnalysisSection } from "./settings/QualityAnalysisSection";
 import { ScriptSplittingTemplatesSection } from "./settings/ScriptSplittingTemplatesSection";
 import { UsageStatsSection } from "./settings/UsageStatsSection";
 
@@ -25,7 +27,7 @@ import { UsageStatsSection } from "./settings/UsageStatsSection";
 // Types
 // ---------------------------------------------------------------------------
 
-type SettingsSection = "agent" | "providers" | "media" | "script-splitting" | "usage";
+type SettingsSection = "agent" | "providers" | "media" | "script-splitting" | "quality" | "usage";
 
 interface SectionDef {
   id: SettingsSection;
@@ -54,8 +56,9 @@ const SECTION_GROUPS: SectionGroup[] = [
     ],
   },
   {
-    kicker: "Access",
+    kicker: "Insight",
     items: [
+      { id: "quality", labelKey: "dashboard:quality_analysis", Icon: LineChart },
       { id: "usage", labelKey: "dashboard:usage", Icon: BarChart3 },
     ],
   },
@@ -75,6 +78,7 @@ export function SystemConfigPage() {
     if (section === "agent") return "agent";
     if (section === "media") return "media";
     if (section === "script-splitting") return "script-splitting";
+    if (section === "quality") return "quality";
     if (section === "usage") return "usage";
     return "providers";
   }, [search]);
@@ -265,6 +269,7 @@ export function SystemConfigPage() {
                 {activeSection === "agent" && <AgentConfigTab visible />}
                 {activeSection === "media" && <MediaModelSection />}
                 {activeSection === "script-splitting" && <ScriptSplittingTemplatesSection />}
+                {activeSection === "quality" && <QualityAnalysisSection />}
                 {activeSection === "usage" && <UsageStatsSection />}
               </div>
             )}

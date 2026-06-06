@@ -127,8 +127,12 @@ class OpenAIImageBackend:
     async def _generate_edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         refs = request.reference_images
         if len(refs) > _MAX_REFERENCE_IMAGES:
-            logger.warning("参考图数量 %d 超过上限 %d，截断", len(refs), _MAX_REFERENCE_IMAGES)
-            refs = refs[:_MAX_REFERENCE_IMAGES]
+            raise ImageCapabilityError(
+                "image_reference_images_too_many",
+                model=self._model,
+                count=len(refs),
+                max_reference_images=_MAX_REFERENCE_IMAGES,
+            )
 
         def _open_refs() -> tuple[ExitStack, list]:
             """在 ExitStack 内打开所有参考图，保证部分 open 失败时已打开句柄被释放。"""

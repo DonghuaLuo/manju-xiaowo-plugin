@@ -169,7 +169,6 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
         "S": {
             "label": "hero",
             "retry_budget": 1,
-            "reference_image_policy": "full_context",
             "video_continuity_policy": "auto",
             "prefer_final_storyboard_source": True,
             "profiles": {
@@ -186,7 +185,6 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
         "A": {
             "label": "standard",
             "retry_budget": 1,
-            "reference_image_policy": "balanced",
             "video_continuity_policy": "auto",
             "prefer_final_storyboard_source": True,
             "profiles": {},
@@ -194,7 +192,6 @@ def default_shot_tier_profiles() -> dict[str, dict[str, Any]]:
         "B": {
             "label": "utility",
             "retry_budget": 1,
-            "reference_image_policy": "lean",
             "video_continuity_policy": "start_only",
             "prefer_final_storyboard_source": False,
             "profiles": {

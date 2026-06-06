@@ -28,6 +28,11 @@ from server.agent_runtime.sdk_tools._generation_quality import (
     normalize_quality,
     route_summary,
 )
+from server.services.generation_route_resolver import (
+    default_shot_tier_for_task,
+    merged_shot_tier_profiles,
+    normalize_shot_tier,
+)
 
 StoryboardSelectionMode = Literal["missing", "selected", "current_unrefined", "current_all"]
 
@@ -232,6 +237,16 @@ def _build_specs(
     return specs
 
 
+def _storyboard_needs_previous_reference(project_data: dict[str, Any], item: dict[str, Any]) -> bool:
+    shot_tier = normalize_shot_tier(item.get("shot_tier")) or default_shot_tier_for_task("storyboard")
+    strategy = merged_shot_tier_profiles(project_data).get(shot_tier) if shot_tier else None
+    raw = strategy.get("video_continuity_policy") if isinstance(strategy, dict) else None
+    if raw is None:
+        raw = project_data.get("video_continuity_policy") or project_data.get("continuity_policy")
+    policy = str(raw or "auto").strip().lower()
+    return policy != "start_only"
+
+
 def generate_storyboards_tool(ctx: ToolContext):
     @tool(
         "generate_storyboards",
@@ -317,6 +332,7 @@ def generate_storyboards_tool(ctx: ToolContext):
                 id_field,
                 [str(item[id_field]) for item in selected],
                 script_filename,
+                lambda item: _storyboard_needs_previous_reference(project_data, item),
             )
             specs = _build_specs(
                 plans,

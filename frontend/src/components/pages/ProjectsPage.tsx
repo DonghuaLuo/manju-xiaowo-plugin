@@ -14,6 +14,7 @@ import { Link, useLocation } from "wouter";
 import {
   AlertTriangle,
   Archive,
+  BarChart3,
   Download,
   FolderOpen,
   Library,
@@ -22,6 +23,7 @@ import {
   Plus,
   Search,
   Settings,
+  LineChart,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -842,6 +844,8 @@ interface TopBarProps {
   onCreate: () => void;
   onSettings: () => void;
   onAssets: () => void;
+  onQualityAnalysis: () => void;
+  onUsageStats: () => void;
   importing: boolean;
   assetExporting: boolean;
   configIncomplete: boolean;
@@ -856,6 +860,8 @@ function TopBar({
   onCreate,
   onSettings,
   onAssets,
+  onQualityAnalysis,
+  onUsageStats,
   importing,
   assetExporting,
   configIncomplete,
@@ -902,6 +908,25 @@ function TopBar({
         </label>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onQualityAnalysis}
+            className="inline-flex items-center gap-1.5 rounded-[7px] border border-hairline bg-bg-grad-a/50 px-3 py-1.5 text-[12px] text-text-2 transition-colors hover:border-hairline-strong hover:bg-bg-grad-a focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            title={t("dashboard:quality_analysis", { defaultValue: "质量分析" })}
+          >
+            <LineChart className="h-3.5 w-3.5" />
+            {t("dashboard:quality_analysis", { defaultValue: "质量分析" })}
+          </button>
+          <button
+            type="button"
+            onClick={onUsageStats}
+            className="inline-flex items-center gap-1.5 rounded-[7px] border border-hairline bg-bg-grad-a/50 px-3 py-1.5 text-[12px] text-text-2 transition-colors hover:border-hairline-strong hover:bg-bg-grad-a focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            title={t("dashboard:usage", { defaultValue: "用量统计" })}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            {t("dashboard:usage", { defaultValue: "用量统计" })}
+          </button>
+          <span aria-hidden className="mx-1 h-5 w-px bg-hairline-soft" />
           <button
             type="button"
             onClick={onAssets}
@@ -1627,6 +1652,8 @@ export function ProjectsPage() {
         onExportAssets={() => setAssetExportDialogOpen(true)}
         onCreate={() => setShowCreateModal(true)}
         onSettings={() => navigate("/app/settings")}
+        onQualityAnalysis={() => navigate("/app/settings?section=quality")}
+        onUsageStats={() => navigate("/app/settings?section=usage")}
         onAssets={() => {
           rememberAssetLibraryReturnTo(location);
           navigate("/app/assets");

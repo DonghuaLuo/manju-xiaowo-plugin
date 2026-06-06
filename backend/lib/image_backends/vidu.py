@@ -95,11 +95,15 @@ class ViduImageBackend:
         if not has_refs and ImageCapability.TEXT_TO_IMAGE not in self._capabilities:
             raise ImageCapabilityError("image_endpoint_mismatch_no_t2i", model=self._model)
 
-        # viduq1 必须 1-7 张；viduq2 允许 0-7 张。这里截断到上限。
+        # viduq1 必须 1-7 张；viduq2 允许 0-7 张。超过上限时失败，避免静默丢参考图。
         refs = list(request.reference_images or [])
         if len(refs) > _MAX_REFERENCE_IMAGES:
-            logger.warning("Vidu 参考图数量 %d 超过上限 %d，截断", len(refs), _MAX_REFERENCE_IMAGES)
-            refs = refs[:_MAX_REFERENCE_IMAGES]
+            raise ImageCapabilityError(
+                "image_reference_images_too_many",
+                model=self._model,
+                count=len(refs),
+                max_reference_images=_MAX_REFERENCE_IMAGES,
+            )
 
         prompt = (request.prompt or "")[:_PROMPT_MAX_LEN]
         body: dict = {

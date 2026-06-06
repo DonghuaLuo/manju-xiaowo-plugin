@@ -95,6 +95,16 @@ describe("SystemConfigPage", () => {
     } as never);
     vi.spyOn(API, "listCredentials").mockResolvedValue({ credentials: [] });
     vi.spyOn(API, "getUsageStatsGrouped").mockResolvedValue({ stats: [], period: { start: "", end: "" } });
+    vi.spyOn(API, "getQualityAnalysis").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      project_count: 0,
+      total_projects: 0,
+      rated_model_count: 0,
+      dimension_averages: [],
+      groups: {},
+      ratings: [],
+    });
   });
 
   it("renders the page header", () => {
@@ -108,6 +118,7 @@ describe("SystemConfigPage", () => {
     expect(screen.getByRole("button", { name: /智能体/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /供应商/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /模型选择/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /质量分析/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /用量统计/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /关于/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /API 令牌/ })).not.toBeInTheDocument();
@@ -182,6 +193,25 @@ describe("SystemConfigPage", () => {
     const link = screen.getByRole("link", { name: "返回" });
     expect(link).toBeInTheDocument();
     expect(link).toHaveAttribute("href", "/app/projects");
+  });
+
+  it("clicking 质量分析 makes it the active section", async () => {
+    renderPage();
+    const qualityButton = screen.getByRole("button", { name: /质量分析/ });
+    fireEvent.click(qualityButton);
+    await waitFor(() => {
+      expect(qualityButton).toHaveAttribute("aria-current", "page");
+    });
+  });
+
+  it("shows a load error when quality analysis fails", async () => {
+    vi.spyOn(API, "getQualityAnalysis").mockRejectedValue(new Error("boom"));
+    renderPage("/app/settings?section=quality");
+
+    await waitFor(() => {
+      expect(screen.getByText(/质量分析加载失败：boom/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText("还没有评分数据。先在分镜图或视频卡片下方评分，分析会自动汇总。")).not.toBeInTheDocument();
   });
 
   it("falls back to the providers section for removed about links", async () => {

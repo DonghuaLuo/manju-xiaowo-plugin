@@ -98,7 +98,7 @@ function TemplateCard({
 
       {/* Bottom label gradient */}
       <div
-        className="absolute inset-x-0 bottom-0 px-2 py-1.5"
+        className="absolute inset-x-0 bottom-0 px-2 py-1.5 pr-8"
         style={{
           background:
             "linear-gradient(180deg, transparent 0%, oklch(0 0 0 / 0.8) 100%)",
@@ -406,7 +406,7 @@ export function StylePicker({
                           title={t("templates:delete_favorite_style", {
                             defaultValue: "删除收藏风格",
                           })}
-                          className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full text-text-2 transition-colors hover:text-text disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          className="absolute right-1.5 bottom-1.5 grid h-6 w-6 place-items-center rounded-full text-text-2 transition-colors hover:text-text disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                           style={{
                             background: "oklch(0 0 0 / 0.62)",
                             backdropFilter: "blur(6px)",

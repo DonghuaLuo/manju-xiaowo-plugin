@@ -144,6 +144,81 @@ export function lookupResolutions(
   return { options: model?.resolutions ?? [], isCustom: false };
 }
 
+export type VideoServiceTier = "default" | "flex";
+
+const VIDEO_SERVICE_TIERS = ["default", "flex"] as const satisfies readonly VideoServiceTier[];
+
+function normalizeVideoServiceTiers(items?: readonly unknown[] | null): VideoServiceTier[] | null {
+  if (!items?.length) return null;
+  const set = new Set<VideoServiceTier>();
+  for (const item of items) {
+    const value = String(item).trim().toLowerCase();
+    if (value === "default" || value === "flex") set.add(value);
+  }
+  if (set.size === 0) return null;
+  set.add("default");
+  return VIDEO_SERVICE_TIERS.filter((tier) => set.has(tier));
+}
+
+function seedanceModelFamily(modelId: string): "seedance_1_0" | "seedance_1_5" | "seedance_2" {
+  const model = modelId.toLowerCase();
+  if (model.includes("seedance-2") || model.includes("seedance2") || model.includes("seedance-2.0")) {
+    return "seedance_2";
+  }
+  if (model.includes("seedance-1-0") || model.includes("seedance-1.0")) {
+    return "seedance_1_0";
+  }
+  return "seedance_1_5";
+}
+
+export function videoServiceTiersFromCapabilities(
+  caps:
+    | {
+        capabilities?: string[] | null;
+        supports_service_tier?: boolean;
+        service_tiers?: string[] | null;
+      }
+    | null
+    | undefined,
+): VideoServiceTier[] | null {
+  if (!caps) return null;
+  const explicit = normalizeVideoServiceTiers(caps.service_tiers);
+  if (explicit) return explicit;
+  if (caps.supports_service_tier === true) return ["default", "flex"];
+  if (caps.supports_service_tier === false) return ["default"];
+  const capabilities = caps.capabilities ?? [];
+  if (capabilities.includes("flex_tier")) return ["default", "flex"];
+  if (capabilities.length > 0) return ["default"];
+  return null;
+}
+
+/** Conservative UI hint for video service tiers. Backend resolver remains authoritative. */
+export function lookupVideoServiceTiers(
+  providers: ProviderInfo[],
+  backend: string,
+  customProviders?: CustomProviderInfo[],
+): VideoServiceTier[] | null {
+  const slashIdx = backend.indexOf("/");
+  if (slashIdx === -1) return null;
+  const providerId = backend.slice(0, slashIdx);
+  const modelId = backend.slice(slashIdx + 1);
+
+  if (providerId.startsWith(CUSTOM_PREFIX) && customProviders) {
+    const dbId = parseInt(providerId.slice(CUSTOM_PREFIX.length), 10);
+    const cp = customProviders.find((p) => p.id === dbId);
+    const model = cp?.models?.find((m) => m.model_id === modelId);
+    if (!model) return null;
+    if (model.endpoint === "ark-seedance") {
+      return seedanceModelFamily(model.model_id) === "seedance_2" ? ["default"] : ["default", "flex"];
+    }
+    return ["default"];
+  }
+
+  const provider = providers.find((p) => p.id === providerId);
+  const model = provider?.models?.[modelId];
+  return videoServiceTiersFromCapabilities(model);
+}
+
 export type VideoContinuityCapability = "end_frame" | "reference_images" | "start_only";
 export interface VideoContinuitySupport {
   endFrame: boolean;

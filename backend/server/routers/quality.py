@@ -89,3 +89,8 @@ async def get_quality_stats(project_name: str, _user: CurrentUser) -> dict[str, 
         return await asyncio.to_thread(_service().get_stats, project_name=project_name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/quality-analysis")
+async def get_quality_analysis(_user: CurrentUser) -> dict[str, Any]:
+    return await asyncio.to_thread(_service().get_global_analysis)

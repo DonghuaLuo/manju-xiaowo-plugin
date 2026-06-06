@@ -28,6 +28,7 @@ import { SecondaryButton } from "@/components/ui/SecondaryButton";
 import { useProjectsStore } from "@/stores/projects-store";
 import type { Character, Prop, Scene } from "@/types";
 import { type AssetKind, SHEET_FIELD } from "@/types/reference-video";
+import { errMsg } from "@/utils/async";
 import { WARM_TONE } from "@/utils/severity-tone";
 
 type Asset = Character | Scene | Prop;
@@ -132,6 +133,7 @@ export function SegmentRefsEditModal({
     alt: string;
     path?: string;
   } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const tempCharsSet = useMemo(() => new Set(tempChars), [tempChars]);
   const tempScenesSet = useMemo(() => new Set(tempScenes), [tempScenes]);
@@ -192,6 +194,7 @@ export function SegmentRefsEditModal({
     prop: setTempProps,
   };
   const toggle = (kind: AssetKind, name: string) => {
+    setSaveError(null);
     setterByKind[kind]((prev) =>
       prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
     );
@@ -254,11 +257,16 @@ export function SegmentRefsEditModal({
   }, [hasMore, loadMore]);
 
   const handleSave = async () => {
+    setSaveError(null);
     const changes: SegmentRefsChanges = {};
     if (charChanged) changes.characters = tempChars;
     if (scenesChanged) changes.scenes = tempScenes;
     if (propsChanged) changes.props = tempProps;
-    await onSave(changes);
+    try {
+      await onSave(changes);
+    } catch (err) {
+      setSaveError(errMsg(err));
+    }
   };
 
   return (
@@ -492,13 +500,15 @@ export function SegmentRefsEditModal({
           }}
         >
           <span
-            className="num flex-1 text-[11px] uppercase"
+            className="num flex-1 text-[11px]"
             style={{
-              letterSpacing: "0.8px",
-              color: hasChanges ? WARM_TONE.color : "var(--color-text-4)",
+              letterSpacing: saveError ? "0" : "0.8px",
+              color: saveError ? WARM_TONE.color : hasChanges ? WARM_TONE.color : "var(--color-text-4)",
             }}
           >
-            {hasChanges
+            {saveError
+              ? saveError
+              : hasChanges
               ? t("segment_refs_changes_pending")
               : t("segment_refs_no_changes")}
           </span>

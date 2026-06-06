@@ -740,6 +740,27 @@ class TaskRepository(BaseRepository):
             raise ValueError(f"task not found: {task_id}")
         await self.session.commit()
 
+    async def persist_task_payload_fields(self, task_id: str, fields: dict[str, Any]) -> None:
+        """Merge resume-safe execution context into task.payload_json."""
+        if not fields:
+            return
+        now = utc_now()
+        result = await self.session.execute(select(Task.payload_json).where(Task.task_id == task_id))
+        row = result.first()
+        if row is None:
+            raise ValueError(f"task not found: {task_id}")
+        raw = row[0]
+        data = _json_loads(raw, {})
+        if not isinstance(data, dict):
+            data = {}
+        data.update(fields)
+        update_result = await self.session.execute(
+            update(Task).where(Task.task_id == task_id).values(payload_json=_json_dumps(data), updated_at=now)
+        )
+        if rowcount(update_result) == 0:
+            raise ValueError(f"task not found: {task_id}")
+        await self.session.commit()
+
     async def append_diagnostic_event(self, task_id: str, data: dict[str, Any]) -> None:
         """Append a non-state-changing diagnostic event for a running task."""
 

@@ -773,6 +773,8 @@ export function ShotDetail({
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-3.5 pb-5 pt-3.5">
       <ReferencesSection
         projectName={projectName}
+        segmentId={segmentId}
+        scriptFile={scriptFile}
         contentMode={contentMode}
         characterNames={characterNames}
         sceneNames={sceneNames}

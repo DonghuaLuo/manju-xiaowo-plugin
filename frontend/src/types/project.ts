@@ -133,7 +133,6 @@ export interface GenerationProfiles {
 export interface ShotTierProfile {
   label?: string | null;
   retry_budget?: number | null;
-  reference_image_policy?: string | null;
   video_continuity_policy?: VideoContinuityPolicy | null;
   prefer_final_storyboard_source?: boolean | null;
   profiles?: Partial<Record<keyof GenerationProfiles, ImageGenerationProfile | VideoGenerationProfile>>;

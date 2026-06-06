@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SegmentRefsEditModal } from "./SegmentRefsEditModal";
 import type { Character, Prop, Scene } from "@/types";
@@ -114,6 +114,23 @@ describe("SegmentRefsEditModal", () => {
       characters: ["Hero", "Villain"],
       scenes: ["Forest"],
     });
+  });
+
+  it("keeps the dialog open and shows save errors", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error("当前图片模型最多支持 3 张参考图"));
+    const onClose = vi.fn();
+    render(
+      <SegmentRefsEditModal {...baseProps} onSave={onSave} onClose={onClose} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Villain/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("当前图片模型最多支持 3 张参考图")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("cancel does not call onSave and triggers onClose", () => {

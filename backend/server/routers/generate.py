@@ -39,6 +39,8 @@ from server.services.generation_tasks import (
     _normalize_storyboard_prompt,
     _normalize_video_prompt,
     _storyboard_path_for_item,
+    _storyboard_needs_previous_reference,
+    preview_storyboard_reference_usage,
     resolve_video_prompt_policy,
 )
 
@@ -350,6 +352,22 @@ class GenerationRoutePreviewRequest(BaseModel):
     routes: list[GenerationRoutePreviewItem]
 
 
+class StoryboardReferencePreflightRequest(BaseModel):
+    script_file: str
+    characters: list[str] | None = None
+    scenes: list[str] | None = None
+    props: list[str] | None = None
+    quality: Literal["draft", "final", "custom"] | None = None
+    final_generation_mode: Literal["draft_locked", "fresh_sample"] | None = None
+    shot_tier: Literal["S", "A", "B"] | None = None
+    resolution: str | None = None
+    source_version: int | None = None
+    image_provider_t2i: str | None = None
+    image_provider_i2i: str | None = None
+    image_provider: str | None = None
+    image_model: str | None = None
+
+
 _IMAGE_GENERATION_FIELDS = (
     "quality",
     "final_generation_mode",
@@ -489,6 +507,41 @@ async def preview_generation_routes(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/projects/{project_name}/generation/storyboard-reference-preflight/{segment_id}")
+async def preview_storyboard_references(
+    project_name: str,
+    segment_id: str,
+    req: StoryboardReferencePreflightRequest,
+    _user: CurrentUser,
+):
+    """Validate candidate storyboard references against current image model limits."""
+
+    try:
+        result = await preview_storyboard_reference_usage(
+            project_name,
+            segment_id,
+            script_file=req.script_file,
+            characters=req.characters,
+            scenes=req.scenes,
+            props=req.props,
+            generation_payload=_request_generation_payload(req, _IMAGE_GENERATION_FIELDS),
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=str(result.get("message") or "参考图数量超过模型上限"))
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except ScriptEditError as e:
+        raise HTTPException(status_code=400, detail=f"剧本数据损坏：{e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("分镜参考图预检失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/projects/{project_name}/generate/external-package/{segment_id}")
 async def get_external_generation_package(
     project_name: str,
@@ -525,7 +578,11 @@ async def get_external_generation_package(
             )
 
             labels = _reference_labels(project, project_path)
-            previous_path = resolve_previous_storyboard_path(project_path, items, id_field, segment_id)
+            previous_path = (
+                resolve_previous_storyboard_path(project_path, items, id_field, segment_id)
+                if _storyboard_needs_previous_reference(project, {"script_file": script_file}, target_item)
+                else None
+            )
             raw_storyboard_refs = _collect_reference_images(
                 project,
                 project_path,
@@ -664,6 +721,15 @@ async def generate_storyboard(
             )
         except TaskSpecValidationError as e:
             raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
+
+        preflight = await preview_storyboard_reference_usage(
+            project_name,
+            segment_id,
+            script_file=req.script_file,
+            generation_payload=spec.payload or {},
+        )
+        if not preflight.get("ok"):
+            raise HTTPException(status_code=400, detail=str(preflight.get("message") or "参考图数量超过模型上限"))
 
         # 入队
         queue = get_generation_queue()

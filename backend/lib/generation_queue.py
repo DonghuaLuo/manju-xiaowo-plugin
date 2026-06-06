@@ -38,7 +38,7 @@ def _path_exists(project_path: Path, raw_path: Any) -> bool:
 
 
 def _any_payload_reference_exists(project_path: Path, payload: dict[str, Any]) -> bool:
-    for key in ("extra_reference_images", "reference_images"):
+    for key in ("reference_images",):
         value = payload.get(key)
         if isinstance(value, (list, tuple, set)):
             if any(_path_exists(project_path, item) for item in value):
@@ -46,6 +46,29 @@ def _any_payload_reference_exists(project_path: Path, payload: dict[str, Any]) -
         elif _path_exists(project_path, value):
             return True
     return False
+
+
+_VIDEO_CONTINUITY_POLICIES = {"auto", "start_only", "end_frame", "reference_assisted"}
+
+
+def _storyboard_video_continuity_policy(project: dict[str, Any], payload: dict[str, Any], item: dict[str, Any]) -> str:
+    raw = payload.get("video_continuity_policy") or payload.get("continuity_policy")
+    if raw is None:
+        tier = payload.get("shot_tier")
+        if tier not in {"S", "A", "B"}:
+            tier = item.get("shot_tier")
+        if tier not in {"S", "A", "B"}:
+            tier = "A"
+        defaults = {"S": "auto", "A": "auto", "B": "start_only"}
+        raw_profiles = project.get("shot_tier_profiles") or project.get("shot_tiers")
+        tier_profile = raw_profiles.get(tier) if isinstance(raw_profiles, dict) else None
+        raw = tier_profile.get("video_continuity_policy") if isinstance(tier_profile, dict) else None
+        if raw is None:
+            raw = defaults[tier]
+    if raw is None:
+        raw = project.get("video_continuity_policy") or project.get("continuity_policy")
+    policy = str(raw or "auto").strip().lower()
+    return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
 
 
 def _asset_sheet_exists(project: dict[str, Any], project_path: Path, bucket: str, name: Any, sheet_field: str) -> bool:
@@ -127,8 +150,16 @@ def _storyboard_task_has_reference(
     ):
         return True
 
-    previous_path = resolve_previous_storyboard_path(project_path, items, id_field, resource_id)
-    return bool(previous_path and previous_path.exists())
+    if _storyboard_video_continuity_policy(project, payload, target_item) == "start_only":
+        return False
+    previous_path = resolve_previous_storyboard_path(
+        project_path,
+        items,
+        id_field,
+        resource_id,
+        require_exists=False,
+    )
+    return previous_path is not None
 
 
 def _grid_task_has_reference(
@@ -373,6 +404,11 @@ class GenerationQueue:
         async with self._session_factory() as session:
             repo = TaskRepository(session)
             await repo.persist_api_call_id(task_id, call_id)
+
+    async def persist_task_payload_fields(self, task_id: str, fields: dict[str, Any]) -> None:
+        async with self._session_factory() as session:
+            repo = TaskRepository(session)
+            await repo.persist_task_payload_fields(task_id, fields)
 
     async def append_task_diagnostic(self, task_id: str, data: dict[str, Any]) -> None:
         async with self._session_factory() as session:

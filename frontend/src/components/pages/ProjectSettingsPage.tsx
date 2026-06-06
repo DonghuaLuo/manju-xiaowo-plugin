@@ -21,8 +21,11 @@ import {
   getCustomProviderModels,
   lookupResolutions,
   lookupStoryboardVideoStartImageSupport,
+  lookupVideoServiceTiers,
   lookupVideoContinuitySupport,
   storyboardVideoStartImageSupportFromCapabilities,
+  type VideoServiceTier,
+  videoServiceTiersFromCapabilities,
   videoContinuitySupportFromCapabilities,
 } from "@/utils/provider-models";
 import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
@@ -33,7 +36,7 @@ import {
   defaultScriptSplittingTemplateId,
   scriptSplittingTemplateSupportsGenerationMode,
 } from "@/components/shared/ScriptSplittingTemplateSelector";
-import { SelectMenu } from "@/components/ui/SelectMenu";
+import { SelectMenu, type SelectMenuOption } from "@/components/ui/SelectMenu";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import type {
   CustomProviderInfo,
@@ -55,7 +58,6 @@ import { getProjectDisplayName } from "@/utils/project-display";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import {
   IMAGE_PROFILE_RESOLUTIONS,
-  REFERENCE_IMAGE_POLICIES,
   SHOT_TIERS,
   VIDEO_PROFILE_RESOLUTIONS,
   coerceResolutionForOptions,
@@ -103,6 +105,21 @@ function findQualityGroup(
   groupName: string,
 ) {
   return stats?.groups?.generation_quality?.find((item) => item.key === groupName);
+}
+
+function qualityDimensionLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  key: string,
+): string {
+  const fallback: Record<string, string> = {
+    character_consistency: "Character consistency",
+    composition: "Composition",
+    motion_naturalness: "Motion",
+    prompt_faithfulness: "Prompt match",
+  };
+  return t(`quality_dimension_${key}`, {
+    defaultValue: fallback[key] ?? key,
+  });
 }
 
 function groupRoutePreviewIssues(
@@ -193,12 +210,68 @@ const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
 const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
+const SERVICE_TIERS = ["default", "flex"] as const satisfies readonly VideoServiceTier[];
 
 function resolutionSelectOptions(resolutions: readonly string[]) {
   return resolutions.map((resolution) => ({
     value: resolution,
     label: resolution,
   }));
+}
+
+function serviceTierSelectOption(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  tier: VideoServiceTier,
+  supportedTiers?: readonly VideoServiceTier[] | null,
+): SelectMenuOption {
+  const disabled = supportedTiers ? !supportedTiers.includes(tier) : false;
+  const label = t(`service_tier_${tier}`, {
+    defaultValue: tier === "default" ? "Default" : "Flex",
+  });
+  const description = t(`service_tier_${tier}_desc`, {
+    defaultValue:
+      tier === "default"
+        ? "Standard scheduling. Generation quality is unchanged; speed and cost follow the provider default."
+        : "Flexible scheduling. Generation quality is unchanged; speed is lower and cost is reduced.",
+  });
+  const unsupported = t("service_tier_unsupported_desc", {
+    defaultValue: "当前视频模型不支持此档位。",
+  });
+  return {
+    value: tier,
+    label,
+    description: disabled ? `${description} ${unsupported}` : description,
+    hint: disabled
+      ? t("service_tier_unsupported_hint", { defaultValue: "不可选" })
+      : undefined,
+    disabled,
+  };
+}
+
+function serviceTierSelectOptions(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  supportedTiers?: readonly VideoServiceTier[] | null,
+): SelectMenuOption[] {
+  return SERVICE_TIERS.map((tier) => serviceTierSelectOption(t, tier, supportedTiers));
+}
+
+function normalizeServiceTier(value?: string | null): VideoServiceTier {
+  return value === "flex" ? "flex" : "default";
+}
+
+function serviceTierSupported(
+  tier: VideoServiceTier,
+  supportedTiers?: readonly VideoServiceTier[] | null,
+): boolean {
+  return !supportedTiers || supportedTiers.includes(tier);
+}
+
+function supportedServiceTierValue(
+  value?: string | null,
+  supportedTiers?: readonly VideoServiceTier[] | null,
+): VideoServiceTier {
+  const tier = normalizeServiceTier(value);
+  return serviceTierSupported(tier, supportedTiers) ? tier : "default";
 }
 
 function routeLabel(route: GenerationRoutePreviewItem): string {
@@ -406,6 +479,20 @@ export function ProjectSettingsPage() {
     },
     [customProviders, endpointToMediaType, providers],
   );
+  const getVideoServiceTiers = useCallback(
+    (backend: string): readonly VideoServiceTier[] | null => {
+      if (!backend) return null;
+      const capsBackend = videoCapabilities
+        ? `${videoCapabilities.provider_id}/${videoCapabilities.model}`
+        : "";
+      if (capsBackend === backend) {
+        const capsTiers = videoServiceTiersFromCapabilities(videoCapabilities);
+        if (capsTiers) return capsTiers;
+      }
+      return lookupVideoServiceTiers(providers, backend, customProviders);
+    },
+    [customProviders, providers, videoCapabilities],
+  );
 
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
@@ -415,6 +502,7 @@ export function ProjectSettingsPage() {
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplatePrompts, setStyleTemplatePrompts] = useState<Record<string, string>>({});
   const [deletingFavoriteTemplateId, setDeletingFavoriteTemplateId] = useState<string | null>(null);
+  const [favoriteDeleteTargetId, setFavoriteDeleteTargetId] = useState<string | null>(null);
   const initialRef = useRef<InitialProjectSettingsSnapshot>({
     videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null,
     textScript: "", textOverview: "", textStyle: "",
@@ -851,9 +939,10 @@ export function ProjectSettingsPage() {
 
         const videoProfile = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
         const videoResolutionOverride = videoProfile.resolution;
+        const tierVideoBackend = videoProfile.video_backend || effectiveVideoBackendForContinuity;
         if (videoResolutionOverride) {
           const tierVideoOptions = getProfileResolutionOptions(
-            videoProfile.video_backend || effectiveVideoBackendForContinuity,
+            tierVideoBackend,
             VIDEO_PROFILE_RESOLUTIONS,
           );
           const coerced = coerceResolutionForOptions(
@@ -866,6 +955,13 @@ export function ProjectSettingsPage() {
             changed = true;
           }
         }
+
+        const videoServiceTier = normalizeServiceTier(videoProfile.service_tier);
+        const supportedServiceTiers = getVideoServiceTiers(tierVideoBackend);
+        if (!serviceTierSupported(videoServiceTier, supportedServiceTiers)) {
+          updateTierProfile(tier, "video_final", { service_tier: "default" });
+          changed = true;
+        }
       }
 
       return changed ? next : prev;
@@ -875,6 +971,7 @@ export function ProjectSettingsPage() {
     defaultShotTierProfiles,
     effectiveVideoBackendForContinuity,
     getProfileResolutionOptions,
+    getVideoServiceTiers,
     imageResolutionOptions,
     options,
     videoResolutionOptions,
@@ -1200,12 +1297,13 @@ export function ProjectSettingsPage() {
     }
   }, [projectName, styleValue, t]);
 
-  const handleDeleteFavoriteStyle = useCallback(async (templateId: string) => {
-    const confirmed = window.confirm(t("delete_favorite_style_confirm", {
-      defaultValue: "删除后会从收藏列表移除。已创建项目不会受影响。确定删除？",
-    }));
-    if (!confirmed) return;
+  const handleRequestDeleteFavoriteStyle = useCallback((templateId: string) => {
+    setFavoriteDeleteTargetId(templateId);
+  }, []);
 
+  const handleConfirmDeleteFavoriteStyle = useCallback(async () => {
+    const templateId = favoriteDeleteTargetId;
+    if (!templateId) return;
     setDeletingFavoriteTemplateId(templateId);
     try {
       await API.deleteFavoriteStyleTemplate(templateId);
@@ -1228,6 +1326,7 @@ export function ProjectSettingsPage() {
       useAppStore.getState().pushToast(t("delete_favorite_style_success", {
         defaultValue: "已删除收藏风格",
       }), "success");
+      setFavoriteDeleteTargetId(null);
     } catch (e) {
       useAppStore.getState().pushToast(t("delete_favorite_style_failed", {
         defaultValue: "删除收藏风格失败: {{message}}",
@@ -1236,7 +1335,7 @@ export function ProjectSettingsPage() {
     } finally {
       setDeletingFavoriteTemplateId(null);
     }
-  }, [t]);
+  }, [favoriteDeleteTargetId, t]);
 
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
@@ -1508,7 +1607,7 @@ export function ProjectSettingsPage() {
                 templatePrompts={styleTemplatePrompts}
                 onAnalyzeCustomStyle={handleAnalyzeCustomStyle}
                 analyzingCustomStyle={analyzingStyle}
-                onDeleteFavorite={voidPromise(handleDeleteFavoriteStyle)}
+                onDeleteFavorite={handleRequestDeleteFavoriteStyle}
                 deletingFavoriteTemplateId={deletingFavoriteTemplateId}
               />
             </SectionCard>
@@ -1719,17 +1818,17 @@ export function ProjectSettingsPage() {
                         <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3">
                           {finalQualityStats
                             ? t("quality_stats_final_average", {
-                                defaultValue: "精修版平均 {{score}}",
+                                defaultValue: "Refined quality avg {{score}}/5",
                                 score: displayedQualityAverage?.toFixed(1) ?? "-",
                               })
                             : t("quality_stats_average", {
-                                defaultValue: "平均 {{score}}",
+                                defaultValue: "Quality avg {{score}}/5",
                                 score: displayedQualityAverage?.toFixed(1) ?? "-",
                               })}
                         </span>
                         <span className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-4">
                           {t("quality_stats_sample_count", {
-                            defaultValue: "全版本 {{count}} 条",
+                            defaultValue: "Rated versions {{count}}",
                             count: routePreview.qualityStats.count,
                           })}
                         </span>
@@ -1739,8 +1838,8 @@ export function ProjectSettingsPage() {
                             className="rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3"
                           >
                             {t("quality_stats_dimension_average", {
-                              defaultValue: "全版本 {{key}} {{score}}",
-                              key: item.key,
+                              defaultValue: "{{key}} {{score}}/5",
+                              key: qualityDimensionLabel(t, item.key),
                               score: item.average_rating?.toFixed(1) ?? "-",
                             })}
                           </span>
@@ -1754,9 +1853,16 @@ export function ProjectSettingsPage() {
                       const tierProfile = normalizedShotTierProfiles[tier];
                       const storyboardOverride = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
                       const videoOverride = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+                      const tierVideoBackend = videoOverride.video_backend || effectiveVideoBackendForContinuity;
                       const tierVideoResolutionOptions = getProfileResolutionOptions(
-                        videoOverride.video_backend || effectiveVideoBackendForContinuity,
+                        tierVideoBackend,
                         VIDEO_PROFILE_RESOLUTIONS,
+                      );
+                      const tierVideoServiceTiers = getVideoServiceTiers(tierVideoBackend);
+                      const tierVideoServiceTierOptions = serviceTierSelectOptions(t, tierVideoServiceTiers);
+                      const tierVideoServiceTierValue = supportedServiceTierValue(
+                        videoOverride.service_tier,
+                        tierVideoServiceTiers,
                       );
                       const tierVideoStartImageUnsupported = Boolean(
                         generationMode !== "reference_video" &&
@@ -1779,7 +1885,7 @@ export function ProjectSettingsPage() {
                               })}
                             </span>
                           </div>
-                          <div className="grid gap-3 sm:grid-cols-5">
+                          <div className="grid gap-3 sm:grid-cols-4">
                             <label className="block">
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("shot_tier_retry_budget", { defaultValue: "重试预算" })}
@@ -1795,26 +1901,6 @@ export function ProjectSettingsPage() {
                                     retry_budget: Math.max(1, Number(event.currentTarget.value) || 1),
                                   })
                                 }
-                                className={PROFILE_INPUT_CLS}
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
-                              </span>
-                              <SelectMenu
-                                value={tierProfile.reference_image_policy ?? "balanced"}
-                                options={REFERENCE_IMAGE_POLICIES.map((policy) => ({
-                                  value: policy,
-                                  label: policy,
-                                }))}
-                                onChange={(next) =>
-                                  updateShotTierProfile(tier, {
-                                    reference_image_policy: next,
-                                  })
-                                }
-                                ariaLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
-                                panelLabel={t("shot_tier_reference_policy", { defaultValue: "参考图策略" })}
                                 className={PROFILE_INPUT_CLS}
                               />
                             </label>
@@ -1917,15 +2003,18 @@ export function ProjectSettingsPage() {
                               <span className="mb-1.5 block text-[11px] text-text-3">
                                 {t("video_service_tier_label", { defaultValue: "服务档位" })}
                               </span>
-                              <input
-                                value={videoOverride.service_tier ?? ""}
-                                onChange={(event) =>
+                              <SelectMenu
+                                value={tierVideoServiceTierValue}
+                                options={tierVideoServiceTierOptions}
+                                onChange={(next) =>
                                   updateShotTierOverride(tier, "video_final", {
-                                    service_tier: event.currentTarget.value || null,
+                                    service_tier: normalizeServiceTier(next),
                                   })
                                 }
+                                ariaLabel={t("video_service_tier_label", { defaultValue: "服务档位" })}
+                                panelLabel={t("video_service_tier_label", { defaultValue: "服务档位" })}
                                 className={PROFILE_INPUT_CLS}
-                                placeholder="default"
+                                minPanelWidth={280}
                               />
                             </label>
                           </div>
@@ -2244,6 +2333,26 @@ export function ProjectSettingsPage() {
         cancelLabel={t("common:cancel")}
         onCancel={() => setPendingNavigation(null)}
         onConfirm={confirmDiscardAndNavigate}
+      />
+      <ConfirmDialog
+        open={favoriteDeleteTargetId !== null}
+        tone="danger"
+        title={t("delete_favorite_style_title", {
+          defaultValue: "删除收藏风格",
+        })}
+        description={t("delete_favorite_style_confirm", {
+          defaultValue: "删除后会从收藏列表移除。已创建项目不会受影响。确定删除？",
+        })}
+        confirmLabel={t("delete_favorite_style", {
+          defaultValue: "删除风格",
+        })}
+        loadingLabel={t("delete_favorite_style_deleting", {
+          defaultValue: "删除中...",
+        })}
+        cancelLabel={t("common:cancel")}
+        loading={deletingFavoriteTemplateId !== null}
+        onCancel={() => setFavoriteDeleteTargetId(null)}
+        onConfirm={handleConfirmDeleteFavoriteStyle}
       />
     </div>
   );

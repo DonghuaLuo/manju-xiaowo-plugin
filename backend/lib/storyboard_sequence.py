@@ -4,7 +4,7 @@ Helpers for storyboard sequence ordering and dependency planning.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,11 +53,25 @@ def find_storyboard_item(
     return None
 
 
+def storyboard_path_for_item(project_path: Path, item: dict, id_field: str) -> tuple[str | None, Path | None]:
+    resource_id = str(item.get(id_field) or "").strip()
+    if not resource_id:
+        return None, None
+    assets = item.get("generated_assets")
+    storyboard_rel = assets.get("storyboard_image") if isinstance(assets, dict) else None
+    storyboard_rel_text = str(storyboard_rel).strip() if storyboard_rel else ""
+    if storyboard_rel_text:
+        return resource_id, project_path / storyboard_rel_text
+    return resource_id, project_path / "storyboards" / f"scene_{resource_id}.png"
+
+
 def resolve_previous_storyboard_path(
     project_path: Path,
     items: Sequence[dict],
     id_field: str,
     resource_id: str,
+    *,
+    require_exists: bool = True,
 ) -> Path | None:
     resolved = find_storyboard_item(items, id_field, resource_id)
     if resolved is None:
@@ -68,14 +82,12 @@ def resolve_previous_storyboard_path(
         return None
 
     previous_item = items[index - 1]
-    previous_id = str(previous_item.get(id_field) or "").strip()
-    if not previous_id:
+    _previous_id, previous_path = storyboard_path_for_item(project_path, previous_item, id_field)
+    if not previous_path:
         return None
-
-    previous_path = project_path / "storyboards" / f"scene_{previous_id}.png"
-    if previous_path.exists():
-        return previous_path
-    return None
+    if require_exists and not previous_path.exists():
+        return None
+    return previous_path
 
 
 def build_previous_storyboard_reference(path: Path) -> dict:
@@ -113,6 +125,7 @@ def build_storyboard_dependency_plan(
     id_field: str,
     selected_ids: Iterable[str],
     script_file: str | None,
+    needs_previous_reference: Callable[[dict], bool] | None = None,
 ) -> list[StoryboardTaskPlan]:
     selected_set = {str(item_id) for item_id in selected_ids}
     if not selected_set:
@@ -132,8 +145,12 @@ def build_storyboard_dependency_plan(
         if index > 0:
             previous_resource_id = str(items[index - 1].get(id_field) or "").strip() or None
 
+        needs_previous = True if needs_previous_reference is None else bool(needs_previous_reference(item))
         starts_new_group = (
-            bool(item.get("segment_break")) or not previous_resource_id or previous_resource_id not in selected_set
+            not needs_previous
+            or bool(item.get("segment_break"))
+            or not previous_resource_id
+            or previous_resource_id not in selected_set
         )
 
         if starts_new_group:

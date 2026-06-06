@@ -515,9 +515,19 @@ class MediaGenerator:
             # 走 finish_call(status="failed") 翻 pending → failed 后再 raise，避免
             # 留下永久 pending 账目（ADR 0007）；放在 try 块内是必须的。
             if task_id is not None:
-                from lib.video_backends.base import persist_api_call_id
+                from lib.video_backends.base import persist_api_call_id, persist_task_payload_fields
 
                 await persist_api_call_id(task_id, call_id)
+                resume_payload_fields: dict[str, object] = {
+                    "duration_seconds": duration_int,
+                    "generate_audio": effective_generate_audio,
+                    "service_tier": str(version_metadata.get("service_tier") or "default"),
+                }
+                if resolution is not None:
+                    resume_payload_fields["resolution"] = resolution
+                if version_metadata.get("seed") is not None:
+                    resume_payload_fields["seed"] = version_metadata["seed"]
+                await persist_task_payload_fields(task_id, resume_payload_fields)
 
             from lib.video_backends.base import VideoGenerationRequest
 

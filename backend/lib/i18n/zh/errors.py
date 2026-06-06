@@ -145,6 +145,7 @@ MESSAGES = {
     "image_capability_missing_i2i": "{provider}/{model} 不支持图生图；请配置一个支持图生图的默认模型",
     "image_capability_missing_t2i": "{provider}/{model} 不支持文生图；请配置一个支持文生图的默认模型",
     "image_dashscope_4k_t2i_only": "模型 {model} 的 4K 输出仅 wan2.7-image-pro 文生图支持；请改用 2K 或更低分辨率",
+    "image_reference_images_too_many": "模型 {model} 最多支持 {max_reference_images} 张参考图，当前提交了 {count} 张；请减少引用资产或更换支持更多参考图的模型",
     "image_reference_images_unreadable": "模型 {model} 有参考图缺失或无法读取，已中止生成：{names}；请检查参考图路径",
     # Video Capability
     "video_duration_invalid": "视频时长 {duration} 不是合法的整数秒数",

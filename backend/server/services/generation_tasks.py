@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_SPECS
-from lib.config.registry import PROVIDER_REGISTRY
+from lib.config.registry import ARK_SEEDREAM_MAX_REFERENCE_IMAGES, PROVIDER_REGISTRY
 from lib.custom_provider import is_custom_provider
 from lib.db.base import DEFAULT_USER_ID
 from lib.gemini_shared import get_shared_rate_limiter
@@ -36,6 +36,7 @@ from lib.prompt_utils import (
 )
 from lib.providers import (
     PROVIDER_ARK,
+    PROVIDER_ARK_AGENT_PLAN,
     PROVIDER_DASHSCOPE,
     PROVIDER_GEMINI,
     PROVIDER_GROK,
@@ -53,7 +54,7 @@ from lib.storyboard_sequence import (
     find_storyboard_item,
     get_storyboard_items,
     group_scenes_by_segment_break,
-    resolve_previous_storyboard_path,
+    storyboard_path_for_item,
 )
 from lib.thumbnail import extract_video_thumbnail
 from lib.version_manager import VersionManager
@@ -63,7 +64,10 @@ from server.services.generation_route_resolver import (
     GenerationRoute,
     coerce_video_duration_for_options,
     coerce_video_resolution_for_options,
+    default_shot_tier_for_task,
     duration_options_for_resolution,
+    merged_shot_tier_profiles,
+    normalize_shot_tier,
     resolve_generation_route,
     should_resolve_generation_route,
 )
@@ -90,6 +94,10 @@ _PROVIDER_ID_TO_BACKEND: dict[str, str] = {
 
 _VIDEO_CONTINUITY_POLICIES = {"auto", "start_only", "end_frame", "reference_assisted"}
 _END_FRAME_SKIP_TRANSITIONS = {"fade", "dissolve"}
+_IMAGE_MODEL_REFERENCE_LIMITS: dict[str, int] = {
+    # 自定义 OpenAI 兼容供应商会使用 custom-* provider_id，只有 model_id 仍是稳定信号。
+    "gpt-image-2": 16,
+}
 
 
 def get_project_manager() -> ProjectManager:
@@ -905,6 +913,36 @@ def _payload_with_shot_tier(payload: dict[str, Any], item: dict[str, Any] | None
     return {**payload, "shot_tier": shot_tier}
 
 
+def _storyboard_video_continuity_policy(
+    project: dict,
+    payload: dict[str, Any],
+    item: dict[str, Any] | None,
+) -> str:
+    raw = payload.get("video_continuity_policy")
+    if raw is None:
+        raw = payload.get("continuity_policy")
+    if raw is None:
+        route_payload = _payload_with_shot_tier(payload, item)
+        shot_tier = normalize_shot_tier(route_payload.get("shot_tier")) or default_shot_tier_for_task("storyboard")
+        strategy = merged_shot_tier_profiles(project).get(shot_tier) if shot_tier else None
+        if isinstance(strategy, dict):
+            raw = strategy.get("video_continuity_policy")
+    if raw is None:
+        raw = project.get("video_continuity_policy")
+    if raw is None:
+        raw = project.get("continuity_policy")
+    policy = str(raw or "auto").strip().lower()
+    return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
+
+
+def _storyboard_needs_previous_reference(
+    project: dict,
+    payload: dict[str, Any],
+    item: dict[str, Any] | None,
+) -> bool:
+    return _storyboard_video_continuity_policy(project, payload, item) != "start_only"
+
+
 def _wants_final_storyboard(payload: dict[str, Any]) -> bool:
     quality = payload.get("generation_quality")
     if quality is None:
@@ -936,19 +974,47 @@ def _should_use_storyboard_source(payload: dict[str, Any], final_generation_mode
 
 
 def _should_use_previous_storyboard_reference(
+    project: dict,
     payload: dict[str, Any],
-    final_generation_mode: str | None,
+    item: dict[str, Any] | None,
 ) -> bool:
-    quality = payload.get("generation_quality")
-    if quality is None:
-        quality = payload.get("quality")
-    if quality is None:
-        return False
-    if quality == "draft":
-        return False
-    if final_generation_mode == _STORYBOARD_FINAL_FRESH_SAMPLE:
-        return False
-    return True
+    return _storyboard_needs_previous_reference(project, payload, item)
+
+
+def _previous_storyboard_candidate(
+    project_path: Path,
+    items: list[dict],
+    id_field: str,
+    resource_id: str,
+) -> tuple[str | None, Path | None]:
+    resolved = find_storyboard_item(items, id_field, resource_id)
+    if resolved is None:
+        raise KeyError(f"scene/segment not found: {resource_id}")
+
+    target_item, index = resolved
+    if index == 0 or bool(target_item.get("segment_break")):
+        return None, None
+
+    previous_item = items[index - 1]
+    return storyboard_path_for_item(project_path, previous_item, id_field)
+
+
+def _resolve_previous_storyboard_reference_path(
+    project_path: Path,
+    items: list[dict],
+    id_field: str,
+    resource_id: str,
+    *,
+    required: bool,
+) -> Path | None:
+    previous_id, previous_path = _previous_storyboard_candidate(project_path, items, id_field, resource_id)
+    if not previous_id or previous_path is None:
+        return None
+    if previous_path.is_file():
+        return previous_path
+    if required:
+        raise ValueError(f"视频连续性策略需要上一张分镜图，请先生成上一张分镜：{previous_id}")
+    return None
 
 
 def _version_file_exists(project_path: Path, info: dict[str, Any] | None) -> bool:
@@ -1097,7 +1163,6 @@ def _collect_reference_images(
     char_field: str,
     scene_field: str,
     prop_field: str,
-    extra_reference_images: list[str] | None = None,
     previous_storyboard_path: Path | None = None,
 ) -> list[object] | None:
     sheet_paths, _ = _collect_sheet_paths(
@@ -1105,102 +1170,336 @@ def _collect_reference_images(
     )
     reference_images: list[object] = list(sheet_paths)
 
-    for extra in extra_reference_images or []:
-        extra_path = Path(extra)
-        if not extra_path.is_absolute():
-            extra_path = project_path / extra_path
-        if extra_path.is_file():
-            reference_images.append(extra_path)
-
     if previous_storyboard_path and previous_storyboard_path.is_file():
         reference_images.append(build_previous_storyboard_reference(previous_storyboard_path))
 
     return reference_images or None
 
 
-_REFERENCE_POLICY_LIMITS = {
-    "lean": 2,
-    "balanced": 4,
-    "full_context": 0,
-}
-
-
-def _apply_reference_image_policy(
-    reference_images: list[object] | None,
-    policy: object,
-) -> tuple[list[object] | None, dict[str, Any]]:
-    if not reference_images:
-        return reference_images, {}
-    normalized = str(policy or "full_context")
-    limit = _REFERENCE_POLICY_LIMITS.get(normalized, 0)
-    if limit <= 0 or len(reference_images) <= limit:
-        return reference_images, {
-            "reference_image_policy": normalized,
-            "reference_image_count": len(reference_images),
-            "reference_image_submitted_count": len(reference_images),
-            "reference_image_dropped_count": 0,
-        }
-    submitted = reference_images[:limit]
-    return submitted, {
-        "reference_image_policy": normalized,
-        "reference_image_count": len(reference_images),
-        "reference_image_submitted_count": len(submitted),
-        "reference_image_dropped_count": len(reference_images) - len(submitted),
-        "reference_image_drop_reason": "shot_tier_reference_image_policy",
-    }
-
-
 def _image_reference_limit(provider_id: str | None, model_id: str | None) -> int | None:
     provider = str(provider_id or "").strip().lower()
     model = str(model_id or "").strip().lower()
+    meta = PROVIDER_REGISTRY.get(provider)
+    model_key = str(model_id or "").strip()
+    model_info = (meta.models.get(model_key) or meta.models.get(model)) if meta else None
+    if model_info and model_info.max_reference_images is not None:
+        return int(model_info.max_reference_images)
+    if model in _IMAGE_MODEL_REFERENCE_LIMITS:
+        return _IMAGE_MODEL_REFERENCE_LIMITS[model]
     if provider == PROVIDER_OPENAI:
         return 16
     if provider == PROVIDER_VIDU:
         return 7
     if provider == PROVIDER_DASHSCOPE:
         return 9 if model.startswith("wan") else 3
+    if provider in {PROVIDER_ARK, PROVIDER_ARK_AGENT_PLAN} and "seedream" in model:
+        return ARK_SEEDREAM_MAX_REFERENCE_IMAGES
     return None
 
 
-def _apply_provider_image_reference_limit(
+def _reference_label(ref: object, index: int) -> str:
+    if isinstance(ref, dict):
+        label = str(ref.get("label") or "").strip()
+        if label:
+            return label
+    return f"参考图{index}"
+
+
+def _format_image_reference_limit_error(
+    *,
+    provider_id: str | None,
+    model_id: str | None,
+    limit: int,
+    count: int,
+    reference_images: list[object] | None,
+) -> str:
+    model_label = "/".join(part for part in [provider_id, model_id] if part) or "当前图片模型"
+    labels = [_reference_label(ref, index) for index, ref in enumerate(reference_images or [], start=1)]
+    detail = "、".join(labels[:8])
+    if len(labels) > 8:
+        detail += f" 等 {len(labels)} 张"
+    if limit <= 0:
+        return f"当前图片模型 {model_label} 不支持参考图，但当前分镜需要提交 {count} 张参考图：{detail}"
+    return f"当前图片模型 {model_label} 最多支持 {limit} 张参考图，但当前分镜需要提交 {count} 张：{detail}"
+
+
+def _format_image_reference_unresolved_error(
+    *,
+    count: int,
+    reference_images: list[object] | None,
+    route_error: str | None,
+) -> str:
+    labels = [_reference_label(ref, index) for index, ref in enumerate(reference_images or [], start=1)]
+    detail = "、".join(labels[:8])
+    if len(labels) > 8:
+        detail += f" 等 {len(labels)} 张"
+    reason = f" 原因：{route_error}" if route_error else ""
+    return f"无法确认当前图片模型的参考图上限，当前分镜需要提交 {count} 张参考图：{detail}。请先检查项目生成质量策略或图片模型配置。{reason}"
+
+
+def _validate_provider_image_reference_limit(
     reference_images: list[object] | None,
     *,
     provider_id: str | None,
     model_id: str | None,
-) -> tuple[list[object] | None, dict[str, Any]]:
+) -> dict[str, Any]:
     if not reference_images:
-        return reference_images, {}
+        return {}
     limit = _image_reference_limit(provider_id, model_id)
     if limit is None:
-        return reference_images, {}
-    if limit <= 0:
-        return None, {
-            "provider": provider_id,
-            "model": model_id,
-            "max_reference_images": limit,
-            "reference_image_count": len(reference_images),
-            "reference_image_submitted_count": 0,
-            "reference_image_dropped_count": len(reference_images),
-            "reference_image_drop_reason": "provider_max_reference_images",
-        }
-    if len(reference_images) <= limit:
-        return reference_images, {
-            "provider": provider_id,
-            "model": model_id,
-            "max_reference_images": limit,
-            "reference_image_count": len(reference_images),
-            "reference_image_submitted_count": len(reference_images),
-            "reference_image_dropped_count": 0,
-        }
-    submitted = reference_images[:limit]
-    return submitted, {
+        return {}
+    if limit <= 0 or len(reference_images) > limit:
+        raise ValueError(
+            _format_image_reference_limit_error(
+                provider_id=provider_id,
+                model_id=model_id,
+                limit=limit,
+                count=len(reference_images),
+                reference_images=reference_images,
+            )
+        )
+    return {
         "provider": provider_id,
         "model": model_id,
         "max_reference_images": limit,
         "reference_image_count": len(reference_images),
-        "reference_image_submitted_count": len(submitted),
-        "reference_image_dropped_count": len(reference_images) - len(submitted),
-        "reference_image_drop_reason": "provider_max_reference_images",
+        "reference_image_submitted_count": len(reference_images),
+        "reference_image_dropped_count": 0,
+    }
+
+
+def _asset_reference_sources(
+    project: dict,
+    project_path: Path,
+    target_item: dict,
+    *,
+    char_field: str,
+    scene_field: str,
+    prop_field: str,
+) -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _append(kind: str, name: object, sheet: object) -> None:
+        if not isinstance(sheet, str) or not sheet:
+            return
+        if sheet in seen or not (project_path / sheet).exists():
+            return
+        seen.add(sheet)
+        label_kind = {"character": "角色", "scene": "场景", "prop": "道具"}[kind]
+        sources.append({"kind": kind, "name": str(name), "label": f"{label_kind}：{name}", "path": sheet})
+
+    characters = project.get("characters", {})
+    scenes = project.get("scenes", {})
+    props = project.get("props", {})
+    for name in target_item.get(char_field, []):
+        asset = characters.get(name) if isinstance(characters, dict) else None
+        _append("character", name, asset.get("character_sheet") if isinstance(asset, dict) else None)
+    for name in target_item.get(scene_field, []):
+        asset = scenes.get(name) if isinstance(scenes, dict) else None
+        _append("scene", name, asset.get("scene_sheet") if isinstance(asset, dict) else None)
+    for name in target_item.get(prop_field, []):
+        asset = props.get(name) if isinstance(props, dict) else None
+        _append("prop", name, asset.get("prop_sheet") if isinstance(asset, dict) else None)
+    return sources
+
+
+def _with_candidate_references(
+    target_item: dict,
+    *,
+    char_field: str,
+    scene_field: str,
+    prop_field: str,
+    characters: list[str] | None,
+    scenes: list[str] | None,
+    props: list[str] | None,
+) -> dict:
+    candidate = dict(target_item)
+    if characters is not None:
+        candidate[char_field] = characters
+    if scenes is not None:
+        candidate[scene_field] = scenes
+    if props is not None:
+        candidate[prop_field] = props
+    return candidate
+
+
+async def preview_storyboard_reference_usage(
+    project_name: str,
+    resource_id: str,
+    *,
+    script_file: str,
+    characters: list[str] | None = None,
+    scenes: list[str] | None = None,
+    props: list[str] | None = None,
+    generation_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return whether a candidate reference selection fits current image model limits."""
+
+    payload_overrides = dict(generation_payload or {})
+
+    def _prepare() -> dict[str, Any]:
+        manager = get_project_manager()
+        project = manager.load_project(project_name)
+        project_path = manager.get_project_path(project_name)
+        script = manager.load_script(project_name, script_file)
+        items, id_field, char_field, scene_field, prop_field = get_storyboard_items(script)
+        resolved = find_storyboard_item(items, id_field, resource_id)
+        if resolved is None:
+            raise ValueError(f"scene/segment not found: {resource_id}")
+        target_item, _ = resolved
+        target_item = _with_candidate_references(
+            target_item,
+            char_field=char_field,
+            scene_field=scene_field,
+            prop_field=prop_field,
+            characters=characters,
+            scenes=scenes,
+            props=props,
+        )
+        route_payload = _payload_with_shot_tier({"script_file": script_file, **payload_overrides}, target_item)
+        asset_sources = _asset_reference_sources(
+            project,
+            project_path,
+            target_item,
+            char_field=char_field,
+            scene_field=scene_field,
+            prop_field=prop_field,
+        )
+
+        previous_id, previous_path = _previous_storyboard_candidate(project_path, items, id_field, resource_id)
+        needs_previous = _storyboard_needs_previous_reference(project, route_payload, target_item)
+        previous_source = None
+        if needs_previous and previous_id:
+            previous_source = {
+                "kind": "previous_storyboard",
+                "name": previous_id,
+                "label": f"上一张分镜图：{previous_id}",
+                "path": str(previous_path) if previous_path else "",
+                "exists": bool(previous_path and previous_path.is_file()),
+            }
+
+        source_ref = None
+        assets = target_item.get("generated_assets") if isinstance(target_item.get("generated_assets"), dict) else {}
+        source_ref, _source_meta = _storyboard_source_reference(
+            project_path=project_path,
+            versions=VersionManager(project_path),
+            resource_id=resource_id,
+            assets=assets,
+            payload={**route_payload, "quality": "final"},
+        )
+        source_exists = source_ref is not None
+
+        return {
+            "project": project,
+            "target_item": target_item,
+            "route_payload": route_payload,
+            "asset_sources": asset_sources,
+            "previous_source": previous_source,
+            "source_exists": source_exists,
+        }
+
+    prepared = await asyncio.to_thread(_prepare)
+    project = prepared["project"]
+    route_payload = prepared["route_payload"]
+    asset_sources = list(prepared["asset_sources"])
+    previous_source = prepared["previous_source"]
+    source_exists = bool(prepared["source_exists"])
+
+    async def _scenario(payload: dict[str, Any]) -> dict[str, Any]:
+        quality = str(payload.get("quality") or "draft")
+        final_generation_mode = _storyboard_final_generation_mode(payload)
+        include_source = _should_use_storyboard_source(payload, final_generation_mode)
+        sources = list(asset_sources)
+        if previous_source:
+            sources.append(previous_source)
+        if include_source and source_exists:
+            sources.insert(
+                0,
+                {
+                    "kind": "current_storyboard",
+                    "name": resource_id,
+                    "label": "当前分镜图（精修参考）",
+                    "path": "",
+                    "exists": True,
+                },
+            )
+        count = len(sources)
+        provider_id = None
+        model_id = None
+        profile_key = None
+        max_reference_images = None
+        route_error = None
+        try:
+            route = await _maybe_resolve_generation_route(
+                project_name=project_name,
+                project=project,
+                payload=payload,
+                task_kind="storyboard",
+                needs_i2i=count > 0,
+            )
+            if route is not None:
+                provider_id = route.provider_id
+                model_id = route.model_id
+                profile_key = route.profile_key
+            else:
+                resolved = await _resolve_effective_image_backend(project, payload, needs_i2i=count > 0)
+                provider_id = resolved.provider_id
+                model_id = resolved.model_id
+        except Exception as exc:  # noqa: BLE001
+            route_error = str(exc)
+
+        if provider_id or model_id:
+            max_reference_images = _image_reference_limit(provider_id, model_id)
+
+        resolution_failed = route_error is not None and count > 0
+        blocking = (
+            max_reference_images is not None
+            and count > 0
+            and (max_reference_images <= 0 or count > max_reference_images)
+        )
+        message = None
+        if resolution_failed:
+            message = _format_image_reference_unresolved_error(
+                count=count,
+                reference_images=[{"label": item["label"]} for item in sources],
+                route_error=route_error,
+            )
+        elif blocking:
+            message = _format_image_reference_limit_error(
+                provider_id=provider_id,
+                model_id=model_id,
+                limit=int(max_reference_images or 0),
+                count=count,
+                reference_images=[{"label": item["label"]} for item in sources],
+            )
+        return {
+            "quality": quality,
+            "final_generation_mode": final_generation_mode,
+            "profile_key": profile_key,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "max_reference_images": max_reference_images,
+            "reference_image_count": count,
+            "sources": sources,
+            "ok": not (resolution_failed or blocking),
+            "message": message,
+            "route_error": route_error,
+        }
+
+    if payload_overrides:
+        scenario_payloads = [{**route_payload, "quality": payload_overrides.get("quality") or "draft"}]
+    else:
+        scenario_payloads = [
+            {**route_payload, "quality": "draft"},
+            {**route_payload, "quality": "final"},
+        ]
+    scenarios = [await _scenario(payload) for payload in scenario_payloads]
+    blocking_scenarios = [item for item in scenarios if not item["ok"]]
+    return {
+        "ok": not blocking_scenarios,
+        "message": blocking_scenarios[0]["message"] if blocking_scenarios else None,
+        "scenarios": scenarios,
     }
 
 
@@ -1224,17 +1523,7 @@ def _item_reference_values(item: dict, field: str) -> set[str]:
 
 
 def _storyboard_path_for_item(project_path: Path, item: dict, id_field: str) -> tuple[str | None, Path | None]:
-    resource_id = str(item.get(id_field) or "").strip()
-    if not resource_id:
-        return None, None
-    assets = item.get("generated_assets")
-    storyboard_rel = assets.get("storyboard_image") if isinstance(assets, dict) else None
-    storyboard_file = (
-        project_path / storyboard_rel
-        if storyboard_rel
-        else project_path / "storyboards" / f"scene_{resource_id}.png"
-    )
-    return resource_id, storyboard_file
+    return storyboard_path_for_item(project_path, item, id_field)
 
 
 def _video_backend_caps(generator: Any) -> tuple[Any | None, bool, bool, bool, str | None, str | None]:
@@ -1526,16 +1815,18 @@ async def execute_storyboard_task(
             raise ValueError(f"scene/segment not found: {resource_id}")
         _target_item, _ = _resolved
 
-        _prev_path = resolve_previous_storyboard_path(_project_path, _items, _id_field, resource_id)
         _assets = _target_item.get("generated_assets") if isinstance(_target_item.get("generated_assets"), dict) else {}
         _source_meta: dict[str, Any] = {}
         _source_ref: dict[str, Any] | None = None
         _final_generation_mode = _storyboard_final_generation_mode(payload)
-        _previous_ref_path = (
-            _prev_path
-            if _should_use_previous_storyboard_reference(payload, _final_generation_mode)
-            else None
-        )
+        _previous_required = _should_use_previous_storyboard_reference(_project, payload, _target_item)
+        _previous_ref_path = _resolve_previous_storyboard_reference_path(
+            _project_path,
+            _items,
+            _id_field,
+            resource_id,
+            required=_previous_required,
+        ) if _previous_required else None
         if _should_use_storyboard_source(payload, _final_generation_mode):
             _source_ref, _source_meta = _storyboard_source_reference(
                 project_path=_project_path,
@@ -1552,7 +1843,6 @@ async def execute_storyboard_task(
             char_field=_char_field,
             scene_field=_scene_field,
             prop_field=_prop_field,
-            extra_reference_images=payload.get("extra_reference_images") or [],
             previous_storyboard_path=_previous_ref_path,
         )
         if _source_ref is not None:
@@ -1572,29 +1862,16 @@ async def execute_storyboard_task(
         needs_i2i=_needs_i2i,
     )
     effective_payload = route.effective_payload if route else payload
+    provider_reference_policy_meta: dict[str, Any] = {}
     if route is not None:
-        reference_images, reference_policy_meta = _apply_reference_image_policy(
-            reference_images,
-            route.shot_tier_strategy.get("reference_image_policy"),
-        )
-        reference_images, provider_reference_policy_meta = _apply_provider_image_reference_limit(
+        provider_reference_policy_meta = _validate_provider_image_reference_limit(
             reference_images,
             provider_id=route.provider_id,
             model_id=route.model_id,
         )
     else:
-        reference_policy_meta = {}
         provider_reference_policy_meta = {}
     effective_needs_i2i = bool(reference_images)
-    if route is not None and effective_needs_i2i != _needs_i2i:
-        route = await _maybe_resolve_generation_route(
-            project_name=project_name,
-            project=project,
-            payload=route_payload,
-            task_kind="storyboard",
-            needs_i2i=effective_needs_i2i,
-        )
-        effective_payload = route.effective_payload if route else payload
 
     generator = await get_media_generator(
         project_name,
@@ -1611,12 +1888,15 @@ async def execute_storyboard_task(
         resolved_image = await _resolve_effective_image_backend(project, payload, needs_i2i=effective_needs_i2i)
         image_size = await resolve_resolution(project, resolved_image.provider_id, resolved_image.model_id)
         version_metadata = {}
+        provider_reference_policy_meta = _validate_provider_image_reference_limit(
+            reference_images,
+            provider_id=resolved_image.provider_id,
+            model_id=resolved_image.model_id,
+        )
     for key, value in source_storyboard_meta.items():
         version_metadata.setdefault(key, value)
     if final_generation_mode:
         version_metadata.setdefault("final_generation_mode", final_generation_mode)
-    if reference_policy_meta:
-        version_metadata.setdefault("reference_image_policy", reference_policy_meta)
     if provider_reference_policy_meta:
         version_metadata.setdefault("provider_image_reference_policy", provider_reference_policy_meta)
 

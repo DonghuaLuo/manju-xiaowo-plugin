@@ -369,6 +369,33 @@ export interface GenerationRoutePreviewResponse {
   routes: GenerationRoutePreviewItem[];
 }
 
+export interface StoryboardReferencePreflightSource {
+  kind: string;
+  name?: string;
+  label: string;
+  path?: string;
+  exists?: boolean;
+}
+
+export interface StoryboardReferencePreflightScenario {
+  quality: GenerationQuality;
+  profile_key?: string | null;
+  provider_id?: string | null;
+  model_id?: string | null;
+  max_reference_images?: number | null;
+  reference_image_count: number;
+  sources: StoryboardReferencePreflightSource[];
+  ok: boolean;
+  message?: string | null;
+  route_error?: string | null;
+}
+
+export interface StoryboardReferencePreflightResponse {
+  ok: boolean;
+  message?: string | null;
+  scenarios: StoryboardReferencePreflightScenario[];
+}
+
 export interface ScriptSplittingProviderCompatibility {
   status: "ok" | "warn" | "block" | "unknown";
   provider_id?: string | null;
@@ -577,6 +604,31 @@ export interface QualityStatsResponse {
   average_rating: number | null;
   dimension_averages?: Array<{ key: string; count: number; average_rating: number | null }>;
   groups: Record<string, Array<{ key: string; count: number; average_rating: number | null }>>;
+  ratings: Array<Record<string, unknown>>;
+}
+
+export interface QualityAnalysisGroupItem {
+  key: string;
+  label?: string;
+  count: number;
+  average_rating: number | null;
+  project_name?: string;
+  project_title?: string;
+  provider?: string;
+  model?: string;
+  shot_tier?: string;
+  dimension_averages?: Array<{ key: string; count: number; average_rating: number | null }>;
+  [key: string]: unknown;
+}
+
+export interface QualityAnalysisResponse {
+  count: number;
+  average_rating: number | null;
+  project_count: number;
+  total_projects: number;
+  rated_model_count: number;
+  dimension_averages: Array<{ key: string; count: number; average_rating: number | null }>;
+  groups: Record<string, QualityAnalysisGroupItem[]>;
   ratings: Array<Record<string, unknown>>;
 }
 
@@ -1352,6 +1404,34 @@ class API {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  static async previewStoryboardReferenceUsage(
+    projectName: string,
+    segmentId: string,
+    payload: {
+      script_file: string;
+      characters?: string[] | null;
+      scenes?: string[] | null;
+      props?: string[] | null;
+      quality?: GenerationQuality | null;
+      final_generation_mode?: StoryboardFinalGenerationMode | null;
+      shot_tier?: "S" | "A" | "B" | null;
+      resolution?: string | null;
+      source_version?: number | null;
+      image_provider_t2i?: string | null;
+      image_provider_i2i?: string | null;
+      image_provider?: string | null;
+      image_model?: string | null;
+    },
+  ): Promise<StoryboardReferencePreflightResponse> {
+    return this.request(
+      `/projects/${encodeURIComponent(projectName)}/generation/storyboard-reference-preflight/${encodeURIComponent(segmentId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   static async startProjectArchiveExport(
@@ -2659,6 +2739,10 @@ class API {
 
   static async getQualityStats(projectName: string): Promise<QualityStatsResponse> {
     return this.request(`/projects/${encodeURIComponent(projectName)}/quality-stats`);
+  }
+
+  static async getQualityAnalysis(): Promise<QualityAnalysisResponse> {
+    return this.request("/quality-analysis");
   }
 
   static async getFinalizationReport(

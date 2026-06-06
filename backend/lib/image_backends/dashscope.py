@@ -236,13 +236,12 @@ class DashScopeImageBackend:
                     "image_reference_images_unreadable", model=self._model, names=", ".join(unreadable)
                 )
             if len(data_uris) > self._ref_limit:
-                logger.warning(
-                    "DashScope 参考图数量 %d 超过 model=%s 上限 %d，截断",
-                    len(data_uris),
-                    self._model,
-                    self._ref_limit,
+                raise ImageCapabilityError(
+                    "image_reference_images_too_many",
+                    model=self._model,
+                    count=len(data_uris),
+                    max_reference_images=self._ref_limit,
                 )
-                data_uris = data_uris[: self._ref_limit]
             content.extend({"image": uri} for uri in data_uris)
         content.append({"text": request.prompt})
         return content

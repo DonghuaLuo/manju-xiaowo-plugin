@@ -168,6 +168,68 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
+  it("asks for confirmation before deleting a favorite style", async () => {
+    vi.mocked(API.getStyleTemplates)
+      .mockResolvedValueOnce({
+        success: true,
+        templates: [
+          {
+            id: "live_premium_drama",
+            category: "live",
+            prompt: "画风：真人电视剧风格，精品短剧画风，大师级构图",
+            thumbnail_file: "live_premium_drama.png",
+          },
+          {
+            id: "favorite_noir",
+            category: "favorite",
+            prompt: "manual noir lighting",
+            thumbnail_file: "favorite_noir.png",
+            name: "收藏风格 1",
+            tagline: "自定义上传",
+          },
+        ],
+      })
+      .mockResolvedValue({
+        success: true,
+        templates: [
+          {
+            id: "live_premium_drama",
+            category: "live",
+            prompt: "画风：真人电视剧风格，精品短剧画风，大师级构图",
+            thumbnail_file: "live_premium_drama.png",
+          },
+        ],
+      });
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style_template_id: "favorite_noir",
+        style: "manual noir lighting",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const deleteSpy = vi.spyOn(API, "deleteFavoriteStyleTemplate").mockResolvedValue({
+      success: true,
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    const deleteBtn = await screen.findByRole("button", { name: /删除收藏风格|Delete favorite style/ });
+    fireEvent.click(deleteBtn);
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: /删除收藏风格/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /删除风格/ }));
+
+    await waitFor(() => {
+      expect(deleteSpy).toHaveBeenCalledWith("favorite_noir");
+    });
+  });
+
   it("clearing the reference image keeps save enabled and triggers clear PATCH", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
@@ -431,8 +493,98 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     useAppStore.setState(useAppStore.getInitialState(), true);
     vi.restoreAllMocks();
     vi.spyOn(API, "getStyleTemplates").mockResolvedValue({ success: true, templates: [] });
+    vi.spyOn(API, "getScriptSplittingTemplates").mockResolvedValue({ success: true, templates: [] });
     vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([]);
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
+  });
+
+  it("disables unsupported Flex service tier for the selected video model", async () => {
+    vi.spyOn(API, "getSystemConfig").mockResolvedValue({
+      options: {
+        ...FAKE_CONFIG_WITH_DEFAULTS.options,
+        video_backends: ["ark/doubao-seedance-2-0"],
+        provider_names: { ark: "火山方舟" },
+      },
+      settings: {
+        ...FAKE_CONFIG_WITH_DEFAULTS.settings,
+        default_video_backend: "ark/doubao-seedance-2-0",
+      },
+    } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
+    vi.spyOn(API, "getVideoCapabilities").mockResolvedValue({
+      provider_id: "ark",
+      model: "doubao-seedance-2-0",
+      supported_durations: [5],
+      max_duration: 5,
+      max_reference_images: 9,
+      resolutions: ["720p"],
+      capabilities: ["text_to_video", "image_to_video"],
+      supports_service_tier: false,
+      service_tiers: ["default"],
+      source: "registry",
+    } as unknown as Awaited<ReturnType<typeof API.getVideoCapabilities>>);
+    vi.spyOn(providerModels, "getProviderModels").mockResolvedValue([
+      {
+        id: "ark",
+        display_name: "火山方舟",
+        description: "",
+        status: "ready",
+        media_types: ["video"],
+        capabilities: [],
+        configured_keys: [],
+        missing_keys: [],
+        models: {
+          "doubao-seedance-2-0": {
+            display_name: "Seedance 2.0",
+            media_type: "video",
+            capabilities: ["text_to_video", "image_to_video"],
+            default: true,
+            supported_durations: [5],
+            duration_resolution_constraints: {},
+            resolutions: ["720p"],
+          },
+        },
+      },
+    ] as Awaited<ReturnType<typeof providerModels.getProviderModels>>);
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        video_backend: "ark/doubao-seedance-2-0",
+        shot_tier_profiles: {
+          S: {
+            profiles: {
+              video_final: {
+                service_tier: "flex",
+              },
+            },
+          },
+        },
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    vi.spyOn(API, "previewGenerationRoutes").mockResolvedValue({ routes: [] });
+    vi.spyOn(API, "getProviderRecommendations").mockResolvedValue({
+      recommendations: [],
+      min_calls: 1,
+    });
+    vi.spyOn(API, "getQualityStats").mockResolvedValue({
+      count: 0,
+      average_rating: null,
+      groups: {},
+      ratings: [],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    const serviceTierTriggers = await screen.findAllByRole("combobox", { name: /服务档位|Service tier/ });
+    expect(serviceTierTriggers[0]).toHaveValue("default");
+    fireEvent.click(serviceTierTriggers[0]);
+
+    const flexOption = await screen.findByRole("option", { name: /Flex/ });
+    expect(flexOption).toBeDisabled();
+    expect(flexOption).toHaveTextContent(/不支持此档位|does not support/i);
   });
 
   it("previews grid generation without validating inactive reference-video routes", async () => {

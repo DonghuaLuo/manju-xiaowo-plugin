@@ -26,6 +26,16 @@ from server.services.reference_video_tasks import _finalize_reference_video_unit
 logger = logging.getLogger(__name__)
 
 
+def _resume_service_tier(payload: dict[str, Any]) -> str:
+    raw = payload.get("service_tier")
+    if raw is None:
+        settings = payload.get("video_provider_settings")
+        raw = settings.get("service_tier") if isinstance(settings, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return "default"
+
+
 async def execute_resume_video_task(task: dict[str, Any], *, job_id: str) -> dict[str, Any]:
     """重启自愈入口：worker `_process_resume_task` 直接调。
 
@@ -69,10 +79,7 @@ async def execute_resume_video_task(task: dict[str, Any], *, job_id: str) -> dic
     except (ValueError, TypeError):
         duration_seconds = 8
     seed = payload.get("seed")
-    # 旧任务 / 脏数据可能把 video_provider_settings 存成 None / str / list，全部归一化成 dict
-    raw_vp_settings = payload.get("video_provider_settings")
-    vp_settings = raw_vp_settings if isinstance(raw_vp_settings, dict) else {}
-    service_tier = vp_settings.get("service_tier", "default")
+    service_tier = _resume_service_tier(payload)
     raw_prompt = payload.get("prompt")
     prompt_text = raw_prompt if isinstance(raw_prompt, str) else ""
     raw_resolution = payload.get("resolution")

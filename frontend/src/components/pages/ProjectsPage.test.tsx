@@ -227,6 +227,19 @@ describe("ProjectsPage", () => {
     });
   });
 
+  it("links lobby analysis actions to global settings sections", async () => {
+    vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
+
+    const { location } = renderPage();
+    await screen.findByText("新建项目");
+
+    fireEvent.click(screen.getByRole("button", { name: "质量分析" }));
+    expect(location.history?.at(-1)).toBe("/app/settings?section=quality");
+
+    fireEvent.click(screen.getByRole("button", { name: "用量统计" }));
+    expect(location.history?.at(-1)).toBe("/app/settings?section=usage");
+  });
+
   it("opens the asset export dialog with asset libraries selected by default", async () => {
     vi.spyOn(API, "listProjects").mockResolvedValue({ projects: [] });
     vi.spyOn(API, "getAssetArchiveExportInfo").mockResolvedValue({
