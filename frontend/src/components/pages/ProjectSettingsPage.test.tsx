@@ -116,7 +116,7 @@ describe("ProjectSettingsPage – style picker", () => {
 
     await waitFor(() => {
       const img = screen.getByAltText(/上传风格参考图|Upload style reference/) as HTMLImageElement;
-      expect(img.src).toContain("/api/v1/files/demo/style_reference.png");
+      expect(img.src).toContain("style_reference.png");
     });
   });
 
@@ -162,6 +162,53 @@ describe("ProjectSettingsPage – style picker", () => {
       });
       expect(favoriteSpy).toHaveBeenCalledWith({
         stylePrompt: "manual noir lighting",
+        projectName: "demo",
+        file: null,
+      });
+    });
+  });
+
+  it("can favorite an existing custom style whose prompt is stored in legacy style", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style_image: "style_reference.png",
+        style: "legacy noir lighting",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const updateSpy = vi.spyOn(API, "updateProject").mockResolvedValue({
+      success: true,
+      project: { title: "Demo" } as unknown as Awaited<ReturnType<typeof API.updateProject>>["project"],
+    });
+    const favoriteSpy = vi.spyOn(API, "createFavoriteStyleTemplate").mockResolvedValue({
+      success: true,
+      template: {
+        id: "favorite_legacy",
+        category: "favorite",
+        prompt: "legacy noir lighting",
+        thumbnail_file: "favorite_legacy.png",
+        name: "收藏风格 1",
+        tagline: "自定义上传",
+      },
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    const favoriteBtn = await screen.findByRole("button", { name: /收藏风格|Favorite style/ });
+    expect(favoriteBtn).not.toBeDisabled();
+    fireEvent.click(favoriteBtn);
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith("demo", {
+        style_template_id: null,
+        style_description: "legacy noir lighting",
+      });
+      expect(favoriteSpy).toHaveBeenCalledWith({
+        stylePrompt: "legacy noir lighting",
         projectName: "demo",
         file: null,
       });

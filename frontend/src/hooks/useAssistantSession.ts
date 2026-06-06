@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { errMsg, voidCall } from "@/utils/async";
-import { API } from "@/api";
+import { API, type ApiEventSource } from "@/api";
 import { uid } from "@/utils/id";
 import { useAssistantStore } from "@/stores/assistant-store";
 import type {
@@ -153,7 +153,7 @@ function saveLastSessionId(projectName: string, sessionId: string): void {
  */
 export function useAssistantSession(projectName: string | null) {
   const store = useAssistantStore;
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<ApiEventSource | null>(null);
   const streamSessionRef = useRef<string | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<string>("idle");
@@ -231,7 +231,7 @@ export function useAssistantSession(projectName: string | null) {
       if (
         streamRef.current &&
         streamSessionRef.current === sessionId &&
-        streamRef.current.readyState !== EventSource.CLOSED
+        streamRef.current.readyState !== streamRef.current.CLOSED
       ) {
         return;
       }
@@ -239,8 +239,7 @@ export function useAssistantSession(projectName: string | null) {
       closeStream();
       streamSessionRef.current = sessionId;
 
-      const url = API.getAssistantStreamUrl(projectName!, sessionId);
-      const source = new EventSource(url);
+      const source = API.openAssistantStream(projectName!, sessionId);
       streamRef.current = source;
       const isActiveStream = () =>
         streamRef.current === source &&

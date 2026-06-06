@@ -139,7 +139,7 @@ export function ReferencesSection({
       } catch (err) {
         const message = errMsg(err);
         pushToast(message, "warning");
-        throw new Error(message);
+        throw new Error(message, { cause: err });
       }
       await onSave(patch);
       setOpen(false);

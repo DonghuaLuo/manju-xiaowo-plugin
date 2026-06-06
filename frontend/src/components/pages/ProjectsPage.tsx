@@ -1355,9 +1355,9 @@ export function ProjectsPage() {
   }, [handleAssetExportTask]);
 
   useEffect(() => {
-    PluginSDK.onBackendEvent<ExportTaskEvent>("arcreel_export_task", handleAssetExportTask);
+    PluginSDK.onBackendEvent<ExportTaskEvent>("manju_export_task", handleAssetExportTask);
     return () => {
-      PluginSDK.offBackendEvent("arcreel_export_task", handleAssetExportTask);
+      PluginSDK.offBackendEvent("manju_export_task", handleAssetExportTask);
     };
   }, [handleAssetExportTask]);
 

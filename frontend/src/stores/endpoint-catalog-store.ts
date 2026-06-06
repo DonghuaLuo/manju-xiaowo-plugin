@@ -5,7 +5,8 @@ import type { EndpointDescriptor, ImageCap, MediaType } from "@/types";
 // ---------------------------------------------------------------------------
 // EndpointCatalog —— 自定义供应商 endpoint 元数据的 FE 端缓存。
 // 真相源在后端 lib/custom_provider/endpoints.py:ENDPOINT_REGISTRY，
-// 由 GET /api/v1/custom-providers/endpoints 拉取，FE 不再硬编码 endpoint 列表/路径/媒体类型 map。
+// 由 manju_api_list_endpoint_catalog 通过 PluginSDK IPC 拉取，
+// FE 不再硬编码 endpoint 列表/路径/媒体类型 map。
 // ---------------------------------------------------------------------------
 
 export interface EndpointPath {

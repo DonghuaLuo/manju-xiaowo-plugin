@@ -241,6 +241,29 @@ export interface ProjectEventStreamOptions {
   onError?: (event: Event) => void;
 }
 
+export interface ApiEventSource {
+  readonly CONNECTING: 0;
+  readonly OPEN: 1;
+  readonly CLOSED: 2;
+  readonly url: string;
+  withCredentials: boolean;
+  readyState: number;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  addEventListener(
+    type: string,
+    listener: ((event: MessageEvent) => void) | EventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: string,
+    listener: ((event: MessageEvent) => void) | EventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  close(): void;
+}
+
 /** Filters for {@link API.listTasks} and {@link API.listProjectTasks}. */
 export interface TaskListFilters {
   projectName?: string;
@@ -710,8 +733,6 @@ function normalizeImportFailureDiagnostics(value: unknown): ImportFailureDiagnos
 
 // ==================== API class ====================
 
-const API_BASE = "/api/v1";
-
 type LocalAssetRoots = {
   projects_root: string;
   global_assets_root?: string;
@@ -776,7 +797,7 @@ async function ensureLocalAssetRoots(): Promise<LocalAssetRoots | null> {
 
   localAssetRootsPromise = (async () => {
     try {
-      const roots = await PluginSDK.callBackend<Partial<LocalAssetRoots>>("arcreel_asset_roots", {});
+      const roots = await PluginSDK.callBackend<Partial<LocalAssetRoots>>("manju_api_get_asset_roots", {});
       if (typeof roots.projects_root === "string" && roots.projects_root.trim()) {
         localAssetRoots = {
           projects_root: normalizeLocalPath(roots.projects_root),
@@ -800,7 +821,7 @@ async function ensureLocalAssetRoots(): Promise<LocalAssetRoots | null> {
         return localAssetRoots;
       }
     } catch {
-      // Browser-only tests or early startup can keep the legacy API URL fallback.
+      // Browser-only tests or early startup can continue without local roots.
     }
 
     return null;
@@ -843,6 +864,17 @@ function globalAssetToLocalUrl(
   return filePath ? convertLocalFileSrc(filePath, "fp", cacheBust) : null;
 }
 
+function favoriteStyleThumbnailToLocalUrl(
+  fileName: string,
+  cacheBust?: number | string | null,
+): string | null {
+  if (!localAssetRoots?.projects_root) return null;
+  const cleaned = cleanRelativePath(fileName);
+  if (!cleaned || cleaned.includes("/")) return null;
+  const filePath = joinLocalPath(localAssetRoots.projects_root, "_style_favorites", "images", cleaned);
+  return filePath ? convertLocalFileSrc(filePath, "fp", cacheBust) : null;
+}
+
 function resolveApiFileUrl(value: string): string | null {
   try {
     const parsed = new URL(value, window.location.href);
@@ -869,6 +901,15 @@ function resolveApiFileUrl(value: string): string | null {
         parsed.searchParams.get("fp") ?? parsed.searchParams.get("v"),
       );
     }
+
+    if (resource.startsWith("style-templates/favorites/")) {
+      const [, , ...filenameParts] = resource.split("/");
+      if (filenameParts.length !== 1) return null;
+      return favoriteStyleThumbnailToLocalUrl(
+        decodePathSegment(filenameParts[0]),
+        parsed.searchParams.get("fp") ?? parsed.searchParams.get("v"),
+      );
+    }
   } catch {
     return null;
   }
@@ -888,11 +929,24 @@ function normalizeProjectSummaryUrls(project: ProjectSummary): ProjectSummary {
   };
 }
 
+function normalizeStyleTemplateUrls(template: StyleTemplateInfo): StyleTemplateInfo {
+  if (!template.thumbnail_url) return template;
+  return {
+    ...template,
+    thumbnail_url: resolveLocalMediaUrl(template.thumbnail_url) ?? template.thumbnail_url,
+  };
+}
+
 function normalizeVersionUrls(version: VersionInfo): VersionInfo {
   return {
     ...version,
     file_url: version.file_url ? resolveLocalMediaUrl(version.file_url) ?? version.file_url : version.file_url,
   };
+}
+
+export function __resetLocalAssetRootsForTests(): void {
+  localAssetRoots = null;
+  localAssetRootsPromise = null;
 }
 
 type DesktopResourceResult = {
@@ -909,6 +963,17 @@ type DesktopContent =
   | { kind: "json"; value: unknown }
   | { kind: "text"; text: string; mimeType?: string }
   | { kind: "binary"; base64: string; mimeType?: string };
+
+type DesktopRequestContent =
+  | DesktopContent
+  | { kind: "fields"; fields: Record<string, string[]> };
+
+type PluginStreamPayload = {
+  stream: string;
+  event: string;
+  id?: string | number | null;
+  data?: unknown;
+};
 
 export type ExportTaskKind = "project_archive" | "jianying_draft" | "asset_archive";
 export type ExportTaskStatus = "queued" | "running" | "completed" | "failed";
@@ -1020,15 +1085,6 @@ export interface SaveDiagnosticsResponse {
   detail?: string;
 }
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
 function bytesToBase64(bytes: Uint8Array): string {
   const chunkSize = 0x8000;
   let binary = "";
@@ -1055,42 +1111,6 @@ function statusFromDesktopError(code?: string): number {
     default:
       return 500;
   }
-}
-
-function desktopContentToBody(content: DesktopContent | undefined): {
-  body: BodyInit;
-  mimeType: string;
-  empty: boolean;
-} {
-  if (!content || content.kind === "empty") {
-    return { body: "", mimeType: "text/plain;charset=utf-8", empty: true };
-  }
-  if (content.kind === "json") {
-    return { body: JSON.stringify(content.value ?? null), mimeType: "application/json;charset=utf-8", empty: false };
-  }
-  if (content.kind === "binary") {
-    const bytes = base64ToBytes(content.base64);
-    const arrayBuffer = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(arrayBuffer).set(bytes);
-    return {
-      body: new Blob([arrayBuffer]),
-      mimeType: content.mimeType || "application/octet-stream",
-      empty: false,
-    };
-  }
-  return { body: content.text, mimeType: content.mimeType || "text/plain;charset=utf-8", empty: false };
-}
-
-function desktopResultToResponse(result: DesktopResourceResult): Response {
-  const success = result.success !== false;
-  const content = success
-    ? result.content
-    : result.content ?? { kind: "json" as const, value: { detail: result.error?.message || "请求失败" } };
-  const { body, mimeType, empty } = desktopContentToBody(content);
-  return new Response(body, {
-    status: success ? (empty ? 204 : 200) : statusFromDesktopError(result.error?.code),
-    headers: { "content-type": mimeType },
-  });
 }
 
 function ensureExportTaskStarted(result: ExportTaskStartResponse): {
@@ -1129,131 +1149,364 @@ async function localFileDescriptor(fieldName: string, file: UploadFileInput) {
   };
 }
 
-function apiResourceFromUrl(url: string): {
-  resource: string;
-  query: Record<string, string[]>;
-} {
-  const parsed = new URL(url, window.location.href);
-  const resource = parsed.pathname
-    .replace(/^\/api\/v1\/?/, "")
-    .replace(/^\/api\/?/, "")
-    .replace(/^\/+/, "");
-  const query: Record<string, string[]> = {};
-  parsed.searchParams.forEach((value, key) => {
-    query[key] = [...(query[key] ?? []), value];
-  });
-  return { resource: resource || "root", query };
+type IpcScalar = string | number | boolean | null | undefined;
+type IpcRecord = Record<string, IpcScalar>;
+type IpcQuery = Record<string, IpcScalar | IpcScalar[]>;
+type LocalFileDescriptor = Awaited<ReturnType<typeof localFileDescriptor>>;
+
+function compactIpcRecord(record?: IpcRecord): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(record ?? {})) {
+    if (value !== null && value !== undefined) out[key] = value;
+  }
+  return out;
 }
 
-async function requestWithLocalFiles(
-  url: string,
-  fields: Record<string, string | number | boolean | null | undefined>,
-  files: Array<{ fieldName: string; file: UploadFileInput }>,
-): Promise<Response> {
-  const result = await PluginSDK.callBackend<DesktopResourceResult>("arcreel_local_file_request", {
-    operation: "create",
-    ...apiResourceFromUrl(url),
-    locale: i18n.language || "zh",
-    fields,
-    files: await Promise.all(files.map(({ fieldName, file }) => localFileDescriptor(fieldName, file))),
-  });
-  return desktopResultToResponse(result);
+function compactIpcQuery(query?: IpcQuery): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [key, rawValue] of Object.entries(query ?? {})) {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    const normalized = values
+      .filter((value): value is string | number | boolean => value !== null && value !== undefined)
+      .map(String);
+    if (normalized.length > 0) out[key] = normalized;
+  }
+  return out;
 }
 
-/**
- * 检查 fetch 响应状态，抛出包含后端错误信息的 Error。
- * 用于不经过 API.request() 的自定义 fetch 调用。
- */
-async function throwIfNotOk(response: Response, fallbackMsg: string): Promise<void> {
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: response.statusText })) as ErrorResponse;
-    const detail = error.detail;
-    throw new Error(typeof detail === "string" ? detail || fallbackMsg : fallbackMsg);
+function jsonBody(value: unknown): DesktopContent {
+  return { kind: "json", value };
+}
+
+function textBody(text: string, mimeType = "text/plain;charset=UTF-8"): DesktopContent {
+  return { kind: "text", text, mimeType };
+}
+
+function desktopContentValue(content: DesktopContent | undefined): unknown {
+  if (!content || content.kind === "empty") return undefined;
+  if (content.kind === "json") return content.value;
+  if (content.kind === "text") return content.text;
+  return content;
+}
+
+function detailMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail || fallback;
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) {
+          const msg = (item as { msg?: unknown }).msg;
+          if (typeof msg === "string") return msg;
+          if (typeof msg === "number" || typeof msg === "boolean") return String(msg);
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("; ") || fallback;
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") return message || fallback;
+    if (typeof message === "number" || typeof message === "boolean") return String(message);
+  }
+  return fallback;
+}
+
+class ManjuApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly payload: unknown;
+
+  constructor(message: string, options: { status: number; code?: string; payload: unknown }) {
+    super(message);
+    this.name = "ManjuApiError";
+    this.status = options.status;
+    this.code = options.code;
+    this.payload = options.payload;
   }
 }
 
-/** 为本地插件请求注入语言等桌面客户端 header。 */
-function withPluginHeaders(options: RequestInit = {}): RequestInit {
-  const headers = new Headers(options.headers);
-  headers.set("Accept-Language", i18n.language || "zh");
-  return { ...options, headers };
+function throwManjuApiError(result: DesktopResourceResult, fallback = "请求失败"): never {
+  const payload = desktopContentValue(result.content) ?? { detail: result.error?.message };
+  const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : result.error?.message;
+  throw new ManjuApiError(detailMessage(detail, fallback), {
+    status: statusFromDesktopError(result.error?.code),
+    code: result.error?.code,
+    payload,
+  });
+}
+
+type ManjuIpcPayload = {
+  pathParams?: IpcRecord;
+  query?: IpcQuery;
+  body?: DesktopRequestContent | null;
+  fields?: IpcRecord;
+  files?: LocalFileDescriptor[];
+  locale?: string;
+};
+
+async function callManjuApiResult(command: string, payload: ManjuIpcPayload = {}): Promise<DesktopResourceResult> {
+  return PluginSDK.callBackend<DesktopResourceResult>(command, {
+    pathParams: compactIpcRecord(payload.pathParams),
+    query: compactIpcQuery(payload.query),
+    locale: payload.locale ?? i18n.language ?? "zh",
+    ...(payload.body ? { body: payload.body } : {}),
+    ...(payload.fields ? { fields: compactIpcRecord(payload.fields) } : {}),
+    ...(payload.files ? { files: payload.files } : {}),
+  });
+}
+
+async function callManjuApi<T = unknown>(
+  command: string,
+  payload: ManjuIpcPayload = {},
+  fallback = "请求失败",
+): Promise<T> {
+  const result = await callManjuApiResult(command, payload);
+  if (result.success === false) {
+    throwManjuApiError(result, fallback);
+  }
+  return desktopContentValue(result.content) as T;
+}
+
+async function callManjuFileApi<T = unknown>(
+  command: string,
+  payload: Omit<ManjuIpcPayload, "files"> & { files: Array<{ fieldName: string; file: UploadFileInput }> },
+  fallback = "请求失败",
+): Promise<T> {
+  const result = await callManjuFileApiResult(command, payload);
+  if (result.success === false) {
+    throwManjuApiError(result, fallback);
+  }
+  return desktopContentValue(result.content) as T;
+}
+
+async function callManjuFileApiResult(
+  command: string,
+  payload: Omit<ManjuIpcPayload, "files"> & { files: Array<{ fieldName: string; file: UploadFileInput }> },
+): Promise<DesktopResourceResult> {
+  return callManjuApiResult(command, {
+    ...payload,
+    files: await Promise.all(payload.files.map(({ fieldName, file }) => localFileDescriptor(fieldName, file))),
+  });
+}
+
+function assertNotAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw new DOMException("The operation was aborted.", "AbortError");
+}
+class PluginApiEventSource extends EventTarget {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSED = 2;
+  readonly url: string;
+  withCredentials = false;
+  readyState = PluginApiEventSource.CONNECTING;
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+
+  private readonly stream: string;
+  private readonly query: Record<string, string[]>;
+  private readonly backendHandler: (payload: PluginStreamPayload) => void;
+  private readonly seenEventIds = new Set<string>();
+  private lastEventId: string | number | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(stream: string, query: IpcQuery = {}) {
+    super();
+    this.stream = stream;
+    this.url = stream;
+    this.query = compactIpcQuery(query);
+    this.backendHandler = (payload) => {
+      if (!payload || payload.stream !== this.stream || this.readyState === PluginApiEventSource.CLOSED) {
+        return;
+      }
+      if (this.isDuplicateEvent(payload)) {
+        return;
+      }
+      this.rememberEventCursor(payload);
+      this.emitMessage(payload.event || "message", payload.data);
+    };
+
+    PluginSDK.onBackendEvent<PluginStreamPayload>("manju_api_event", this.backendHandler);
+    queueMicrotask(() => {
+      if (this.readyState === PluginApiEventSource.CLOSED) return;
+      this.readyState = PluginApiEventSource.OPEN;
+      const event = new Event("open");
+      this.dispatchEvent(event);
+      this.onopen?.(event);
+      void PluginSDK.callBackend<{ events?: PluginStreamPayload[] }>("manju_api_event_subscribe", {
+        query: this.query,
+        stream: this.stream,
+      })
+        .then((snapshot) => {
+          for (const eventPayload of snapshot.events ?? []) {
+            this.backendHandler(eventPayload);
+          }
+          this.schedulePoll();
+        })
+        .catch(() => {
+          const errorEvent = new Event("error");
+          this.dispatchEvent(errorEvent);
+          this.onerror?.(errorEvent);
+          this.schedulePoll();
+        });
+    });
+  }
+
+  addEventListener(
+    type: string,
+    listener: ((event: MessageEvent) => void) | EventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(type, listener as EventListenerOrEventListenerObject | null, options);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: ((event: MessageEvent) => void) | EventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(type, listener as EventListenerOrEventListenerObject | null, options);
+  }
+
+  close(): void {
+    if (this.readyState === PluginApiEventSource.CLOSED) return;
+    this.readyState = PluginApiEventSource.CLOSED;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    PluginSDK.offBackendEvent("manju_api_event", this.backendHandler);
+  }
+
+  private rememberEventCursor(payload: PluginStreamPayload): void {
+    if (
+      payload.event === "snapshot"
+      && payload.data
+      && typeof payload.data === "object"
+      && "last_event_id" in payload.data
+    ) {
+      const snapshot = payload.data as { last_event_id?: unknown };
+      const lastEventId = snapshot.last_event_id;
+      if ((typeof lastEventId === "string" || typeof lastEventId === "number") && lastEventId !== "") {
+        this.lastEventId = String(lastEventId);
+      }
+      return;
+    }
+    if (payload.id != null && payload.id !== "") {
+      this.lastEventId = payload.id;
+    }
+  }
+
+  private isDuplicateEvent(payload: PluginStreamPayload): boolean {
+    if (payload.id == null || payload.id === "") {
+      return false;
+    }
+    const key = `${payload.stream}:${payload.event}:${String(payload.id)}`;
+    if (this.seenEventIds.has(key)) {
+      return true;
+    }
+    this.seenEventIds.add(key);
+    if (this.seenEventIds.size > 1000) {
+      const oldest = this.seenEventIds.values().next().value;
+      if (oldest) {
+        this.seenEventIds.delete(oldest);
+      }
+    }
+    return false;
+  }
+
+  private schedulePoll(): void {
+    if (this.readyState === PluginApiEventSource.CLOSED || this.pollTimer) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null;
+      void this.poll();
+    }, 1000);
+  }
+
+  private async poll(): Promise<void> {
+    if (this.readyState === PluginApiEventSource.CLOSED) return;
+    try {
+      const result = await PluginSDK.callBackend<{ events?: PluginStreamPayload[] }>("manju_api_event_poll", {
+        query: this.query,
+        stream: this.stream,
+        lastEventId: this.lastEventId,
+      });
+      for (const eventPayload of result.events ?? []) {
+        this.backendHandler(eventPayload);
+      }
+    } catch {
+      const errorEvent = new Event("error");
+      this.dispatchEvent(errorEvent);
+      this.onerror?.(errorEvent);
+    } finally {
+      this.schedulePoll();
+    }
+  }
+
+  private emitMessage(type: string, data: unknown): void {
+    const event = new MessageEvent(type, {
+      data: typeof data === "string" ? data : JSON.stringify(data ?? {}),
+    });
+    this.dispatchEvent(event);
+    if (type === "message") {
+      this.onmessage?.(event);
+    }
+  }
 }
 
 class API {
-  /**
-   * 通用请求方法
-   */
-  static async request<T = unknown>(
-    endpoint: string,
-    options: RequestInit = {}
-  ): Promise<T> {
-    const url = `${API_BASE}${endpoint}`;
-    const defaultOptions: RequestInit = {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    };
-
-    const response = await fetch(url, withPluginHeaders({ ...defaultOptions, ...options }));
-
-    if (!response.ok) {
-      const error = await response
-        .json()
-        .catch(() => ({ detail: response.statusText })) as ErrorResponse;
-      let message = "请求失败";
-      if (typeof error.detail === "string") {
-        message = error.detail;
-      } else if (Array.isArray(error.detail) && error.detail.length > 0) {
-        message = error.detail.map((e) => (typeof e === "string" ? e : e?.msg)).filter(Boolean).join("; ") || message;
-      }
-      throw new Error(message);
-    }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    return response.json() as Promise<T>;
-  }
-
   // ==================== 系统配置 ====================
 
   static async getSystemConfig(): Promise<GetSystemConfigResponse> {
-    return this.request("/system/config");
+    return callManjuApi("manju_api_get_system_config");
   }
 
   static async updateSystemConfig(
     patch: SystemConfigPatch,
   ): Promise<GetSystemConfigResponse> {
-    return this.request("/system/config", {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    });
+    return callManjuApi("manju_api_update_system_config", { body: jsonBody(patch) });
   }
 
   static async getStyleTemplates(): Promise<{ success: boolean; templates: StyleTemplateInfo[] }> {
-    return this.request("/style-templates");
+    await ensureLocalAssetRoots();
+    const result = await callManjuApi<{ success: boolean; templates: StyleTemplateInfo[] }>("manju_api_get_style_templates");
+    return {
+      ...result,
+      templates: result.templates.map(normalizeStyleTemplateUrls),
+    };
   }
 
   static async createFavoriteStyleTemplate(
     payload: CreateFavoriteStyleTemplatePayload,
   ): Promise<{ success: boolean; template: StyleTemplateInfo }> {
-    const response = await requestWithLocalFiles(
-      `${API_BASE}/style-templates/favorites`,
+    const result = await callManjuFileApi<{ success: boolean; template: StyleTemplateInfo }>(
+      "manju_api_create_favorite_style_template",
       {
-        style_prompt: payload.stylePrompt,
-        project_name: payload.projectName ?? "",
+        fields: {
+          style_prompt: payload.stylePrompt,
+          project_name: payload.projectName ?? "",
+        },
+        files: payload.file ? [{ fieldName: "file", file: payload.file }] : [],
       },
-      payload.file ? [{ fieldName: "file", file: payload.file }] : [],
+      "收藏风格失败",
     );
-    await throwIfNotOk(response, "收藏风格失败");
-    return response.json() as Promise<{ success: boolean; template: StyleTemplateInfo }>;
+    await ensureLocalAssetRoots();
+    return {
+      ...result,
+      template: normalizeStyleTemplateUrls(result.template),
+    };
   }
 
   static async deleteFavoriteStyleTemplate(templateId: string): Promise<SuccessResponse> {
-    return this.request(`/style-templates/favorites/${encodeURIComponent(templateId)}`, {
-      method: "DELETE",
+    return callManjuApi("manju_api_delete_favorite_style_template", {
+      pathParams: { template_id: templateId },
     });
   }
 
@@ -1264,14 +1517,9 @@ class API {
     params: { check_extmodel?: boolean } = {},
   ): Promise<{ projects: ProjectSummary[] }> {
     await ensureLocalAssetRoots();
-    const searchParams = new URLSearchParams();
-    if (params.check_extmodel !== undefined) {
-      searchParams.set("check_extmodel", String(params.check_extmodel));
-    }
-    const query = searchParams.toString();
-    const result = await this.request<{ projects: ProjectSummary[] }>(
-      `/projects${query ? `?${query}` : ""}`,
-    );
+    const result = await callManjuApi<{ projects: ProjectSummary[] }>("manju_api_list_projects", {
+      query: { check_extmodel: params.check_extmodel },
+    });
     return {
       ...result,
       projects: result.projects.map(normalizeProjectSummaryUrls),
@@ -1281,10 +1529,7 @@ class API {
   static async createProject(
     payload: CreateProjectPayload,
   ): Promise<{ success: boolean; name: string; project: ProjectData }> {
-    return this.request("/projects", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    return callManjuApi("manju_api_create_project", { body: jsonBody(payload) });
   }
 
   static async getProject(
@@ -1295,7 +1540,7 @@ class API {
     asset_fingerprints?: Record<string, number>;
   }> {
     await ensureLocalAssetRoots();
-    return this.request(`/projects/${encodeURIComponent(name)}`);
+    return callManjuApi("manju_api_get_project", { pathParams: { name } });
   }
 
   static async updateProject(
@@ -1311,58 +1556,49 @@ class API {
     if ("script_splitting_template_id" in updates || "script_splitting" in updates) {
       throw new Error("请使用专用接口修改拆分方案");
     }
-    return this.request(`/projects/${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      body: JSON.stringify(updates),
+    return callManjuApi("manju_api_update_project", {
+      pathParams: { name },
+      body: jsonBody(updates),
     });
   }
 
   static async deleteProject(name: string): Promise<SuccessResponse> {
-    return this.request(`/projects/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    });
+    return callManjuApi("manju_api_delete_project", { pathParams: { name } });
   }
 
   /** 三级解析（项目 > 系统设置 > 系统默认）后的视频模型能力。 */
   static async getVideoCapabilities(name: string): Promise<VideoCapabilitiesResponse> {
-    return this.request(`/projects/${encodeURIComponent(name)}/video-capabilities`);
+    return callManjuApi("manju_api_get_video_capabilities", { pathParams: { name } });
   }
 
   static async getScriptSplittingTemplates(
     contentMode?: "narration" | "drama",
   ): Promise<ScriptSplittingTemplatesResponse> {
-    const query = contentMode ? `?content_mode=${encodeURIComponent(contentMode)}` : "";
-    return this.request(`/script-splitting-templates${query}`);
+    return callManjuApi("manju_api_get_script_splitting_templates", {
+      query: { content_mode: contentMode },
+    });
   }
 
   static async saveScriptSplittingTemplate(
     payload: ScriptSplittingTemplateUpsertPayload,
   ): Promise<ScriptSplittingTemplateMutationResponse> {
-    return this.request("/script-splitting-templates", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    return callManjuApi("manju_api_save_script_splitting_template", { body: jsonBody(payload) });
   }
 
   static async importScriptSplittingTemplate(
     template: Record<string, unknown>,
   ): Promise<ScriptSplittingTemplateMutationResponse> {
-    return this.request("/script-splitting-templates/import", {
-      method: "POST",
-      body: JSON.stringify({ template }),
-    });
+    return callManjuApi("manju_api_import_script_splitting_template", { body: jsonBody({ template }) });
   }
 
   static async exportScriptSplittingTemplate(templateId: string): Promise<ScriptSplittingTemplateExportResponse> {
-    return this.request(`/script-splitting-templates/${encodeURIComponent(templateId)}/export`);
+    return callManjuApi("manju_api_export_script_splitting_template", { pathParams: { template_id: templateId } });
   }
 
   static async deleteScriptSplittingTemplate(
     templateId: string,
   ): Promise<{ success: boolean }> {
-    return this.request(`/script-splitting-templates/${encodeURIComponent(templateId)}`, {
-      method: "DELETE",
-    });
+    return callManjuApi("manju_api_delete_script_splitting_template", { pathParams: { template_id: templateId } });
   }
 
   static async previewScriptSplittingTemplateChange(
@@ -1370,9 +1606,9 @@ class API {
     templateId: string,
     generationMode?: GenerationMode | null,
   ): Promise<{ success: boolean; preview: ScriptSplittingTemplatePreview }> {
-    return this.request(`/projects/${encodeURIComponent(name)}/script-splitting-template/preview`, {
-      method: "POST",
-      body: JSON.stringify({ template_id: templateId, generation_mode: generationMode ?? undefined }),
+    return callManjuApi("manju_api_preview_script_splitting_template_change", {
+      pathParams: { name },
+      body: jsonBody({ template_id: templateId, generation_mode: generationMode ?? undefined }),
     });
   }
 
@@ -1383,9 +1619,9 @@ class API {
     mode: ScriptSplittingTemplateApplyMode = "apply_keep_drafts",
     generationMode?: GenerationMode | null,
   ): Promise<ScriptSplittingTemplateChangeResponse> {
-    return this.request(`/projects/${encodeURIComponent(name)}/script-splitting-template/apply`, {
-      method: "POST",
-      body: JSON.stringify({
+    return callManjuApi("manju_api_change_script_splitting_template", {
+      pathParams: { name },
+      body: jsonBody({
         template_id: templateId,
         generation_mode: generationMode ?? undefined,
         confirm,
@@ -1397,12 +1633,12 @@ class API {
   static async previewGenerationRoutes(
     name: string,
     payload: GenerationRoutePreviewRequest,
-    options: RequestInit = {},
+    options: { signal?: AbortSignal } = {},
   ): Promise<GenerationRoutePreviewResponse> {
-    return this.request(`/projects/${encodeURIComponent(name)}/generation/route-preview`, {
-      ...options,
-      method: "POST",
-      body: JSON.stringify(payload),
+    assertNotAborted(options.signal);
+    return callManjuApi("manju_api_preview_generation_routes", {
+      pathParams: { project_name: name },
+      body: jsonBody(payload),
     });
   }
 
@@ -1425,21 +1661,17 @@ class API {
       image_model?: string | null;
     },
   ): Promise<StoryboardReferencePreflightResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generation/storyboard-reference-preflight/${encodeURIComponent(segmentId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    );
+    return callManjuApi("manju_api_preview_storyboard_reference_usage", {
+      pathParams: { project_name: projectName, segment_id: segmentId },
+      body: jsonBody(payload),
+    });
   }
-
   static async startProjectArchiveExport(
     projectName: string,
     scope: "full" | "current",
     exportPath: string,
   ): Promise<{ taskId: string; status: ExportTaskStatus; exportPath?: string }> {
-    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("arcreel_start_project_archive_export", {
+    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("manju_api_start_project_archive_export", {
       projectName,
       scope,
       exportPath,
@@ -1454,7 +1686,7 @@ class API {
     scriptSplittingTemplatesRoot?: string;
   }> {
     const result = await PluginSDK.callBackend<AssetArchiveExportInfoResponse>(
-      "arcreel_asset_archive_export_info",
+      "manju_api_get_asset_archive_export_info",
       {},
     );
     if (!result.ok || !result.projectsRoot) {
@@ -1473,7 +1705,7 @@ class API {
     options: AssetArchiveExportOptions,
   ): Promise<{ taskId: string; status: ExportTaskStatus; exportPath?: string }> {
     const result = await PluginSDK.callBackend<ExportTaskStartResponse>(
-      "arcreel_start_asset_archive_export",
+      "manju_api_start_asset_archive_export",
       {
         exportPath,
         ...options,
@@ -1483,7 +1715,7 @@ class API {
   }
 
   static async getExportTaskStatus(taskId: string): Promise<ExportTaskEvent | null> {
-    const result = await PluginSDK.callBackend<ExportTaskStatusResponse>("arcreel_export_task_status", {
+    const result = await PluginSDK.callBackend<ExportTaskStatusResponse>("manju_api_get_export_task_status", {
       taskId,
     });
     if (!result.ok || !result.task) return null;
@@ -1491,7 +1723,7 @@ class API {
   }
 
   static async openDesktopPath(path: string): Promise<void> {
-    const result = await PluginSDK.callBackend<OpenDesktopPathResponse>("arcreel_open_desktop_path", {
+    const result = await PluginSDK.callBackend<OpenDesktopPathResponse>("manju_api_open_desktop_path", {
       path,
     });
     if (!result.ok) {
@@ -1500,7 +1732,7 @@ class API {
   }
 
   static async saveDiagnosticsArchive(exportPath: string): Promise<{ path: string; filename?: string }> {
-    const result = await PluginSDK.callBackend<SaveDiagnosticsResponse>("arcreel_save_diagnostics", {
+    const result = await PluginSDK.callBackend<SaveDiagnosticsResponse>("manju_api_save_diagnostics_archive", {
       exportPath,
     });
     if (!result.ok || !result.path) {
@@ -1515,7 +1747,7 @@ class API {
     draftPath: string,
     jianyingVersion: string = "6",
   ): Promise<{ taskId: string; status: ExportTaskStatus; draftPath?: string }> {
-    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("arcreel_start_jianying_draft_export", {
+    const result = await PluginSDK.callBackend<ExportTaskStartResponse>("manju_api_start_jianying_draft_export", {
       projectName,
       episode,
       draftPath,
@@ -1526,7 +1758,7 @@ class API {
 
   static async detectJianyingDraftRoot(): Promise<string> {
     const result = await PluginSDK.callBackend<DetectJianyingDraftRootResponse>(
-      "arcreel_detect_jianying_draft_root",
+      "manju_api_detect_jianying_draft_root",
       {},
     );
     if (!result.ok) return "";
@@ -1537,16 +1769,17 @@ class API {
     file: UploadFileInput,
     conflictPolicy: ImportConflictPolicy = "prompt"
   ): Promise<ImportArchiveResponse> {
-    const response = await requestWithLocalFiles(
-      `${API_BASE}/projects/import`,
-      { conflict_policy: conflictPolicy },
-      [{ fieldName: "file", file }],
-    );
+    const result = await callManjuFileApiResult("manju_api_import_project", {
+      fields: { conflict_policy: conflictPolicy },
+      files: [{ fieldName: "file", file }],
+    });
 
-    if (!response.ok) {
-      const payload = await response
-        .json()
-        .catch(() => ({ detail: response.statusText, errors: [], warnings: [] })) as ImportErrorPayload;
+    if (result.success === false) {
+      const payload = (desktopContentValue(result.content) ?? {
+        detail: result.error?.message,
+        errors: [],
+        warnings: [],
+      }) as ImportErrorPayload;
       const error = new Error(
         typeof payload.detail === "string" ? payload.detail : "导入失败"
       ) as Error & {
@@ -1557,7 +1790,7 @@ class API {
         conflict_project_name?: string;
         diagnostics?: ImportFailureDiagnostics;
       };
-      error.status = response.status;
+      error.status = statusFromDesktopError(result.error?.code);
       error.detail = typeof payload.detail === "string" ? payload.detail : "导入失败";
       error.errors = Array.isArray(payload.errors) ? payload.errors : [];
       error.warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
@@ -1575,7 +1808,7 @@ class API {
       throw error;
     }
 
-    const payload = await response.json() as ImportArchiveResponse & { diagnostics?: { auto_fixed?: unknown[]; warnings?: unknown[] } };
+    const payload = desktopContentValue(result.content) as ImportArchiveResponse & { diagnostics?: { auto_fixed?: unknown[]; warnings?: unknown[] } };
     return {
       ...payload,
       diagnostics: {
@@ -1593,17 +1826,10 @@ class API {
     description: string,
     voiceStyle: string = ""
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/characters`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          description,
-          voice_style: voiceStyle,
-        }),
-      }
-    );
+    return callManjuApi("manju_api_add_character", {
+      pathParams: { project_name: projectName },
+      body: jsonBody({ name, description, voice_style: voiceStyle }),
+    });
   }
 
   static async updateCharacter(
@@ -1611,25 +1837,19 @@ class API {
     charName: string,
     updates: Record<string, unknown>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/characters/${encodeURIComponent(charName)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(updates),
-      }
-    );
+    return callManjuApi("manju_api_update_character", {
+      pathParams: { project_name: projectName, entry_name: charName },
+      body: jsonBody(updates),
+    });
   }
 
   static async deleteCharacter(
     projectName: string,
     charName: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/characters/${encodeURIComponent(charName)}`,
-      {
-        method: "DELETE",
-      }
-    );
+    return callManjuApi("manju_api_delete_character", {
+      pathParams: { project_name: projectName, entry_name: charName },
+    });
   }
 
   // ==================== 项目场景管理 ====================
@@ -1639,13 +1859,10 @@ class API {
     name: string,
     description: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/scenes`,
-      {
-        method: "POST",
-        body: JSON.stringify({ name, description }),
-      }
-    );
+    return callManjuApi("manju_api_add_project_scene", {
+      pathParams: { project_name: projectName },
+      body: jsonBody({ name, description }),
+    });
   }
 
   static async updateProjectScene(
@@ -1653,25 +1870,19 @@ class API {
     sceneName: string,
     updates: Record<string, unknown>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/scenes/${encodeURIComponent(sceneName)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(updates),
-      }
-    );
+    return callManjuApi("manju_api_update_project_scene", {
+      pathParams: { project_name: projectName, entry_name: sceneName },
+      body: jsonBody(updates),
+    });
   }
 
   static async deleteProjectScene(
     projectName: string,
     sceneName: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/scenes/${encodeURIComponent(sceneName)}`,
-      {
-        method: "DELETE",
-      }
-    );
+    return callManjuApi("manju_api_delete_project_scene", {
+      pathParams: { project_name: projectName, entry_name: sceneName },
+    });
   }
 
   // ==================== 项目道具管理 ====================
@@ -1681,13 +1892,10 @@ class API {
     name: string,
     description: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/props`,
-      {
-        method: "POST",
-        body: JSON.stringify({ name, description }),
-      }
-    );
+    return callManjuApi("manju_api_add_project_prop", {
+      pathParams: { project_name: projectName },
+      body: jsonBody({ name, description }),
+    });
   }
 
   static async updateProjectProp(
@@ -1695,25 +1903,19 @@ class API {
     propName: string,
     updates: Record<string, unknown>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/props/${encodeURIComponent(propName)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(updates),
-      }
-    );
+    return callManjuApi("manju_api_update_project_prop", {
+      pathParams: { project_name: projectName, entry_name: propName },
+      body: jsonBody(updates),
+    });
   }
 
   static async deleteProjectProp(
     projectName: string,
     propName: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/props/${encodeURIComponent(propName)}`,
-      {
-        method: "DELETE",
-      }
-    );
+    return callManjuApi("manju_api_delete_project_prop", {
+      pathParams: { project_name: projectName, entry_name: propName },
+    });
   }
 
   // ==================== 场景管理 ====================
@@ -1722,9 +1924,9 @@ class API {
     projectName: string,
     scriptFile: string
   ): Promise<EpisodeScript> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/scripts/${encodeURIComponent(scriptFile)}`
-    );
+    return callManjuApi("manju_api_get_script", {
+      pathParams: { name: projectName, script_file: scriptFile },
+    });
   }
 
   static async updateScene(
@@ -1733,13 +1935,10 @@ class API {
     scriptFile: string,
     updates: Record<string, unknown>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/script-scenes/${encodeURIComponent(sceneId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ script_file: scriptFile, updates }),
-      }
-    );
+    return callManjuApi("manju_api_update_scene", {
+      pathParams: { name: projectName, scene_id: sceneId },
+      body: jsonBody({ script_file: scriptFile, updates }),
+    });
   }
 
   // ==================== 片段管理（说书模式） ====================
@@ -1750,13 +1949,10 @@ class API {
     segmentId: string,
     updates: Record<string, unknown>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/segments/${encodeURIComponent(segmentId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(updates),
-      }
-    );
+    return callManjuApi("manju_api_update_segment", {
+      pathParams: { name: projectName, segment_id: segmentId },
+      body: jsonBody(updates),
+    });
   }
 
   // ==================== 文件管理 ====================
@@ -1778,27 +1974,20 @@ class API {
     used_encoding?: string | null;
     chapter_count?: number;
   }> {
-    const qsParts: string[] = [];
-    if (name) qsParts.push(`name=${encodeURIComponent(name)}`);
-    if (uploadType === "source" && options.onConflict) {
-      qsParts.push(`on_conflict=${encodeURIComponent(options.onConflict)}`);
-    }
-    const qs = qsParts.join("&");
-    const url = `/projects/${encodeURIComponent(projectName)}/upload/${uploadType}${qs ? "?" + qs : ""}`;
+    const result = await callManjuFileApiResult("manju_api_upload_file", {
+      pathParams: { project_name: projectName, upload_type: uploadType },
+      query: {
+        name,
+        on_conflict: uploadType === "source" ? options.onConflict : undefined,
+      },
+      files: [{ fieldName: "file", file }],
+    });
 
-    const response = await requestWithLocalFiles(
-      `${API_BASE}${url}`,
-      {},
-      [{ fieldName: "file", file }],
-    );
-
-    if (response.status === 409) {
+    if (result.success === false && statusFromDesktopError(result.error?.code) === 409) {
       let detail: { existing?: string; suggested_name?: string; message?: string } | null = null;
-      try {
-        const body = (await response.json()) as { detail?: { existing?: string; suggested_name?: string; message?: string } };
-        detail = body?.detail ?? null;
-      } catch {
-        /* ignore */
+      const body = desktopContentValue(result.content) as { detail?: { existing?: string; suggested_name?: string; message?: string } };
+      if (body && typeof body === "object") {
+        detail = body.detail ?? null;
       }
       // 后端 SourceLoader 的 ConflictError 必然携带 existing + suggested_name；
       // 若 detail 缺字段则视为协议异常，抛通用错误（带文件名标识）而非手搓 fallback —
@@ -1813,8 +2002,10 @@ class API {
       );
     }
 
-    await throwIfNotOk(response, "上传失败");
-    return (await response.json()) as {
+    if (result.success === false) {
+      throwManjuApiError(result, "上传失败");
+    }
+    return desktopContentValue(result.content) as {
       success: boolean;
       path: string;
       url: string;
@@ -1840,9 +2031,9 @@ class API {
       output?: { name: string; size: number; url: string }[];
     };
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/files`
-    );
+    return callManjuApi("manju_api_list_files", {
+      pathParams: { project_name: projectName },
+    });
   }
 
   static getFileUrl(
@@ -1853,13 +2044,7 @@ class API {
     const localUrl = projectFileToLocalUrl(projectName, path, cacheBust);
     if (localUrl) return localUrl;
     void ensureLocalAssetRoots();
-
-    const base = `${API_BASE}/files/${encodeURIComponent(projectName)}/${path}`;
-    if (cacheBust == null || cacheBust === "") {
-      return base;
-    }
-
-    return `${base}?v=${encodeURIComponent(String(cacheBust))}`;
+    return appendCacheParam(path, "v", cacheBust);
   }
 
   static async getProjectFileLocalPath(
@@ -1887,12 +2072,9 @@ class API {
     projectName: string,
     filename: string
   ): Promise<string> {
-    const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`,
-      withPluginHeaders()
-    );
-    await throwIfNotOk(response, "获取文件内容失败");
-    return response.text();
+    return callManjuApi("manju_api_get_source_content", {
+      pathParams: { project_name: projectName, filename },
+    }, "获取文件内容失败");
   }
 
   /**
@@ -1903,16 +2085,10 @@ class API {
     filename: string,
     content: string
   ): Promise<SuccessResponse> {
-    const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`,
-      withPluginHeaders({
-        method: "PUT",
-        headers: { "Content-Type": "text/plain" },
-        body: content,
-      })
-    );
-    await throwIfNotOk(response, "保存文件失败");
-    return response.json() as Promise<SuccessResponse>;
+    return callManjuApi("manju_api_save_source_file", {
+      pathParams: { project_name: projectName, filename },
+      body: textBody(content),
+    }, "保存文件失败");
   }
 
   /**
@@ -1922,14 +2098,9 @@ class API {
     projectName: string,
     filename: string
   ): Promise<SuccessResponse> {
-    const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`,
-      withPluginHeaders({
-        method: "DELETE",
-      })
-    );
-    await throwIfNotOk(response, "删除文件失败");
-    return response.json() as Promise<SuccessResponse>;
+    return callManjuApi("manju_api_delete_source_file", {
+      pathParams: { project_name: projectName, filename },
+    }, "删除文件失败");
   }
 
   // ==================== 草稿文件管理 ====================
@@ -1940,9 +2111,9 @@ class API {
   static async listDrafts(
     projectName: string
   ): Promise<{ drafts: DraftInfo[] }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/drafts`
-    );
+    return callManjuApi("manju_api_list_drafts", {
+      pathParams: { project_name: projectName },
+    });
   }
 
   /**
@@ -1953,12 +2124,9 @@ class API {
     episode: number,
     stepNum: number
   ): Promise<string> {
-    const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/drafts/${episode}/step${stepNum}`,
-      withPluginHeaders()
-    );
-    await throwIfNotOk(response, "获取草稿内容失败");
-    return response.text();
+    return callManjuApi("manju_api_get_draft_content", {
+      pathParams: { project_name: projectName, episode, step_num: stepNum },
+    }, "获取草稿内容失败");
   }
 
   /**
@@ -1970,16 +2138,10 @@ class API {
     stepNum: number,
     content: string
   ): Promise<SuccessResponse> {
-    const response = await fetch(
-      `${API_BASE}/projects/${encodeURIComponent(projectName)}/drafts/${episode}/step${stepNum}`,
-      withPluginHeaders({
-        method: "PUT",
-        headers: { "Content-Type": "text/plain" },
-        body: content,
-      })
-    );
-    await throwIfNotOk(response, "保存草稿失败");
-    return response.json() as Promise<SuccessResponse>;
+    return callManjuApi("manju_api_save_draft", {
+      pathParams: { project_name: projectName, episode, step_num: stepNum },
+      body: textBody(content),
+    }, "保存草稿失败");
   }
 
   /**
@@ -1990,10 +2152,9 @@ class API {
     episode: number,
     stepNum: number
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/drafts/${episode}/step${stepNum}`,
-      { method: "DELETE" }
-    );
+    return callManjuApi("manju_api_delete_draft", {
+      pathParams: { project_name: projectName, episode, step_num: stepNum },
+    });
   }
 
   // ==================== 项目概述管理 ====================
@@ -2004,12 +2165,9 @@ class API {
   static async generateOverview(
     projectName: string
   ): Promise<{ success: boolean; overview: ProjectOverview }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate-overview`,
-      {
-        method: "POST",
-      }
-    );
+    return callManjuApi("manju_api_generate_overview", {
+      pathParams: { name: projectName },
+    });
   }
 
   /**
@@ -2019,13 +2177,10 @@ class API {
     projectName: string,
     updates: Partial<ProjectOverview>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/overview`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(updates),
-      }
-    );
+    return callManjuApi("manju_api_update_overview", {
+      pathParams: { name: projectName },
+      body: jsonBody(updates),
+    });
   }
 
   // ==================== 生成 API ====================
@@ -2035,9 +2190,10 @@ class API {
     segmentId: string,
     scriptFile: string,
   ): Promise<ExternalGenerationPackage> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/external-package/${encodeURIComponent(segmentId)}?script_file=${encodeURIComponent(scriptFile)}`,
-    );
+    return callManjuApi("manju_api_get_external_generation_package", {
+      pathParams: { project_name: projectName, segment_id: segmentId },
+      query: { script_file: scriptFile },
+    });
   }
 
   /**
@@ -2054,13 +2210,10 @@ class API {
     scriptFile: string,
     options: GenerationRequestOptions = {},
   ): Promise<{ success: boolean; task_id: string; message: string }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/storyboard/${encodeURIComponent(segmentId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ prompt, script_file: scriptFile, ...compactGenerationOptions(options) }),
-      }
-    );
+    return callManjuApi("manju_api_generate_storyboard", {
+      pathParams: { project_name: projectName, segment_id: segmentId },
+      body: jsonBody({ prompt, script_file: scriptFile, ...compactGenerationOptions(options) }),
+    });
   }
 
   /**
@@ -2079,32 +2232,26 @@ class API {
     durationSeconds?: number | null,
     options: GenerationRequestOptions = {},
   ): Promise<{ success: boolean; task_id: string; message: string }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/video/${encodeURIComponent(segmentId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          prompt,
-          script_file: scriptFile,
-          ...compactGenerationOptions({
-            ...options,
-            duration_seconds: durationSeconds ?? options.duration_seconds,
-          }),
+    return callManjuApi("manju_api_generate_video", {
+      pathParams: { project_name: projectName, segment_id: segmentId },
+      body: jsonBody({
+        prompt,
+        script_file: scriptFile,
+        ...compactGenerationOptions({
+          ...options,
+          duration_seconds: durationSeconds ?? options.duration_seconds,
         }),
-      }
-    );
+      }),
+    });
   }
 
   static async finalizeEpisode(
     projectName: string,
     episode: number,
   ): Promise<FinalizeEpisodeResponse> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/finalize/episode/${episode}`,
-      {
-        method: "POST",
-      },
-    );
+    return callManjuApi("manju_api_finalize_episode", {
+      pathParams: { project_name: projectName, episode },
+    });
   }
 
   /**
@@ -2123,13 +2270,10 @@ class API {
     task_id: string;
     message: string;
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/character/${encodeURIComponent(charName)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
-      }
-    );
+    return callManjuApi("manju_api_generate_character", {
+      pathParams: { project_name: projectName, char_name: charName },
+      body: jsonBody({ prompt, ...compactGenerationOptions(options) }),
+    });
   }
 
   /**
@@ -2148,13 +2292,10 @@ class API {
     task_id: string;
     message: string;
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/scene/${encodeURIComponent(sceneName)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
-      }
-    );
+    return callManjuApi("manju_api_generate_project_scene", {
+      pathParams: { project_name: projectName, scene_name: sceneName },
+      body: jsonBody({ prompt, ...compactGenerationOptions(options) }),
+    });
   }
 
   /**
@@ -2173,58 +2314,53 @@ class API {
     task_id: string;
     message: string;
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/prop/${encodeURIComponent(propName)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ prompt, ...compactGenerationOptions(options) }),
-      }
-    );
+    return callManjuApi("manju_api_generate_project_prop", {
+      pathParams: { project_name: projectName, prop_name: propName },
+      body: jsonBody({ prompt, ...compactGenerationOptions(options) }),
+    });
   }
 
   // ==================== 任务队列 API ====================
 
   static async getTask(taskId: string): Promise<TaskItem> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}`);
+    return callManjuApi("manju_api_get_task", { pathParams: { task_id: taskId } });
   }
 
   static async listTasks(
     filters: TaskListFilters = {}
   ): Promise<{ items: TaskItem[]; total: number; page: number; page_size: number }> {
-    const params = new URLSearchParams();
-    if (filters.projectName) params.append("project_name", filters.projectName);
-    if (filters.status) params.append("status", filters.status);
-    if (filters.taskType) params.append("task_type", filters.taskType);
-    if (filters.source) params.append("source", filters.source);
-    if (filters.page) params.append("page", String(filters.page));
-    if (filters.pageSize) params.append("page_size", String(filters.pageSize));
-    const query = params.toString();
-    return this.request(`/tasks${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_list_tasks", {
+      query: {
+        project_name: filters.projectName,
+        status: filters.status,
+        task_type: filters.taskType,
+        source: filters.source,
+        page: filters.page,
+        page_size: filters.pageSize,
+      },
+    });
   }
 
   static async listProjectTasks(
     projectName: string,
     filters: Omit<TaskListFilters, "projectName"> = {}
   ): Promise<{ items: TaskItem[]; total: number; page: number; page_size: number }> {
-    const params = new URLSearchParams();
-    if (filters.status) params.append("status", filters.status);
-    if (filters.taskType) params.append("task_type", filters.taskType);
-    if (filters.source) params.append("source", filters.source);
-    if (filters.page) params.append("page", String(filters.page));
-    if (filters.pageSize) params.append("page_size", String(filters.pageSize));
-    const query = params.toString();
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/tasks${query ? "?" + query : ""}`
-    );
+    return callManjuApi("manju_api_list_project_tasks", {
+      pathParams: { project_name: projectName },
+      query: {
+        status: filters.status,
+        task_type: filters.taskType,
+        source: filters.source,
+        page: filters.page,
+        page_size: filters.pageSize,
+      },
+    });
   }
 
   static async getTaskStats(
     projectName: string | null = null
   ): Promise<{ stats: TaskStats }> {
-    const params = new URLSearchParams();
-    if (projectName) params.append("project_name", projectName);
-    const query = params.toString();
-    return this.request(`/tasks/stats${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_get_task_stats", { query: { project_name: projectName } });
   }
 
   // ==================== 任务取消 API ====================
@@ -2235,7 +2371,7 @@ class API {
     task: { task_id: string; task_type: string; resource_id: string; status: string };
     cascaded: { task_id: string; task_type: string; resource_id: string }[];
   }> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}/cancel-preview`);
+    return callManjuApi("manju_api_cancel_preview", { pathParams: { task_id: taskId } });
   }
 
   static async cancelTask(
@@ -2245,40 +2381,32 @@ class API {
     cancelling: string[];
     skipped_terminal: TaskItem[];
   }> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}/cancel`, {
-      method: "POST",
-    });
+    return callManjuApi("manju_api_cancel_task", { pathParams: { task_id: taskId } });
   }
 
   static async cancelAllPreview(
     projectName: string
   ): Promise<{ queued_count: number }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/tasks/cancel-all-preview`
-    );
+    return callManjuApi("manju_api_cancel_all_preview", {
+      pathParams: { project_name: projectName },
+    });
   }
 
   static async cancelAllQueued(
     projectName: string
   ): Promise<{ cancelled_count: number; skipped_running_count: number }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/tasks/cancel-all`,
-      { method: "POST" }
-    );
+    return callManjuApi("manju_api_cancel_all_queued", {
+      pathParams: { project_name: projectName },
+    });
   }
 
-  static openTaskStream(options: TaskStreamOptions = {}): EventSource {
-    const params = new URLSearchParams();
-    if (options.projectName)
-      params.append("project_name", options.projectName);
+  static openTaskStream(options: TaskStreamOptions = {}): ApiEventSource {
     const parsedLastEventId = Number(options.lastEventId);
-    if (Number.isFinite(parsedLastEventId) && parsedLastEventId > 0) {
-      params.append("last_event_id", String(parsedLastEventId));
-    }
-
-    const query = params.toString();
-    const url = `${API_BASE}/tasks/stream${query ? "?" + query : ""}`;
-    const source = new EventSource(url);
+    const lastEventId = Number.isFinite(parsedLastEventId) && parsedLastEventId > 0 ? parsedLastEventId : undefined;
+    const source: ApiEventSource = new PluginApiEventSource(
+      "tasks/stream",
+      { project_name: options.projectName, last_event_id: lastEventId },
+    );
 
     const parsePayload = (event: MessageEvent): unknown => {
       try {
@@ -2318,9 +2446,9 @@ class API {
     return source;
   }
 
-  static openProjectEventStream(options: ProjectEventStreamOptions): EventSource {
-    const url = `${API_BASE}/projects/${encodeURIComponent(options.projectName)}/events/stream`;
-    const source = new EventSource(url);
+  static openProjectEventStream(options: ProjectEventStreamOptions): ApiEventSource {
+    const stream = `projects/${encodeURIComponent(options.projectName)}/events/stream`;
+    const source: ApiEventSource = new PluginApiEventSource(stream);
 
     const parsePayload = (event: MessageEvent): unknown => {
       try {
@@ -2374,14 +2502,14 @@ class API {
     versions: VersionInfo[];
   }> {
     await ensureLocalAssetRoots();
-    const result = await this.request<{
+    const result = await callManjuApi<{
       resource_type: VersionResourceType;
       resource_id: string;
       current_version: number;
       versions: VersionInfo[];
-    }>(
-      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`
-    );
+    }>("manju_api_get_versions", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId },
+    });
     return {
       ...result,
       versions: result.versions.map(normalizeVersionUrls),
@@ -2401,12 +2529,9 @@ class API {
     resourceId: string,
     version: number
   ): Promise<SuccessResponse & { file_path?: string; asset_fingerprints?: Record<string, number> }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/restore/${version}`,
-      {
-        method: "POST",
-      }
-    );
+    return callManjuApi("manju_api_restore_version", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId, version },
+    });
   }
 
   static async getDesignResourceUsage(
@@ -2419,9 +2544,9 @@ class API {
     in_use: boolean;
     usages: DesignResourceUsage[];
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/usage`,
-    );
+    return callManjuApi("manju_api_get_design_resource_usage", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId },
+    });
   }
 
   static async deleteDesignResource(
@@ -2435,10 +2560,9 @@ class API {
     file_delete_errors?: FileDeleteError[];
     asset_fingerprints?: Record<string, number>;
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
-      { method: "DELETE" },
-    );
+    return callManjuApi("manju_api_delete_design_resource", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId },
+    });
   }
 
   static async deleteVersion(
@@ -2453,10 +2577,9 @@ class API {
     file_delete_errors?: FileDeleteError[];
     asset_fingerprints?: Record<string, number>;
   }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/${version}`,
-      { method: "DELETE" },
-    );
+    return callManjuApi("manju_api_delete_version", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId, version },
+    });
   }
 
   static async uploadExternalMediaVersion(
@@ -2473,23 +2596,13 @@ class API {
     file_path?: string;
     asset_fingerprints?: Record<string, number>;
   }> {
-    const url = `${API_BASE}/projects/${encodeURIComponent(projectName)}/versions/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/upload`;
-    const response = await requestWithLocalFiles(
-      url,
-      {
+    return callManjuFileApi("manju_api_upload_external_media_version", {
+      pathParams: { project_name: projectName, resource_type: resourceType, resource_id: resourceId },
+      fields: {
         script_file: options.scriptFile,
       },
-      [{ fieldName: "file", file }],
-    );
-    await throwIfNotOk(response, "上传外部生成结果失败");
-    return (await response.json()) as SuccessResponse & {
-      resource_type: "storyboards" | "videos";
-      resource_id: string;
-      version: number;
-      created_at?: string | null;
-      file_path?: string;
-      asset_fingerprints?: Record<string, number>;
-    };
+      files: [{ fieldName: "file", file }],
+    }, "上传外部生成结果失败");
   }
 
   // ==================== 风格参考图 API ====================
@@ -2512,24 +2625,19 @@ class API {
     url: string;
     style_analysis_error?: string;
   }> {
-    const url = `${API_BASE}/projects/${encodeURIComponent(projectName)}/style-image`;
     const styleDescription = options.styleDescription?.trim();
-    const response = await requestWithLocalFiles(
-      url,
-      styleDescription ? { style_description: styleDescription } : {},
-      [{ fieldName: "file", file }],
-    );
-
-    await throwIfNotOk(response, "上传失败");
-
-    await ensureLocalAssetRoots();
-    const result = await response.json() as {
+    const result = await callManjuFileApi<{
       success: boolean;
       style_image: string;
       style_description: string;
       url: string;
       style_analysis_error?: string;
-    };
+    }>("manju_api_upload_style_image", {
+      pathParams: { project_name: projectName },
+      fields: styleDescription ? { style_description: styleDescription } : {},
+      files: [{ fieldName: "file", file }],
+    }, "上传失败");
+    await ensureLocalAssetRoots();
     return {
       ...result,
       url: resolveLocalMediaUrl(result.url) ?? result.url,
@@ -2539,51 +2647,43 @@ class API {
   static async analyzeStyleImage(
     file: UploadFileInput,
   ): Promise<{ success: boolean; style_description: string }> {
-    const url = `${API_BASE}/style-image/analyze`;
-    const response = await requestWithLocalFiles(
-      url,
-      {},
-      [{ fieldName: "file", file }],
-    );
-    await throwIfNotOk(response, "风格分析失败");
-    return response.json() as Promise<{ success: boolean; style_description: string }>;
+    return callManjuFileApi("manju_api_analyze_style_image", {
+      files: [{ fieldName: "file", file }],
+    }, "风格分析失败");
   }
 
   // ==================== 助手会话 API ====================
 
-  /** Build the project-scoped assistant base path. */
-  private static assistantBase(projectName: string): string {
-    return `/projects/${encodeURIComponent(projectName)}/assistant`;
+  private static assistantStream(projectName: string, sessionId: string): string {
+    return `projects/${encodeURIComponent(projectName)}/assistant/sessions/${encodeURIComponent(sessionId)}/stream`;
   }
 
   static async listAssistantSessions(
     projectName: string,
     status: string | null = null
   ): Promise<{ sessions: SessionMeta[] }> {
-    const params = new URLSearchParams();
-    if (status) params.append("status", status);
-    const query = params.toString();
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions${query ? "?" + query : ""}`
-    );
+    return callManjuApi("manju_api_list_assistant_sessions", {
+      pathParams: { project_name: projectName },
+      query: { status },
+    });
   }
 
   static async getAssistantSession(
     projectName: string,
     sessionId: string
   ): Promise<{ session: SessionMeta }> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}`
-    );
+    return callManjuApi("manju_api_get_assistant_session", {
+      pathParams: { project_name: projectName, session_id: sessionId },
+    });
   }
 
   static async getAssistantSnapshot(
     projectName: string,
     sessionId: string
   ): Promise<AssistantSnapshot> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/snapshot`
-    );
+    return callManjuApi("manju_api_get_assistant_snapshot", {
+      pathParams: { project_name: projectName, session_id: sessionId },
+    });
   }
 
   static async sendAssistantMessage(
@@ -2592,9 +2692,9 @@ class API {
     sessionId?: string | null,
     images?: Array<{ data: string; media_type: string }>
   ): Promise<{ session_id: string; status: string }> {
-    return this.request(`${this.assistantBase(projectName)}/sessions/send`, {
-      method: "POST",
-      body: JSON.stringify({
+    return callManjuApi("manju_api_send_assistant_message", {
+      pathParams: { project_name: projectName },
+      body: jsonBody({
         content,
         session_id: sessionId || undefined,
         images: images || [],
@@ -2606,12 +2706,9 @@ class API {
     projectName: string,
     sessionId: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-      {
-        method: "POST",
-      }
-    );
+    return callManjuApi("manju_api_interrupt_assistant_session", {
+      pathParams: { project_name: projectName, session_id: sessionId },
+    });
   }
 
   static async answerAssistantQuestion(
@@ -2620,37 +2717,31 @@ class API {
     questionId: string,
     answers: Record<string, string>
   ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionId)}/answer`,
-      {
-        method: "POST",
-        body: JSON.stringify({ answers }),
-      }
-    );
+    return callManjuApi("manju_api_answer_assistant_question", {
+      pathParams: { project_name: projectName, session_id: sessionId, question_id: questionId },
+      body: jsonBody({ answers }),
+    });
   }
 
-  static getAssistantStreamUrl(projectName: string, sessionId: string): string {
-    return `${API_BASE}${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/stream`;
+  static openAssistantStream(projectName: string, sessionId: string): ApiEventSource {
+    return new PluginApiEventSource(this.assistantStream(projectName, sessionId));
   }
 
   static async listAssistantSkills(
     projectName: string
   ): Promise<{ skills: SkillInfo[] }> {
-    return this.request(
-      `${this.assistantBase(projectName)}/skills`
-    );
+    return callManjuApi("manju_api_list_assistant_skills", {
+      pathParams: { project_name: projectName },
+    });
   }
 
   static async deleteAssistantSession(
     projectName: string,
     sessionId: string
   ): Promise<SuccessResponse> {
-    return this.request(
-      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}`,
-      {
-        method: "DELETE",
-      }
-    );
+    return callManjuApi("manju_api_delete_assistant_session", {
+      pathParams: { project_name: projectName, session_id: sessionId },
+    });
   }
 
   // ==================== 费用统计 API ====================
@@ -2662,13 +2753,13 @@ class API {
   static async getUsageStats(
     filters: UsageStatsFilters = {}
   ): Promise<Record<string, unknown>> {
-    const params = new URLSearchParams();
-    if (filters.projectName)
-      params.append("project_name", filters.projectName);
-    if (filters.startDate) params.append("start_date", filters.startDate);
-    if (filters.endDate) params.append("end_date", filters.endDate);
-    const query = params.toString();
-    return this.request(`/usage/stats${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_get_usage_stats", {
+      query: {
+        project_name: filters.projectName,
+        start_date: filters.startDate,
+        end_date: filters.endDate,
+      },
+    });
   }
 
   /**
@@ -2678,24 +2769,24 @@ class API {
   static async getUsageCalls(
     filters: UsageCallsFilters = {}
   ): Promise<Record<string, unknown>> {
-    const params = new URLSearchParams();
-    if (filters.projectName)
-      params.append("project_name", filters.projectName);
-    if (filters.callType) params.append("call_type", filters.callType);
-    if (filters.status) params.append("status", filters.status);
-    if (filters.startDate) params.append("start_date", filters.startDate);
-    if (filters.endDate) params.append("end_date", filters.endDate);
-    if (filters.page) params.append("page", String(filters.page));
-    if (filters.pageSize) params.append("page_size", String(filters.pageSize));
-    const query = params.toString();
-    return this.request(`/usage/calls${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_get_usage_calls", {
+      query: {
+        project_name: filters.projectName,
+        call_type: filters.callType,
+        status: filters.status,
+        start_date: filters.startDate,
+        end_date: filters.endDate,
+        page: filters.page,
+        page_size: filters.pageSize,
+      },
+    });
   }
 
   /**
    * 获取有调用记录的项目列表
    */
   static async getUsageProjects(): Promise<{ projects: string[] }> {
-    return this.request("/usage/projects");
+    return callManjuApi("manju_api_get_usage_projects");
   }
 
   static async getProviderRecommendations(
@@ -2706,22 +2797,23 @@ class API {
     project_name?: string | null;
     call_type?: string | null;
   }> {
-    const params = new URLSearchParams();
-    if (filters.projectName) params.append("project_name", filters.projectName);
-    if (filters.callType) params.append("call_type", filters.callType);
-    if (filters.minCalls) params.append("min_calls", String(filters.minCalls));
-    if (filters.limit) params.append("limit", String(filters.limit));
-    const query = params.toString();
-    return this.request(`/usage/provider-recommendations${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_get_provider_recommendations", {
+      query: {
+        project_name: filters.projectName,
+        call_type: filters.callType,
+        min_calls: filters.minCalls,
+        limit: filters.limit,
+      },
+    });
   }
 
   static async upsertQualityRating(
     projectName: string,
     payload: QualityRatingRequest,
   ): Promise<{ rating: Record<string, unknown> }> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-ratings`, {
-      method: "POST",
-      body: JSON.stringify(payload),
+    return callManjuApi("manju_api_upsert_quality_rating", {
+      pathParams: { project_name: projectName },
+      body: jsonBody(payload),
     });
   }
 
@@ -2729,40 +2821,44 @@ class API {
     projectName: string,
     filters: { resourceType?: string; resourceId?: string; version?: number } = {},
   ): Promise<{ ratings: Array<Record<string, unknown>> }> {
-    const params = new URLSearchParams();
-    if (filters.resourceType) params.append("resource_type", filters.resourceType);
-    if (filters.resourceId) params.append("resource_id", filters.resourceId);
-    if (filters.version != null) params.append("version", String(filters.version));
-    const query = params.toString();
-    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-ratings${query ? "?" + query : ""}`);
+    return callManjuApi("manju_api_get_quality_ratings", {
+      pathParams: { project_name: projectName },
+      query: {
+        resource_type: filters.resourceType,
+        resource_id: filters.resourceId,
+        version: filters.version,
+      },
+    });
   }
 
   static async getQualityStats(projectName: string): Promise<QualityStatsResponse> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/quality-stats`);
+    return callManjuApi("manju_api_get_quality_stats", { pathParams: { project_name: projectName } });
   }
 
   static async getQualityAnalysis(): Promise<QualityAnalysisResponse> {
-    return this.request("/quality-analysis");
+    return callManjuApi("manju_api_get_quality_analysis");
   }
 
   static async getFinalizationReport(
     projectName: string,
     limit = 100,
   ): Promise<FinalizationTaskReportResponse> {
-    const params = new URLSearchParams({ limit: String(limit) });
-    return this.request(`/projects/${encodeURIComponent(projectName)}/finalize/report?${params}`);
+    return callManjuApi("manju_api_get_finalization_report", {
+      pathParams: { project_name: projectName },
+      query: { limit },
+    });
   }
 
   // ==================== Provider 管理 API ====================
 
   /** 获取所有 provider 列表及状态。 */
   static async getProviders(): Promise<{ providers: ProviderInfo[] }> {
-    return this.request("/providers");
+    return callManjuApi("manju_api_get_providers");
   }
 
   /** 获取指定 provider 的配置详情（含字段列表）。 */
   static async getProviderConfig(id: string): Promise<ProviderConfigDetail> {
-    return this.request(`/providers/${encodeURIComponent(id)}/config`);
+    return callManjuApi("manju_api_get_provider_config", { pathParams: { provider_id: id } });
   }
 
   /** 更新指定 provider 的配置字段。 */
@@ -2770,33 +2866,33 @@ class API {
     id: string,
     patch: Record<string, string | null>
   ): Promise<void> {
-    return this.request(`/providers/${encodeURIComponent(id)}/config`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
+    return callManjuApi("manju_api_patch_provider_config", {
+      pathParams: { provider_id: id },
+      body: jsonBody(patch),
     });
   }
 
   /** 测试指定 provider 的连接。 */
   static async testProviderConnection(id: string, credentialId?: number): Promise<ProviderTestResult> {
-    const params = credentialId != null ? `?credential_id=${credentialId}` : "";
-    return this.request(`/providers/${encodeURIComponent(id)}/test${params}`, {
-      method: "POST",
+    return callManjuApi("manju_api_test_provider_connection", {
+      pathParams: { provider_id: id },
+      query: { credential_id: credentialId },
     });
   }
 
   // ==================== Provider 凭证管理 API ====================
 
   static async listCredentials(providerId: string): Promise<{ credentials: ProviderCredential[] }> {
-    return this.request(`/providers/${encodeURIComponent(providerId)}/credentials`);
+    return callManjuApi("manju_api_list_credentials", { pathParams: { provider_id: providerId } });
   }
 
   static async createCredential(
     providerId: string,
     data: { name: string; api_key?: string; base_url?: string },
   ): Promise<ProviderCredential> {
-    return this.request(`/providers/${encodeURIComponent(providerId)}/credentials`, {
-      method: "POST",
-      body: JSON.stringify(data),
+    return callManjuApi("manju_api_create_credential", {
+      pathParams: { provider_id: providerId },
+      body: jsonBody(data),
     });
   }
 
@@ -2805,150 +2901,144 @@ class API {
     credId: number,
     data: { name?: string; api_key?: string; base_url?: string },
   ): Promise<void> {
-    return this.request(
-      `/providers/${encodeURIComponent(providerId)}/credentials/${credId}`,
-      { method: "PATCH", body: JSON.stringify(data) },
-    );
+    return callManjuApi("manju_api_update_credential", {
+      pathParams: { provider_id: providerId, cred_id: credId },
+      body: jsonBody(data),
+    });
   }
 
   static async deleteCredential(providerId: string, credId: number): Promise<void> {
-    return this.request(
-      `/providers/${encodeURIComponent(providerId)}/credentials/${credId}`,
-      { method: "DELETE" },
-    );
+    return callManjuApi("manju_api_delete_credential", {
+      pathParams: { provider_id: providerId, cred_id: credId },
+    });
   }
 
   static async activateCredential(providerId: string, credId: number): Promise<void> {
-    return this.request(
-      `/providers/${encodeURIComponent(providerId)}/credentials/${credId}/activate`,
-      { method: "POST" },
-    );
+    return callManjuApi("manju_api_activate_credential", {
+      pathParams: { provider_id: providerId, cred_id: credId },
+    });
   }
 
   static async uploadVertexCredential(name: string, file: UploadFileInput): Promise<ProviderCredential> {
-    const url = `${API_BASE}/providers/gemini-vertex/credentials/upload?name=${encodeURIComponent(name)}`;
-    const response = await requestWithLocalFiles(
-      url,
-      {},
-      [{ fieldName: "file", file }],
-    );
-    await throwIfNotOk(response, "上传凭证失败");
-    return response.json() as Promise<ProviderCredential>;
+    return callManjuFileApi("manju_api_upload_vertex_credential", {
+      query: { name },
+      files: [{ fieldName: "file", file }],
+    }, "上传凭证失败");
   }
 
   // ==================== Agent 配置 / 凭证 API ====================
 
   static async listAgentPresetProviders(): Promise<PresetProvidersResponse> {
-    return this.request("/agent/preset-providers");
+    return callManjuApi("manju_api_list_agent_preset_providers");
   }
 
   static async listAgentCredentials(): Promise<{ credentials: AgentCredential[] }> {
-    return this.request("/agent/credentials");
+    return callManjuApi("manju_api_list_agent_credentials");
   }
 
   static async createAgentCredential(
     data: CreateAgentCredentialRequest,
   ): Promise<AgentCredential> {
-    return this.request("/agent/credentials", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+    return callManjuApi("manju_api_create_agent_credential", { body: jsonBody(data) });
   }
 
   static async updateAgentCredential(
     id: number,
     data: UpdateAgentCredentialRequest,
   ): Promise<AgentCredential> {
-    return this.request(`/agent/credentials/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
+    return callManjuApi("manju_api_update_agent_credential", {
+      pathParams: { cred_id: id },
+      body: jsonBody(data),
     });
   }
 
   static async deleteAgentCredential(id: number): Promise<void> {
-    return this.request(`/agent/credentials/${id}`, { method: "DELETE" });
+    return callManjuApi("manju_api_delete_agent_credential", { pathParams: { cred_id: id } });
   }
 
   static async activateAgentCredential(id: number): Promise<{ active_id: number }> {
-    return this.request(`/agent/credentials/${id}/activate`, { method: "POST" });
+    return callManjuApi("manju_api_activate_agent_credential", { pathParams: { cred_id: id } });
   }
 
   static async testAgentCredential(id: number): Promise<TestConnectionResponse> {
-    return this.request(`/agent/credentials/${id}/test`, { method: "POST" });
+    return callManjuApi("manju_api_test_agent_credential", { pathParams: { cred_id: id } });
   }
 
   static async testAgentConnectionDraft(
     data: TestConnectionRequest,
   ): Promise<TestConnectionResponse> {
-    return this.request("/agent/test-connection", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+    return callManjuApi("manju_api_test_agent_connection_draft", { body: jsonBody(data) });
   }
 
   // ==================== 自定义供应商 API ====================
 
   static async listCustomProviders(): Promise<{ providers: CustomProviderInfo[] }> {
-    return this.request("/custom-providers");
+    return callManjuApi("manju_api_list_custom_providers");
   }
 
   static async listEndpointCatalog(): Promise<{ endpoints: EndpointDescriptor[] }> {
-    return this.request("/custom-providers/endpoints");
+    return callManjuApi("manju_api_list_endpoint_catalog");
   }
 
   static async createCustomProvider(data: CustomProviderCreateRequest): Promise<CustomProviderInfo> {
-    return this.request("/custom-providers", { method: "POST", body: JSON.stringify(data) });
+    return callManjuApi("manju_api_create_custom_provider", { body: jsonBody(data) });
   }
 
   static async getCustomProvider(id: number): Promise<CustomProviderInfo> {
-    return this.request(`/custom-providers/${id}`);
+    return callManjuApi("manju_api_get_custom_provider", { pathParams: { provider_id: id } });
   }
 
   static async updateCustomProvider(id: number, data: Partial<Omit<CustomProviderCreateRequest, "discovery_format" | "models">>): Promise<void> {
-    return this.request(`/custom-providers/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+    return callManjuApi("manju_api_update_custom_provider", {
+      pathParams: { provider_id: id },
+      body: jsonBody(data),
+    });
   }
 
   static async fullUpdateCustomProvider(id: number, data: { display_name: string; base_url: string; api_key?: string; models: CustomProviderModelInput[] }): Promise<CustomProviderInfo> {
-    return this.request(`/custom-providers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+    return callManjuApi("manju_api_full_update_custom_provider", {
+      pathParams: { provider_id: id },
+      body: jsonBody(data),
+    });
   }
 
   static async deleteCustomProvider(id: number): Promise<void> {
-    return this.request(`/custom-providers/${id}`, { method: "DELETE" });
+    return callManjuApi("manju_api_delete_custom_provider", { pathParams: { provider_id: id } });
   }
 
   static async replaceCustomProviderModels(id: number, models: CustomProviderModelInput[]): Promise<CustomProviderModelInfo[]> {
-    return this.request(`/custom-providers/${id}/models`, { method: "PUT", body: JSON.stringify({ models }) });
+    return callManjuApi("manju_api_replace_custom_provider_models", {
+      pathParams: { provider_id: id },
+      body: jsonBody({ models }),
+    });
   }
 
   static async discoverModels(data: { discovery_format: string; base_url: string; api_key: string }): Promise<{ models: DiscoveredModel[] }> {
-    return this.request("/custom-providers/discover", { method: "POST", body: JSON.stringify(data) });
+    return callManjuApi("manju_api_discover_models", { body: jsonBody(data) });
   }
 
   static async discoverModelsForProvider(id: number): Promise<{ models: DiscoveredModel[] }> {
-    return this.request(`/custom-providers/${id}/discover`, { method: "POST" });
+    return callManjuApi("manju_api_discover_models_for_provider", { pathParams: { provider_id: id } });
   }
 
   static async testCustomConnection(data: { discovery_format: string; base_url: string; api_key: string }): Promise<{ success: boolean; message: string }> {
-    return this.request("/custom-providers/test", { method: "POST", body: JSON.stringify(data) });
+    return callManjuApi("manju_api_test_custom_connection", { body: jsonBody(data) });
   }
 
   static async testCustomConnectionById(id: number): Promise<{ success: boolean; message: string }> {
-    return this.request(`/custom-providers/${id}/test`, { method: "POST" });
+    return callManjuApi("manju_api_test_custom_connection_by_id", { pathParams: { provider_id: id } });
   }
 
   static async getCustomProviderCredentials(id: number): Promise<CustomProviderCredentials> {
-    return this.request(`/custom-providers/${id}/credentials`);
+    return callManjuApi("manju_api_get_custom_provider_credentials", { pathParams: { provider_id: id } });
   }
 
   static async discoverAnthropicModels(
     data: AnthropicDiscoverRequest,
     options: { signal?: AbortSignal } = {},
   ): Promise<AnthropicDiscoverResponse> {
-    return this.request("/custom-providers/discover-anthropic", {
-      method: "POST",
-      body: JSON.stringify(data),
-      signal: options.signal,
-    });
+    assertNotAborted(options.signal);
+    return callManjuApi("manju_api_discover_anthropic_models", { body: jsonBody(data) });
   }
 
   // ==================== 用量统计（按 provider 分组）API ====================
@@ -2960,12 +3050,14 @@ class API {
   static async getUsageStatsGrouped(
     params: { provider?: string; start?: string; end?: string } = {}
   ): Promise<UsageStatsResponse> {
-    const searchParams = new URLSearchParams();
-    searchParams.append("group_by", "provider");
-    if (params.provider) searchParams.append("provider", params.provider);
-    if (params.start) searchParams.append("start_date", params.start);
-    if (params.end) searchParams.append("end_date", params.end);
-    return this.request(`/usage/stats?${searchParams.toString()}`);
+    return callManjuApi("manju_api_get_usage_stats_grouped", {
+      query: {
+        group_by: "provider",
+        provider: params.provider,
+        start_date: params.start,
+        end_date: params.end,
+      },
+    });
   }
 
   // ==================== 费用估算 API ====================
@@ -2975,7 +3067,7 @@ class API {
    * @param projectName - 项目名称
    */
   static async getCostEstimate(projectName: string): Promise<CostEstimateResponse> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/cost-estimate`);
+    return callManjuApi("manju_api_get_cost_estimate", { pathParams: { project_name: projectName } });
   }
 
   // ==================== Grid 图生视频 API ====================
@@ -2993,13 +3085,10 @@ class API {
     scriptFile: string,
     sceneIds?: string[]
   ): Promise<{ success: boolean; grid_ids: string[]; task_ids: string[]; message: string }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/generate/grid/${episode}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ script_file: scriptFile, scene_ids: sceneIds, quality: "final" }),
-      }
-    );
+    return callManjuApi("manju_api_generate_grid", {
+      pathParams: { project_name: projectName, episode },
+      body: jsonBody({ script_file: scriptFile, scene_ids: sceneIds, quality: "final" }),
+    });
   }
 
   /**
@@ -3007,7 +3096,7 @@ class API {
    * @param projectName - 项目名称
    */
   static async listGrids(projectName: string): Promise<GridGeneration[]> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/grids`);
+    return callManjuApi("manju_api_list_grids", { pathParams: { project_name: projectName } });
   }
 
   /**
@@ -3016,7 +3105,9 @@ class API {
    * @param gridId - Grid ID
    */
   static async getGrid(projectName: string, gridId: string): Promise<GridGeneration> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/grids/${encodeURIComponent(gridId)}`);
+    return callManjuApi("manju_api_get_grid", {
+      pathParams: { project_name: projectName, grid_id: gridId },
+    });
   }
 
   /**
@@ -3028,30 +3119,32 @@ class API {
     projectName: string,
     gridId: string
   ): Promise<{ success: boolean; task_id: string }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/grids/${encodeURIComponent(gridId)}/regenerate`,
-      { method: "POST" }
-    );
+    return callManjuApi("manju_api_regenerate_grid", {
+      pathParams: { project_name: projectName, grid_id: gridId },
+    });
   }
 
   // ==================== Global Asset Library ====================
 
   static async listAssets(
     params: { type?: AssetType; q?: string; limit?: number; offset?: number } = {},
-    options: RequestInit = {},
+    options: { signal?: AbortSignal } = {},
   ) {
+    assertNotAborted(options.signal);
     await ensureLocalAssetRoots();
-    const usp = new URLSearchParams();
-    if (params.type) usp.set("type", params.type);
-    if (params.q) usp.set("q", params.q);
-    if (params.limit) usp.set("limit", String(params.limit));
-    if (params.offset) usp.set("offset", String(params.offset));
-    return this.request<{ items: Asset[]; total?: number }>(`/assets?${usp.toString()}`, options);
+    return callManjuApi<{ items: Asset[]; total?: number }>("manju_api_list_assets", {
+      query: {
+        type: params.type,
+        q: params.q,
+        limit: params.limit,
+        offset: params.offset,
+      },
+    });
   }
 
   static async getAsset(id: string) {
     await ensureLocalAssetRoots();
-    return this.request<{ asset: Asset }>(`/assets/${encodeURIComponent(id)}`);
+    return callManjuApi<{ asset: Asset }>("manju_api_get_asset", { pathParams: { asset_id: id } });
   }
 
   static async createAsset(payload: AssetCreatePayload & { image?: UploadFileInput }) {
@@ -3061,48 +3154,30 @@ class API {
       description: payload.description ?? "",
       voice_style: payload.voice_style ?? "",
     };
-    const url = `${API_BASE}/assets`;
-    const response = await requestWithLocalFiles(
-      url,
+    return callManjuFileApi<{ asset: Asset }>("manju_api_create_asset", {
       fields,
-      payload.image
+      files: payload.image
         ? [{ fieldName: "image", file: payload.image }]
         : [],
-    );
-    if (!response.ok) {
-      const error = (await response.json().catch(() => ({ detail: response.statusText }))) as {
-        detail?: string;
-      };
-      throw new Error(typeof error.detail === "string" ? error.detail : "请求失败");
-    }
-    return response.json() as Promise<{ asset: Asset }>;
+    });
   }
 
   static async updateAsset(id: string, patch: AssetUpdatePayload) {
-    return this.request<{ asset: Asset }>(`/assets/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
+    return callManjuApi<{ asset: Asset }>("manju_api_update_asset", {
+      pathParams: { asset_id: id },
+      body: jsonBody(patch),
     });
   }
 
   static async replaceAssetImage(id: string, image: UploadFileInput) {
-    const url = `${API_BASE}/assets/${encodeURIComponent(id)}/image`;
-    const response = await requestWithLocalFiles(
-      url,
-      {},
-      [{ fieldName: "image", file: image }],
-    );
-    if (!response.ok) {
-      const error = (await response.json().catch(() => ({ detail: response.statusText }))) as {
-        detail?: string;
-      };
-      throw new Error(typeof error.detail === "string" ? error.detail : "请求失败");
-    }
-    return response.json() as Promise<{ asset: Asset }>;
+    return callManjuFileApi<{ asset: Asset }>("manju_api_replace_asset_image", {
+      pathParams: { asset_id: id },
+      files: [{ fieldName: "image", file: image }],
+    });
   }
 
   static async deleteAsset(id: string): Promise<void> {
-    return this.request(`/assets/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return callManjuApi("manju_api_delete_asset", { pathParams: { asset_id: id } });
   }
 
   static async addAssetFromProject(payload: {
@@ -3112,10 +3187,7 @@ class API {
     override_name?: string;
     overwrite?: boolean;
   }) {
-    return this.request<{ asset: Asset }>(`/assets/from-project`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    return callManjuApi<{ asset: Asset }>("manju_api_add_asset_from_project", { body: jsonBody(payload) });
   }
 
   static async applyAssetsToProject(payload: {
@@ -3123,14 +3195,11 @@ class API {
     target_project: string;
     conflict_policy: "skip" | "overwrite" | "rename";
   }) {
-    return this.request<{
+    return callManjuApi<{
       succeeded: Array<{ id: string; name: string }>;
       skipped: Array<{ id: string; name: string }>;
       failed: Array<{ id: string; reason: string }>;
-    }>(`/assets/apply-to-project`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    }>("manju_api_apply_assets_to_project", { body: jsonBody(payload) });
   }
 
   static getGlobalAssetUrl(path: string | null, fp?: string | null): string | null {
@@ -3141,10 +3210,8 @@ class API {
 
     const parts = path.split("/");
     if (parts.length < 3 || parts[0] !== "_global_assets") return null;
-    const type = parts[1];
-    const filename = parts.slice(2).join("/");
-    const qs = fp ? `?fp=${encodeURIComponent(fp)}` : "";
-    return `${API_BASE}/global-assets/${type}/${filename}${qs}`;
+    if (!parts[1] || !parts.slice(2).join("/")) return null;
+    return appendCacheParam(path, "fp", fp);
   }
 
   // ==================== Reference-to-Video API ====================
@@ -3154,9 +3221,9 @@ class API {
     projectName: string,
     episode: number,
   ): Promise<{ units: ReferenceVideoUnit[] }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units`,
-    );
+    return callManjuApi("manju_api_list_reference_video_units", {
+      pathParams: { project_name: projectName, episode },
+    });
   }
 
   /** Create a new reference-video unit. */
@@ -3171,10 +3238,10 @@ class API {
       note?: string | null;
     },
   ): Promise<{ unit: ReferenceVideoUnit }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units`,
-      { method: "POST", body: JSON.stringify(payload) },
-    );
+    return callManjuApi("manju_api_add_reference_video_unit", {
+      pathParams: { project_name: projectName, episode },
+      body: jsonBody(payload),
+    });
   }
 
   /** Patch prompt/references/duration/transition/note on an existing unit. */
@@ -3190,10 +3257,10 @@ class API {
       note?: string | null;
     },
   ): Promise<{ unit: ReferenceVideoUnit }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}`,
-      { method: "PATCH", body: JSON.stringify(patch) },
-    );
+    return callManjuApi("manju_api_patch_reference_video_unit", {
+      pathParams: { project_name: projectName, episode, unit_id: unitId },
+      body: jsonBody(patch),
+    });
   }
 
   /** Delete a unit. Returns void on 204. */
@@ -3202,10 +3269,9 @@ class API {
     episode: number,
     unitId: string,
   ): Promise<void> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}`,
-      { method: "DELETE" },
-    );
+    return callManjuApi("manju_api_delete_reference_video_unit", {
+      pathParams: { project_name: projectName, episode, unit_id: unitId },
+    });
   }
 
   /** Reorder units by providing the full ordered unit_id list. */
@@ -3214,10 +3280,10 @@ class API {
     episode: number,
     unitIds: string[],
   ): Promise<{ units: ReferenceVideoUnit[] }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/reorder`,
-      { method: "POST", body: JSON.stringify({ unit_ids: unitIds }) },
-    );
+    return callManjuApi("manju_api_reorder_reference_video_units", {
+      pathParams: { project_name: projectName, episode },
+      body: jsonBody({ unit_ids: unitIds }),
+    });
   }
 
   /** Enqueue generation; returns 202 with task_id. */
@@ -3227,11 +3293,12 @@ class API {
     unitId: string,
     options: GenerationRequestOptions = {},
   ): Promise<{ task_id: string; deduped: boolean }> {
-    return this.request(
-      `/projects/${encodeURIComponent(projectName)}/reference-videos/episodes/${episode}/units/${encodeURIComponent(unitId)}/generate`,
-      { method: "POST", body: JSON.stringify(compactGenerationOptions(options)) },
-    );
+    return callManjuApi("manju_api_generate_reference_video_unit", {
+      pathParams: { project_name: projectName, episode, unit_id: unitId },
+      body: jsonBody(compactGenerationOptions(options)),
+    });
   }
 }
 
 export { API };
+

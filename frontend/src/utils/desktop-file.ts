@@ -112,7 +112,7 @@ export async function readDesktopFileAsDataUrl(
   maxBytes?: number,
 ): Promise<{ dataUrl: string; mimeType: string; size: number }> {
   const result = await PluginSDK.callBackend<ReadLocalFileResponse>(
-    "arcreel_read_local_file",
+    "manju_api_read_local_file",
     {
       path: file.path,
       filename: file.name,

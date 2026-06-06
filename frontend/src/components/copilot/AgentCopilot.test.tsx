@@ -130,7 +130,10 @@ describe("AgentCopilot", () => {
     const inputShell = textarea.parentElement;
     expect(inputShell).not.toBeNull();
 
-    fireEvent.mouseDown(inputShell!);
+    const focusLayer = inputShell!.querySelector("[data-testid='assistant-input-shell-focus']");
+    expect(focusLayer).not.toBeNull();
+
+    fireEvent.mouseDown(focusLayer!);
 
     expect(textarea).toHaveFocus();
   });

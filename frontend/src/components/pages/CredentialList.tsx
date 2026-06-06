@@ -96,7 +96,7 @@ const CredentialRow = memo(function CredentialRow({ cred, providerId, isVertex, 
     } finally {
       setSaving(false);
     }
-  }, [draft, cred, providerId, onChanged]);
+  }, [draft, cred, providerId, onChanged, supportsBaseUrl]);
 
   const editPrefix = `cred-edit-${cred.id}`;
 

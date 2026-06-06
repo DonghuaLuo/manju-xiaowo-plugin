@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { API } from "@/api";
+import { API, type ApiEventSource } from "@/api";
 import { useAssistantStore } from "@/stores/assistant-store";
 import type { AssistantSnapshot, PendingQuestion, SessionMeta } from "@/types";
 import { useAssistantSession } from "./useAssistantSession";
@@ -8,18 +8,33 @@ import { useAssistantSession } from "./useAssistantSession";
 class MockEventSource {
   static instances: MockEventSource[] = [];
 
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSED = 2;
+  withCredentials = false;
+  readyState = this.OPEN;
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
-  close = vi.fn();
   private readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
 
   constructor(public readonly url: string) {
     MockEventSource.instances.push(this);
   }
 
+  close = vi.fn(() => {
+    this.readyState = this.CLOSED;
+  });
+
   addEventListener(type: string, cb: (event: MessageEvent) => void): void {
     const current = this.listeners.get(type) ?? [];
     current.push(cb);
     this.listeners.set(type, current);
+  }
+
+  removeEventListener(type: string, cb: (event: MessageEvent) => void): void {
+    const current = this.listeners.get(type) ?? [];
+    this.listeners.set(type, current.filter((listener) => listener !== cb));
   }
 
   emit(type: string, data: unknown): void {
@@ -85,7 +100,10 @@ describe("useAssistantSession", () => {
     useAssistantStore.setState(useAssistantStore.getInitialState(), true);
     MockEventSource.instances = [];
     vi.restoreAllMocks();
-    vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+    vi.spyOn(API, "openAssistantStream").mockImplementation(
+      (projectName, sessionId) =>
+        new MockEventSource(`/projects/${projectName}/assistant/sessions/${sessionId}/stream`) as ApiEventSource,
+    );
     vi.spyOn(API, "listAssistantSkills").mockResolvedValue({ skills: [] });
   });
 

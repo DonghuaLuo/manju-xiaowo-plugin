@@ -3,8 +3,8 @@
 
 The frontend keeps ArcReel's typed API surface, but requests arrive through
 ``PluginSDK.callBackend`` instead of HTTP. This module validates the desktop
-IPC protocol, prepares ArcReel runtime state, and delegates resource requests
-to a local desktop dispatcher instead of an ASGI app or web server.
+IPC protocol, prepares ArcReel runtime state, and delegates explicit commands
+to local endpoint invokers instead of an ASGI app or web server.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ _worker_process: subprocess.Popen | None = None
 _worker_log_handle: Any | None = None
 _worker_atexit_registered = False
 _project_event_snapshots: dict[str, tuple[dict[str, Any], str]] = {}
-_recent_webui_mutations: dict[str, float] = {}
+_recent_desktop_mutations: dict[str, float] = {}
 _project_event_service: Any | None = None
 _project_event_journal_offset: int | None = None
 _project_event_pending_batches: dict[str, list[dict[str, Any]]] = {}
@@ -75,29 +75,6 @@ def _log_exception() -> None:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _content_payload(content: bytes, content_type: str) -> dict[str, Any]:
-    if not content:
-        return {"content": {"kind": "empty"}}
-    if content_type.startswith("application/json") or content_type.startswith("text/"):
-        try:
-            text = content.decode("utf-8")
-            if content_type.startswith("application/json"):
-                try:
-                    return {"content": {"kind": "json", "value": json.loads(text)}}
-                except json.JSONDecodeError:
-                    pass
-            return {"content": {"kind": "text", "text": text, "mimeType": content_type or "text/plain;charset=UTF-8"}}
-        except UnicodeDecodeError:
-            pass
-    return {
-        "content": {
-            "kind": "binary",
-            "base64": base64.b64encode(content).decode("ascii"),
-            "mimeType": content_type or "application/octet-stream",
-        }
-    }
 
 
 async def _ensure_runtime() -> None:
@@ -215,14 +192,7 @@ def _ensure_project_change_journal_listener() -> None:
     setattr(_ensure_project_change_journal_listener, "_registered", True)
 
 
-def _project_name_from_resource(resource: str) -> str | None:
-    parts = str(resource or "").strip("/").split("/")
-    if len(parts) >= 2 and parts[0] == "projects":
-        return unquote(parts[1])
-    return None
-
-
-def _is_disabled_web_resource(resource: str) -> bool:
+def _is_disabled_media_resource(resource: str) -> bool:
     parts = str(resource or "").strip("/").split("/")
     is_project_download = False
     if len(parts) >= 3 and parts[0] == "projects":
@@ -240,31 +210,27 @@ def _is_disabled_web_resource(resource: str) -> bool:
     )
 
 
-def _remember_webui_mutation(operation: str, resource: str, result: dict[str, Any]) -> None:
-    if result.get("success") is False or operation not in {"create", "replace", "update", "delete"}:
+def _remember_desktop_mutation(project_name: str | None, result: dict[str, Any], *, mutates: bool) -> None:
+    if result.get("success") is False or not mutates or not project_name:
         return
-    project_name = _project_name_from_resource(resource)
-    if project_name:
-        _recent_webui_mutations[project_name] = time.monotonic() + 3.0
+    _recent_desktop_mutations[project_name] = time.monotonic() + 3.0
 
 
-def _maybe_start_worker_for_result(operation: str, resource: str, result: dict[str, Any]) -> None:
-    if result.get("success") is False or operation != "create":
-        return
-    value = (result.get("content") or {}).get("value") if isinstance(result.get("content"), dict) else None
-    has_task_id = isinstance(value, dict) and ("task_id" in value or "task_ids" in value)
-    if "/generate/" in f"/{resource.strip('/')}/" or has_task_id:
+def _remember_ipc_command_mutation(command: str, params: dict[str, Any], result: dict[str, Any]) -> None:
+    from utils.manju_ipc_dispatcher import is_mutating_ipc_command, project_name_from_ipc_payload
+
+    _remember_desktop_mutation(
+        project_name_from_ipc_payload(params),
+        result,
+        mutates=is_mutating_ipc_command(command),
+    )
+
+
+def _maybe_start_worker_for_ipc_result(command: str, result: dict[str, Any]) -> None:
+    from utils.manju_ipc_dispatcher import should_start_worker_for_ipc_result
+
+    if should_start_worker_for_ipc_result(command, result):
         _ensure_worker_process()
-
-
-def _operation_to_method(operation: str) -> str:
-    return {
-        "read": "GET",
-        "create": "POST",
-        "replace": "PUT",
-        "update": "PATCH",
-        "delete": "DELETE",
-    }.get(operation, "GET")
 
 
 def _query_from_params(params: dict[str, Any]) -> dict[str, list[str]]:
@@ -277,13 +243,13 @@ def _query_from_params(params: dict[str, Any]) -> dict[str, list[str]]:
     return query
 
 
-def _desktop_resource_name(params: dict[str, Any]) -> str:
+def _desktop_media_resource_name(params: dict[str, Any]) -> str:
     raw_resource = str(params.get("resource") or "root").strip()
     if "://" in raw_resource or raw_resource.startswith(("/", "\\")) or ".." in raw_resource.split("/"):
         raise ValueError(f"Invalid desktop resource: {raw_resource}")
     resource = "root" if raw_resource == "root" else raw_resource.strip("/")
-    if _is_disabled_web_resource(resource):
-        raise ValueError("ArcReel Web auth/download endpoints are disabled in the Xiaowo plugin")
+    if _is_disabled_media_resource(resource):
+        raise ValueError("ArcReel auth/download media resources are disabled in the Xiaowo plugin")
     return resource
 
 
@@ -303,41 +269,6 @@ def _error_code_from_status(status_code: int) -> str:
     return "backend_error"
 
 
-def _detail_from_content(content: bytes, content_type: str, fallback: str) -> str:
-    if content_type.startswith("application/json"):
-        try:
-            data = json.loads(content.decode("utf-8"))
-            detail = data.get("detail") if isinstance(data, dict) else None
-            if isinstance(detail, str):
-                return detail
-            if isinstance(detail, list):
-                messages = [
-                    str(item.get("msg") if isinstance(item, dict) else item)
-                    for item in detail
-                    if item
-                ]
-                if messages:
-                    return "; ".join(messages)
-        except Exception:
-            return fallback
-    return fallback
-
-
-def _desktop_result_from_response(response: Any) -> dict[str, Any]:
-    content_type = response.headers.get("content-type", "")
-    content = _content_payload(response.content, content_type)
-    if 200 <= response.status_code < 300:
-        return {"success": True, **content}
-    return {
-        "success": False,
-        "error": {
-            "code": _error_code_from_status(response.status_code),
-            "message": _detail_from_content(response.content, content_type, response.reason_phrase or "请求失败"),
-        },
-        **content,
-    }
-
-
 def _desktop_error_result(exc: Exception) -> dict[str, Any]:
     return {
         "success": False,
@@ -354,45 +285,20 @@ def _desktop_validation_error_result(exc: Exception) -> dict[str, Any]:
     }
 
 
-async def _dispatch_desktop_resource_request(params: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch_ipc_command_request(command: str, params: dict[str, Any]) -> dict[str, Any]:
     await _ensure_runtime()
 
-    operation = str(params.get("operation") or "read")
-    resource = _desktop_resource_name(params)
-    from utils.arcreel_desktop_routes import dispatch_desktop_resource
+    from utils.manju_ipc_dispatcher import dispatch_ipc_command
 
-    result = await dispatch_desktop_resource(params)
-    _remember_webui_mutation(operation, resource, result)
-    _maybe_start_worker_for_result(operation, resource, result)
+    result = await dispatch_ipc_command(command, params)
+    _remember_ipc_command_mutation(command, params, result)
+    _maybe_start_worker_for_ipc_result(command, result)
     return result
 
 
-async def _dispatch_desktop_file_request(params: dict[str, Any]) -> dict[str, Any]:
-    await _ensure_runtime()
-
-    operation = str(params.get("operation") or "create")
-    resource = _desktop_resource_name(params)
-    from utils.arcreel_desktop_routes import dispatch_desktop_file_resource
-
-    result = await dispatch_desktop_file_resource(params)
-    _remember_webui_mutation(operation, resource, result)
-    _maybe_start_worker_for_result(operation, resource, result)
-    return result
-
-
-async def dispatch_desktop_resource_request(params: dict[str, Any]) -> dict[str, Any]:
+async def dispatch_ipc_command_request(command: str, params: dict[str, Any]) -> dict[str, Any]:
     try:
-        return await _dispatch_desktop_resource_request(params)
-    except ValueError as exc:
-        return _desktop_validation_error_result(exc)
-    except Exception as exc:  # noqa: BLE001
-        _log_exception()
-        return _desktop_error_result(exc)
-
-
-async def dispatch_desktop_file_request(params: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return await _dispatch_desktop_file_request(params)
+        return await _dispatch_ipc_command_request(command, params)
     except ValueError as exc:
         return _desktop_validation_error_result(exc)
     except Exception as exc:  # noqa: BLE001
@@ -459,7 +365,7 @@ def _safe_child_path(root: Path, *parts: str) -> Path:
 
 def resolve_media_path(params: dict[str, Any]) -> dict[str, Any]:
     try:
-        resource = _desktop_resource_name(params)
+        resource = _desktop_media_resource_name(params)
         parts = resource.split("/")
         from lib.app_data_dir import app_data_dir
 
@@ -531,7 +437,7 @@ def _emit_export_task_event(task_id: str, payload: dict[str, Any]) -> None:
     try:
         from utils.xiaowo_sdk import sdk
 
-        sdk.send_event("arcreel_export_task", event)
+        sdk.send_event("manju_export_task", event)
     except Exception:
         _log_exception()
 
@@ -1327,7 +1233,7 @@ async def _poll_project_events(stream: str, project_name: str) -> list[dict[str,
     if not changes:
         return []
 
-    mutation_deadline = _recent_webui_mutations.get(project_name, 0.0)
+    mutation_deadline = _recent_desktop_mutations.get(project_name, 0.0)
     source = "webui" if mutation_deadline >= time.monotonic() else "filesystem"
     return [
         {

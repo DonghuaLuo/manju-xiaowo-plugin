@@ -61,7 +61,7 @@ describe("CharacterCard", () => {
 
     expect(screen.getByAltText(/Hero.*参考图/)).toHaveAttribute(
       "src",
-      "/api/v1/files/demo/characters/refs/Hero.png",
+      "characters/refs/Hero.png",
     );
   });
 

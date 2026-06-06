@@ -1,7 +1,7 @@
 import { startTransition, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
-import { API } from "@/api";
+import { API, type ApiEventSource } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useCostStore } from "@/stores/cost-store";
@@ -134,7 +134,7 @@ export function useProjectEventsSSE(projectName?: string | null): void {
     (s) => s.setAssistantToolActivitySuppressed
   );
 
-  const sourceRef = useRef<EventSource | null>(null);
+  const sourceRef = useRef<ApiEventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFingerprintRef = useRef<string | null>(null);
   const refreshingRef = useRef(false);

@@ -35,8 +35,6 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 // ---------------------------------------------------------------------------
 
 const MAX_TEXTAREA_HEIGHT_VH = 50;
-const INPUT_SHELL_INTERACTIVE_SELECTOR =
-  "button,a,input,textarea,select,[role='button'],[role='option'],[role='menuitem'],[tabindex]:not([tabindex='-1'])";
 
 // ---------------------------------------------------------------------------
 // SessionSelector — 会话下拉选择器
@@ -444,16 +442,8 @@ export function AgentCopilot() {
     textareaRef.current?.focus();
   }, [localInput]);
 
-  const handleInputShellMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleInputShellMouseDown = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     if (inputDisabled) return;
-    const target = e.target;
-    if (
-      target instanceof HTMLElement
-      && target !== e.currentTarget
-      && target.closest(INPUT_SHELL_INTERACTIVE_SELECTOR)
-    ) {
-      return;
-    }
     e.preventDefault();
     textareaRef.current?.focus();
   }, [inputDisabled]);
@@ -688,8 +678,16 @@ export function AgentCopilot() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onMouseDown={handleInputShellMouseDown}
         >
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden="true"
+            data-testid="assistant-input-shell-focus"
+            onMouseDown={handleInputShellMouseDown}
+            className="absolute inset-0 z-0 cursor-text rounded-lg border-0 bg-transparent p-0"
+            disabled={inputDisabled}
+          />
           {showSlashMenu && (
             <SlashCommandMenu
               ref={slashMenuRef}
@@ -719,7 +717,7 @@ export function AgentCopilot() {
               // eslint-disable-next-line react-hooks/refs -- aria-activedescendant 需实时读取 slashMenuRef 的派生值，改用回调 prop 需修改 SlashCommandMenu 接口，超出范围
               slashMenuRef.current?.activeDescendantId
             }
-            className="block w-full resize-none overflow-hidden bg-transparent pb-1 text-[13px] outline-none"
+            className="relative z-10 block w-full resize-none overflow-hidden bg-transparent pb-1 text-[13px] outline-none"
             style={{
               maxHeight: `${MAX_TEXTAREA_HEIGHT_VH}vh`,
               color: "var(--color-text)",
@@ -727,7 +725,7 @@ export function AgentCopilot() {
             disabled={inputDisabled}
           />
 
-          <div className="absolute bottom-2 right-2 flex items-center gap-1">
+          <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1">
             {/* Attachment button */}
             <button
               type="button"

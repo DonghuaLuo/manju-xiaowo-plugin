@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Download, Loader2, Save, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -388,6 +388,7 @@ export function ScriptSplittingTemplatesSection() {
   const [generationMode, setGenerationMode] = useState<GenerationMode>("storyboard");
   const [templateId, setTemplateId] = useState("");
   const [creationMode, setCreationMode] = useState<TemplateCreationMode>("improve");
+  const creationModeRef = useRef(creationMode);
   const [derivationNote, setDerivationNote] = useState("");
   const [draft, setDraft] = useState<DraftState>(() => draftFromTemplate(undefined));
   const [aiTemplateText, setAiTemplateText] = useState("");
@@ -477,6 +478,10 @@ export function ScriptSplittingTemplatesSection() {
     : defaultScriptSplittingTemplateId(mode, nextTemplates, genMode)
   );
 
+  useEffect(() => {
+    creationModeRef.current = creationMode;
+  }, [creationMode]);
+
   const selectTemplate = (nextId: string, nextTemplates = templates) => {
     const nextTemplate = nextTemplates.find((tpl) => tpl.id === nextId);
     setTemplateId(nextId);
@@ -515,7 +520,7 @@ export function ScriptSplittingTemplatesSection() {
         setTemplates(res.templates);
         setTemplateId(nextId);
         const nextTemplate = res.templates.find((tpl) => tpl.id === nextId);
-        setDraft(draftFromTemplate(nextTemplate, creationMode));
+        setDraft(draftFromTemplate(nextTemplate, creationModeRef.current));
         setAiTemplateText("");
         setError(null);
       })

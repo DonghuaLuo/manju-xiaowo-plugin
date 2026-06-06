@@ -220,7 +220,7 @@ export interface ProjectData {
 }
 
 /**
- * Summary shape returned by GET /api/v1/projects (list endpoint).
+ * Summary shape returned by the project list IPC endpoint.
  *
  * Note: `status` may be an empty object `{}` when the project
  * has no project.json or encounters an error during loading.

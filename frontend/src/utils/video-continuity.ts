@@ -29,7 +29,8 @@ const EFFECTIVE_POLICIES = new Set<VideoContinuityEffectivePolicy>([
 ]);
 
 export function normalizeVideoContinuityPolicy(value: unknown): VideoContinuityPolicy {
-  const policy = String(value ?? "auto").trim().toLowerCase() as VideoContinuityPolicy;
+  const raw = typeof value === "string" ? value : "auto";
+  const policy = raw.trim().toLowerCase() as VideoContinuityPolicy;
   return POLICIES.has(policy) ? policy : "auto";
 }
 
@@ -58,7 +59,7 @@ function sceneChanged(current: Segment, next: Segment): boolean {
 function autoSkipReason(current: Segment, next: Segment): string | undefined {
   const transition = String(current.transition_to_next ?? "cut").trim().toLowerCase();
   if (transition === "fade" || transition === "dissolve") return `transition_${transition}`;
-  if (Boolean(next.segment_break)) return "next_segment_break";
+  if (next.segment_break) return "next_segment_break";
   if (sceneChanged(current, next)) return "scene_changed";
   return undefined;
 }

@@ -77,19 +77,20 @@ function deriveStyleValue(
 ): StylePickerValue {
   const styleImage = project.style_image as string | undefined;
   const templateId = (project.style_template_id as string | undefined) ?? null;
+  const existingStyle = typeof project.style === "string" ? project.style : "";
   if (styleImage) {
+    const styleDescription = typeof project.style_description === "string" ? project.style_description : "";
     return {
       mode: "custom",
       templateId: null,
       activeCategory: "live",
       uploadedFile: null,
       uploadedPreview: API.getFileUrl(projectName, styleImage),
-      stylePrompt: (project.style_description as string | undefined) ?? "",
+      stylePrompt: styleDescription.trim() ? styleDescription : existingStyle,
     };
   }
   const effectiveId = templateId ?? DEFAULT_TEMPLATE_ID;
   const tpl = templates.find((x) => x.id === effectiveId);
-  const existingStyle = typeof project.style === "string" ? project.style : "";
   return {
     mode: "template",
     templateId: effectiveId,
@@ -870,102 +871,111 @@ export function ProjectSettingsPage() {
   useEffect(() => {
     if (!options) return;
 
-    setGenerationProfiles((prev) => {
-      const base = normalizeGenerationProfiles(prev, defaultGenerationProfiles);
-      let changed = false;
-      const next: GenerationProfiles = { ...base };
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
 
-      for (const key of IMAGE_PROFILE_KEYS) {
-        const current = base[key]?.resolution;
-        if (!current) continue;
-        const coerced = coerceResolutionForOptions(current, imageResolutionOptions, current);
-        if (coerced !== current) {
-          next[key] = { ...base[key], resolution: coerced };
-          changed = true;
+      setGenerationProfiles((prev) => {
+        const base = normalizeGenerationProfiles(prev, defaultGenerationProfiles);
+        let changed = false;
+        const next: GenerationProfiles = { ...base };
+
+        for (const key of IMAGE_PROFILE_KEYS) {
+          const current = base[key]?.resolution;
+          if (!current) continue;
+          const coerced = coerceResolutionForOptions(current, imageResolutionOptions, current);
+          if (coerced !== current) {
+            next[key] = { ...base[key], resolution: coerced };
+            changed = true;
+          }
         }
-      }
 
-      for (const key of VIDEO_PROFILE_KEYS) {
-        const current = base[key]?.resolution;
-        if (!current) continue;
-        const coerced = coerceResolutionForOptions(current, videoResolutionOptions, current);
-        if (coerced !== current) {
-          next[key] = { ...base[key], resolution: coerced };
-          changed = true;
+        for (const key of VIDEO_PROFILE_KEYS) {
+          const current = base[key]?.resolution;
+          if (!current) continue;
+          const coerced = coerceResolutionForOptions(current, videoResolutionOptions, current);
+          if (coerced !== current) {
+            next[key] = { ...base[key], resolution: coerced };
+            changed = true;
+          }
         }
-      }
 
-      return changed ? next : prev;
-    });
+        return changed ? next : prev;
+      });
 
-    setShotTierProfiles((prev) => {
-      const base = normalizeShotTierProfiles(prev, defaultShotTierProfiles);
-      let changed = false;
-      const next: Record<ShotTier, ShotTierProfile> = { ...base };
+      setShotTierProfiles((prev) => {
+        const base = normalizeShotTierProfiles(prev, defaultShotTierProfiles);
+        let changed = false;
+        const next: Record<ShotTier, ShotTierProfile> = { ...base };
 
-      const updateTierProfile = (
-        tier: ShotTier,
-        profileKey: "storyboard_final" | "video_final",
-        patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
-      ) => {
-        const tierProfile = next[tier];
-        next[tier] = {
-          ...tierProfile,
-          profiles: {
-            ...(tierProfile.profiles ?? {}),
-            [profileKey]: {
-              ...((tierProfile.profiles?.[profileKey] ?? {}) as ImageGenerationProfile | VideoGenerationProfile),
-              ...patch,
+        const updateTierProfile = (
+          tier: ShotTier,
+          profileKey: "storyboard_final" | "video_final",
+          patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
+        ) => {
+          const tierProfile = next[tier];
+          next[tier] = {
+            ...tierProfile,
+            profiles: {
+              ...(tierProfile.profiles ?? {}),
+              [profileKey]: {
+                ...(tierProfile.profiles?.[profileKey] ?? {}),
+                ...patch,
+              },
             },
-          },
+          };
         };
-      };
 
-      for (const tier of SHOT_TIERS) {
-        const tierProfile = base[tier];
-        const storyboardProfile = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
-        const storyboardResolution = storyboardProfile.resolution;
-        if (storyboardResolution) {
-          const coerced = coerceResolutionForOptions(
-            storyboardResolution,
-            imageResolutionOptions,
-            storyboardResolution,
-          );
-          if (coerced !== storyboardResolution) {
-            updateTierProfile(tier, "storyboard_final", { resolution: coerced });
+        for (const tier of SHOT_TIERS) {
+          const tierProfile = base[tier];
+          const storyboardProfile = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
+          const storyboardResolution = storyboardProfile.resolution;
+          if (storyboardResolution) {
+            const coerced = coerceResolutionForOptions(
+              storyboardResolution,
+              imageResolutionOptions,
+              storyboardResolution,
+            );
+            if (coerced !== storyboardResolution) {
+              updateTierProfile(tier, "storyboard_final", { resolution: coerced });
+              changed = true;
+            }
+          }
+
+          const videoProfile = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
+          const videoResolutionOverride = videoProfile.resolution;
+          const tierVideoBackend = videoProfile.video_backend || effectiveVideoBackendForContinuity;
+          if (videoResolutionOverride) {
+            const tierVideoOptions = getProfileResolutionOptions(
+              tierVideoBackend,
+              VIDEO_PROFILE_RESOLUTIONS,
+            );
+            const coerced = coerceResolutionForOptions(
+              videoResolutionOverride,
+              tierVideoOptions,
+              videoResolutionOverride,
+            );
+            if (coerced !== videoResolutionOverride) {
+              updateTierProfile(tier, "video_final", { resolution: coerced });
+              changed = true;
+            }
+          }
+
+          const videoServiceTier = normalizeServiceTier(videoProfile.service_tier);
+          const supportedServiceTiers = getVideoServiceTiers(tierVideoBackend);
+          if (!serviceTierSupported(videoServiceTier, supportedServiceTiers)) {
+            updateTierProfile(tier, "video_final", { service_tier: "default" });
             changed = true;
           }
         }
 
-        const videoProfile = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
-        const videoResolutionOverride = videoProfile.resolution;
-        const tierVideoBackend = videoProfile.video_backend || effectiveVideoBackendForContinuity;
-        if (videoResolutionOverride) {
-          const tierVideoOptions = getProfileResolutionOptions(
-            tierVideoBackend,
-            VIDEO_PROFILE_RESOLUTIONS,
-          );
-          const coerced = coerceResolutionForOptions(
-            videoResolutionOverride,
-            tierVideoOptions,
-            videoResolutionOverride,
-          );
-          if (coerced !== videoResolutionOverride) {
-            updateTierProfile(tier, "video_final", { resolution: coerced });
-            changed = true;
-          }
-        }
-
-        const videoServiceTier = normalizeServiceTier(videoProfile.service_tier);
-        const supportedServiceTiers = getVideoServiceTiers(tierVideoBackend);
-        if (!serviceTierSupported(videoServiceTier, supportedServiceTiers)) {
-          updateTierProfile(tier, "video_final", { service_tier: "default" });
-          changed = true;
-        }
-      }
-
-      return changed ? next : prev;
+        return changed ? next : prev;
+      });
     });
+
+    return () => {
+      active = false;
+    };
   }, [
     defaultGenerationProfiles,
     defaultShotTierProfiles,

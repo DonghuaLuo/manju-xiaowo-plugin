@@ -86,8 +86,8 @@ export function StudioCanvasRouter() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [globalVideoBackend, setGlobalVideoBackend] = useState("");
-  const [resolvedVideoCapabilities, setResolvedVideoCapabilities] =
-    useState<VideoCapabilitiesResponse | null>(null);
+  const [resolvedVideoCapabilitiesState, setResolvedVideoCapabilitiesState] =
+    useState<{ projectName: string; capabilities: VideoCapabilitiesResponse | null } | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -113,25 +113,27 @@ export function StudioCanvasRouter() {
 
   useEffect(() => {
     if (!currentProjectName) {
-      setResolvedVideoCapabilities(null);
       return;
     }
-    setResolvedVideoCapabilities(null);
     let disposed = false;
     API.getVideoCapabilities(currentProjectName)
       .then((caps) => {
         if (disposed) return;
-        setResolvedVideoCapabilities(caps);
+        setResolvedVideoCapabilitiesState({ projectName: currentProjectName, capabilities: caps });
       })
       .catch(() => {
         if (disposed) return;
-        setResolvedVideoCapabilities(null);
+        setResolvedVideoCapabilitiesState({ projectName: currentProjectName, capabilities: null });
       });
     return () => {
       disposed = true;
     };
   }, [currentProjectName]);
 
+  const resolvedVideoCapabilities =
+    resolvedVideoCapabilitiesState?.projectName === currentProjectName
+      ? resolvedVideoCapabilitiesState.capabilities
+      : null;
   const durationOptions = localDurationOptions ?? resolvedVideoCapabilities?.supported_durations;
   const effectiveVideoBackend = currentProjectData?.video_backend || globalVideoBackend || "";
   const videoContinuitySupport = useMemo<VideoContinuitySupport | null>(() => {

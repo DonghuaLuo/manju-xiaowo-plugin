@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Desktop resource dispatcher for ArcReel business endpoints.
+"""Desktop endpoint invocation helpers for ArcReel business endpoints.
 
-The Xiaowo plugin frontend sends desktop-shaped IPC requests:
-``operation + resource + query + body``.  This module maps that contract to
-ArcReel's existing endpoint functions without creating a web server,
-without importing the ASGI app, and without sending worker stdout to Xiaowo IPC.
+The Xiaowo plugin backend invokes ArcReel's existing endpoint functions without
+creating a web server, without importing the ASGI app, and without sending
+worker stdout to Xiaowo IPC.
 """
 
 from __future__ import annotations
@@ -19,20 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace, UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
-from urllib.parse import unquote
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 
 @dataclass(frozen=True)
-class _DesktopRoute:
-    method: str
-    path: str
-    regex: Any
-    converters: dict[str, Any]
+class _DesktopEndpoint:
     endpoint: Any
-    status_code: int | None
 
 
 class _DesktopGenerationWorkerProxy:
@@ -76,42 +69,6 @@ class _DesktopUploadFile:
                 pass
 
 
-_ROUTES: list[_DesktopRoute] | None = None
-_ROUTE_MODULES: tuple[tuple[str, str], ...] = (
-    ("server.routers.projects", ""),
-    ("server.routers.characters", ""),
-    ("server.routers.scenes", ""),
-    ("server.routers.props", ""),
-    ("server.routers.files", ""),
-    ("server.routers.generate", ""),
-    ("server.routers.versions", ""),
-    ("server.routers.usage", ""),
-    ("server.routers.assistant", "/projects/{project_name}/assistant"),
-    ("server.routers.tasks", ""),
-    ("server.routers.providers", ""),
-    ("server.routers.system_config", ""),
-    ("server.routers.system", ""),
-    ("server.routers.agent_chat", ""),
-    ("server.routers.agent_config", ""),
-    ("server.routers.custom_providers", ""),
-    ("server.routers.cost_estimation", ""),
-    ("server.routers.grids", ""),
-    ("server.routers.reference_videos", ""),
-    ("server.routers.quality", ""),
-    ("server.routers.assets", ""),
-)
-
-
-def _operation_to_method(operation: str) -> str:
-    return {
-        "read": "GET",
-        "create": "POST",
-        "replace": "PUT",
-        "update": "PATCH",
-        "delete": "DELETE",
-    }.get(operation, "GET")
-
-
 def _locale_from_params(params: dict[str, Any]) -> str:
     raw = str(params.get("locale") or "zh").split(",")[0].split("-")[0].strip().lower()
     return raw if raw in {"zh", "en", "vi"} else "zh"
@@ -141,85 +98,6 @@ def _query_from_params(params: dict[str, Any]) -> dict[str, list[str]]:
         elif value is not None:
             query[str(key)] = [str(value)]
     return query
-
-
-def _resource_path(resource: str) -> str:
-    raw = str(resource or "root").strip()
-    if "://" in raw or raw.startswith(("/", "\\")) or ".." in raw.split("/"):
-        raise ValueError(f"Invalid desktop resource: {raw}")
-    stripped = "" if raw == "root" else raw.strip("/")
-    return "/" if not stripped else "/" + "/".join(unquote(part) for part in stripped.split("/"))
-
-
-def _compile_path(path: str):
-    from starlette.routing import compile_path
-
-    regex, _format, converters = compile_path(path)
-    return regex, converters
-
-
-def _is_disabled_desktop_route_path(path: str) -> bool:
-    if path.startswith("/auth") or path.startswith("/api-keys"):
-        return True
-    if path in {
-        "/projects/{name}/export",
-        "/projects/{name}/export/token",
-        "/projects/{name}/export/jianying-draft",
-        "/system/logs/download",
-    }:
-        return True
-    return False
-
-
-def _load_routes() -> list[_DesktopRoute]:
-    global _ROUTES
-    if _ROUTES is not None:
-        return _ROUTES
-
-    import importlib
-
-    routes: list[_DesktopRoute] = []
-    for module_name, prefix in _ROUTE_MODULES:
-        module = importlib.import_module(module_name)
-        router = getattr(module, "router")
-        for route in getattr(router, "routes", []):
-            methods = getattr(route, "methods", None)
-            endpoint = getattr(route, "endpoint", None)
-            raw_path = getattr(route, "path", "")
-            if not methods or endpoint is None or not raw_path:
-                continue
-            path = f"{prefix}{raw_path}" if prefix else raw_path
-            if _is_disabled_desktop_route_path(path):
-                continue
-            regex, converters = _compile_path(path)
-            for method in sorted(methods):
-                routes.append(
-                    _DesktopRoute(
-                        method=method.upper(),
-                        path=path,
-                        regex=regex,
-                        converters=converters,
-                        endpoint=endpoint,
-                        status_code=getattr(route, "status_code", None),
-                    )
-                )
-    _ROUTES = routes
-    return routes
-
-
-def _match_route(method: str, path: str) -> tuple[_DesktopRoute, dict[str, Any]]:
-    for route in _load_routes():
-        if route.method != method:
-            continue
-        match = route.regex.match(path)
-        if not match:
-            continue
-        params = {}
-        for key, value in match.groupdict().items():
-            converter = route.converters.get(key)
-            params[key] = converter.convert(value) if converter is not None else value
-        return route, params
-    raise ValueError(f"Unsupported desktop resource: {method} {path.lstrip('/') or 'root'}")
 
 
 def _body_value(raw: dict[str, Any] | None) -> tuple[Any, str | None]:
@@ -344,7 +222,7 @@ async def _open_upload_files(params: dict[str, Any]) -> tuple[list[_DesktopUploa
 
 
 async def _invoke_route(
-    route: _DesktopRoute,
+    route: _DesktopEndpoint,
     *,
     path_params: dict[str, Any],
     query: dict[str, list[str]],
@@ -547,47 +425,37 @@ def _error_result(exc: Exception) -> dict[str, Any]:
     }
 
 
-async def dispatch_desktop_resource(params: dict[str, Any]) -> dict[str, Any]:
+async def invoke_desktop_endpoint_result(
+    endpoint: Any,
+    *,
+    params: dict[str, Any],
+    path_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Invoke a known endpoint function from an explicit IPC command payload."""
     locale = _locale_from_params(params)
-    method = _operation_to_method(str(params.get("operation") or "read"))
-    path = _resource_path(str(params.get("resource") or "root"))
     query = _query_from_params(params)
-    body, _content_type = _body_value(params.get("body"))
+    opened: list[_DesktopUploadFile] = []
+    files_by_field: dict[str, list[_DesktopUploadFile]] = {}
 
     try:
-        route, path_params = _match_route(method, path)
+        if "fields" in params or "files" in params:
+            fields = {
+                str(key): value
+                for key, value in (params.get("fields") or {}).items()
+            }
+            opened, files_by_field = await _open_upload_files(params)
+            body = fields
+        else:
+            fields = None
+            body, _content_type = _body_value(params.get("body"))
+
+        route = _DesktopEndpoint(endpoint=endpoint)
         return _success_result(
             await _invoke_route(
                 route,
                 path_params=path_params,
                 query=query,
                 body=body,
-                locale=locale,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _error_result(exc)
-
-
-async def dispatch_desktop_file_resource(params: dict[str, Any]) -> dict[str, Any]:
-    locale = _locale_from_params(params)
-    method = _operation_to_method(str(params.get("operation") or "create"))
-    path = _resource_path(str(params.get("resource") or "root"))
-    query = _query_from_params(params)
-    fields = {
-        str(key): value
-        for key, value in (params.get("fields") or {}).items()
-    }
-
-    opened, files_by_field = await _open_upload_files(params)
-    try:
-        route, path_params = _match_route(method, path)
-        return _success_result(
-            await _invoke_route(
-                route,
-                path_params=path_params,
-                query=query,
-                body=fields,
                 locale=locale,
                 fields=fields,
                 files_by_field=files_by_field,

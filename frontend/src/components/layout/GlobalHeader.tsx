@@ -237,9 +237,9 @@ export function GlobalHeader({ onNavigateBack }: GlobalHeaderProps) {
   }, [handleExportTask]);
 
   useEffect(() => {
-    PluginSDK.onBackendEvent<ExportTaskEvent>("arcreel_export_task", handleExportTask);
+    PluginSDK.onBackendEvent<ExportTaskEvent>("manju_export_task", handleExportTask);
     return () => {
-      PluginSDK.offBackendEvent("arcreel_export_task", handleExportTask);
+      PluginSDK.offBackendEvent("manju_export_task", handleExportTask);
     };
   }, [handleExportTask]);
 
