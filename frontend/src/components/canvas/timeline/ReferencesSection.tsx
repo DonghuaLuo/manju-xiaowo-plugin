@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { Edit3, MapPin, Plus, Puzzle, User } from "lucide-react";
+import { Edit3, MapPin, Plus, Puzzle, Trash2, User } from "lucide-react";
 import { API } from "@/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Popover } from "@/components/ui/Popover";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
 import {
@@ -17,6 +18,7 @@ import { colorForName } from "@/utils/color";
 import { WARM_TONE } from "@/utils/severity-tone";
 
 type CharField = "characters_in_segment" | "characters_in_scene";
+type DeleteTarget = { kind: AssetKind; name: string };
 
 interface ReferencesSectionProps {
   projectName: string;
@@ -110,6 +112,8 @@ export function ReferencesSection({
   }, [project, characterNames, sceneNames, propNames, characters, scenes, props]);
 
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const handleSave = async (changes: SegmentRefsChanges) => {
     const patch: Record<string, string[]> = {};
@@ -148,6 +152,54 @@ export function ReferencesSection({
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    if (!scriptFile) {
+      const message = t("segment_refs_missing_script_file_for_update", {
+        defaultValue: "缺少剧本文件，无法更新引用，请刷新项目后重试。",
+      });
+      pushToast(message, "warning");
+      setDeleteTarget(null);
+      return;
+    }
+
+    const patch: Record<string, string[]> = {};
+    const currentNames =
+      deleteTarget.kind === "character"
+        ? characterNames
+        : deleteTarget.kind === "scene"
+          ? sceneNames
+          : propNames;
+    const nextNames = currentNames.filter((name) => name !== deleteTarget.name);
+    if (nextNames.length === currentNames.length) {
+      setDeleteTarget(null);
+      return;
+    }
+
+    if (deleteTarget.kind === "character") {
+      patch[charField] = nextNames;
+    } else if (deleteTarget.kind === "scene") {
+      patch.scenes = nextNames;
+    } else {
+      patch.props = nextNames;
+    }
+
+    setDeleting(true);
+    try {
+      await onSave(patch);
+      setDeleteTarget(null);
+    } catch (err) {
+      pushToast(
+        t("segment_refs_remove_failed", {
+          message: errMsg(err),
+        }),
+        "warning",
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openModal = () => {
     if (disabled) return;
     setOpen(true);
@@ -181,6 +233,29 @@ export function ReferencesSection({
       projectName={projectName}
     />
   ) : null;
+  const confirmDeleteDialog = (
+    <ConfirmDialog
+      open={!!deleteTarget}
+      title={t("segment_refs_remove_confirm_title")}
+      description={
+        deleteTarget ? (
+          <span>
+            {t("segment_refs_remove_confirm_desc", {
+              kind: t(KIND_BADGE_KEY[deleteTarget.kind]),
+              name: deleteTarget.name,
+            })}
+          </span>
+        ) : undefined
+      }
+      confirmLabel={t("segment_refs_remove_confirm")}
+      loadingLabel={t("segment_refs_removing")}
+      cancelLabel={t("segment_refs_cancel")}
+      tone="danger"
+      loading={deleting}
+      onConfirm={handleConfirmDelete}
+      onCancel={() => setDeleteTarget(null)}
+    />
+  );
 
   if (isEmpty) {
     return (
@@ -219,6 +294,7 @@ export function ReferencesSection({
           </span>
         </button>
         {modal}
+        {confirmDeleteDialog}
       </div>
     );
   }
@@ -274,6 +350,9 @@ export function ReferencesSection({
             names={characterNames}
             assets={characters}
             projectName={projectName}
+            disabled={disabled}
+            disabledHint={disabledHint}
+            onRemoveRequest={setDeleteTarget}
           />
         )}
         {sceneNames.length > 0 && (
@@ -284,6 +363,9 @@ export function ReferencesSection({
             names={sceneNames}
             assets={scenes}
             projectName={projectName}
+            disabled={disabled}
+            disabledHint={disabledHint}
+            onRemoveRequest={setDeleteTarget}
           />
         )}
         {propNames.length > 0 && (
@@ -294,11 +376,15 @@ export function ReferencesSection({
             names={propNames}
             assets={props}
             projectName={projectName}
+            disabled={disabled}
+            disabledHint={disabledHint}
+            onRemoveRequest={setDeleteTarget}
           />
         )}
       </div>
 
       {modal}
+      {confirmDeleteDialog}
     </div>
   );
 }
@@ -310,6 +396,9 @@ function ReferenceGroup({
   names,
   assets,
   projectName,
+  disabled,
+  disabledHint,
+  onRemoveRequest,
 }: {
   icon: ReactNode;
   label: string;
@@ -317,6 +406,9 @@ function ReferenceGroup({
   names: string[];
   assets: Record<string, RefAsset>;
   projectName: string;
+  disabled?: boolean;
+  disabledHint?: string;
+  onRemoveRequest: (target: DeleteTarget) => void;
 }) {
   return (
     <div className="flex w-full min-w-0 flex-col gap-1.5">
@@ -343,6 +435,9 @@ function ReferenceGroup({
             name={name}
             asset={assets[name]}
             projectName={projectName}
+            disabled={disabled}
+            disabledHint={disabledHint}
+            onRemoveRequest={onRemoveRequest}
           />
         ))}
       </div>
@@ -355,12 +450,19 @@ function ReferenceRow({
   name,
   asset,
   projectName,
+  disabled,
+  disabledHint,
+  onRemoveRequest,
 }: {
   kind: AssetKind;
   name: string;
   asset: RefAsset | undefined;
   projectName: string;
+  disabled?: boolean;
+  disabledHint?: string;
+  onRemoveRequest: (target: DeleteTarget) => void;
 }) {
+  const { t } = useTranslation("dashboard");
   const sheetPath = sheetPathFor(kind, asset);
   const sheetFp = useProjectsStore((s) =>
     sheetPath ? s.getAssetFingerprint(sheetPath) : null,
@@ -373,59 +475,92 @@ function ReferenceRow({
   const iconClass = "h-4 w-4";
   const Icon = kind === "character" ? User : kind === "scene" ? MapPin : Puzzle;
   const imageShape = assetImageShape(kind);
+  const removeLabel = t("segment_refs_remove_reference_aria", { name });
 
   return (
     <>
-      <button
-        ref={rowRef}
-        type="button"
-        onClick={() => {
-          if (asset) setPopoverOpen(true);
-        }}
-        disabled={!asset}
-        title={name}
-        className="focus-ring flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-default"
+      <div
+        className="group flex min-w-0 items-center gap-1 rounded-md px-2 py-1.5 transition-colors"
         style={{ background: "oklch(0.16 0.010 265 / 0.38)" }}
         onMouseEnter={(e) => {
-          if (!asset) return;
           e.currentTarget.style.background = "oklch(0.21 0.014 265 / 0.52)";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.background = "oklch(0.16 0.010 265 / 0.38)";
         }}
       >
-        {showImage ? (
-          <img
-            src={API.getFileUrl(projectName, sheetPath, sheetFp)}
-            alt={name}
-            className={`h-9 w-9 shrink-0 object-cover ${imageShape}`}
-            onError={() => setErrorKey(currentKey)}
-          />
-        ) : (
-          <span
-            className={`flex h-9 w-9 shrink-0 items-center justify-center text-[12px] font-semibold text-white ${
-              asset ? colorForName(name) : "bg-gray-800"
-            } ${imageShape}`}
-          >
-            {asset ? name.charAt(0) : <Icon className={iconClass} aria-hidden="true" />}
-          </span>
-        )}
-        <span
-          className="min-w-0 flex-1 truncate text-[12px]"
-          style={{ color: asset ? "var(--color-text-2)" : "var(--color-text-4)" }}
+        <button
+          ref={rowRef}
+          type="button"
+          onClick={() => {
+            if (asset) setPopoverOpen(true);
+          }}
+          disabled={!asset}
+          title={name}
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded text-left disabled:cursor-default"
         >
-          {name}
-        </span>
-        {!asset && (
+          {showImage ? (
+            <img
+              src={API.getFileUrl(projectName, sheetPath, sheetFp)}
+              alt={name}
+              className={`h-9 w-9 shrink-0 object-cover ${imageShape}`}
+              onError={() => setErrorKey(currentKey)}
+            />
+          ) : (
+            <span
+              className={`flex h-9 w-9 shrink-0 items-center justify-center text-[12px] font-semibold text-white ${
+                asset ? colorForName(name) : "bg-gray-800"
+              } ${imageShape}`}
+            >
+              {asset ? name.charAt(0) : <Icon className={iconClass} aria-hidden="true" />}
+            </span>
+          )}
           <span
-            className="num shrink-0 text-[10px]"
-            style={{ color: WARM_TONE.color }}
-            aria-label="missing"
+            className="min-w-0 flex-1 truncate text-[12px]"
+            style={{ color: asset ? "var(--color-text-2)" : "var(--color-text-4)" }}
           >
-            ⚠
+            {name}
+          </span>
+          {!asset && (
+            <span
+              className="num shrink-0 text-[10px]"
+              style={{ color: WARM_TONE.color }}
+              aria-label="missing"
+            >
+              ⚠
+            </span>
+          )}
+        </button>
+        {!disabled && (
+          <button
+            type="button"
+            title={removeLabel}
+            aria-label={removeLabel}
+            onClick={() => onRemoveRequest({ kind, name })}
+            className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            style={{
+              color: "var(--color-text-3)",
+              background: "transparent",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--color-accent-2)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--color-text-3)";
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
+        {disabled && disabledHint && (
+          <span
+            className="sr-only"
+            title={disabledHint}
+          >
+            {disabledHint}
           </span>
         )}
-      </button>
+      </div>
       {asset && (
         <ReferenceAssetPopover
           open={popoverOpen}
