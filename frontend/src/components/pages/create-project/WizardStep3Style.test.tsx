@@ -24,6 +24,17 @@ const templates = [
   { id: "anim_ghibli", category: "anim" as const, thumbnailFile: "anim_ghibli.png" },
 ];
 
+const templatesWithFavorite = [
+  ...templates,
+  {
+    id: "favorite_demo",
+    category: "favorite" as const,
+    thumbnailFile: "favorite_demo.png",
+    name: "收藏风格 1",
+    tagline: "项目设置中收藏的风格",
+  },
+];
+
 const noop = () => {};
 const commonProps = { onBack: noop, onCreate: noop, onCancel: noop, creating: false, templates, templatePrompts };
 
@@ -32,6 +43,28 @@ describe("WizardStep3Style", () => {
     render(<WizardStep3Style value={baseValue} onChange={noop} {...commonProps} />);
     // The default template gets a "default" badge
     expect(screen.getAllByText(/（默认）|\(default\)/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not expose favorite style deletion in the creation wizard", () => {
+    const value = {
+      ...baseValue,
+      activeCategory: "favorite" as const,
+      templateId: "favorite_demo",
+      stylePrompt: "收藏风格提示词",
+    };
+
+    render(
+      <WizardStep3Style
+        value={value}
+        onChange={noop}
+        {...commonProps}
+        templates={templatesWithFavorite}
+        templatePrompts={{ ...templatePrompts, favorite_demo: "收藏风格提示词" }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "收藏风格 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /删除收藏风格|Delete favorite style/i })).not.toBeInTheDocument();
   });
 
   it("emits onChange with new templateId when a template card is clicked", () => {
