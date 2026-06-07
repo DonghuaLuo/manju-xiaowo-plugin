@@ -35,6 +35,7 @@ class OpenAITextBackend:
         model: str | None = None,
         base_url: str | None = None,
         provider_name: str = PROVIDER_OPENAI,
+        prefer_native_structured_output: bool = True,
     ):
         # 禁用 SDK 内置重试，由本层 generate() 统一管理重试策略
         self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
@@ -42,6 +43,7 @@ class OpenAITextBackend:
         # 复用 OpenAI 兼容协议的 provider（如 dashscope）须用真实 provider 记账，
         # 否则计费查表会命中 OpenAI 的 USD 费率而非自身定价。
         self._provider_name = provider_name
+        self._prefer_native_structured_output = prefer_native_structured_output
         self._capabilities: set[TextCapability] = {
             TextCapability.TEXT_GENERATION,
             TextCapability.STRUCTURED_OUTPUT,
@@ -72,6 +74,12 @@ class OpenAITextBackend:
         这样无论是原生调用还是降级路径遇到瞬态错误，都统一由外层重试处理。
         """
         messages = _build_messages(request)
+        if request.response_schema and not self._prefer_native_structured_output:
+            logger.info("跳过原生 response_format，直接使用 Instructor/json_object 路径")
+            return await _instructor_fallback(
+                self._client, self._model, request, messages, provider=self._provider_name
+            )
+
         kwargs: dict = {"model": self._model, "messages": messages}
         if request.max_output_tokens is not None:
             kwargs["max_tokens"] = request.max_output_tokens

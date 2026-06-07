@@ -63,7 +63,12 @@ class EndpointSpec:
 
 def _build_openai_chat(provider, model_id: str) -> CustomTextBackend:
     base_url = ensure_openai_base_url(provider.base_url)
-    delegate = OpenAITextBackend(api_key=provider.api_key, base_url=base_url, model=model_id)
+    delegate = OpenAITextBackend(
+        api_key=provider.api_key,
+        base_url=base_url,
+        model=model_id,
+        prefer_native_structured_output=False,
+    )
     return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 
 
