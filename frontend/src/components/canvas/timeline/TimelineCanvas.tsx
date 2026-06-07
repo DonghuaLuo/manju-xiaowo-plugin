@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { PreprocessingView } from "./PreprocessingView";
 import { ShotSplitView } from "./ShotSplitView";
 import { EpisodeHeader } from "./EpisodeHeader";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useCostStore } from "@/stores/cost-store";
 import { useTasksStore } from "@/stores/tasks-store";
 import type {
@@ -20,6 +21,12 @@ import type {
 import type { VideoContinuitySupport } from "@/utils/provider-models";
 
 type Segment = NarrationSegment | DramaScene;
+
+function getSegmentId(seg: Segment, mode: "narration" | "drama"): string {
+  return mode === "narration"
+    ? (seg as NarrationSegment).segment_id
+    : (seg as DramaScene).scene_id;
+}
 
 interface TimelineCanvasProps {
   projectName: string;
@@ -45,9 +52,9 @@ interface TimelineCanvasProps {
     segmentId: string,
     scriptFile?: string,
     quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
   ) => void;
   durationOptions?: number[];
-  videoContinuityPolicy?: VideoContinuityPolicy;
   videoContinuitySupport?: VideoContinuitySupport | null;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
@@ -65,7 +72,6 @@ export function TimelineCanvas({
   onUpdatePrompt,
   onGenerateStoryboard,
   onGenerateVideo,
-  videoContinuityPolicy,
   videoContinuitySupport,
   onRestoreStoryboard,
   onRestoreVideo,
@@ -77,6 +83,11 @@ export function TimelineCanvas({
   const showTabs = Boolean(hasDraft);
   const defaultTab = hasScript ? "timeline" : "preprocessing";
   const [activeTab, setActiveTab] = useState<"preprocessing" | "timeline">(defaultTab);
+  const [batchingStoryboards, setBatchingStoryboards] = useState(false);
+  const [batchingVideos, setBatchingVideos] = useState(false);
+  const [batchConfirmAction, setBatchConfirmAction] = useState<"storyboards" | "videos" | null>(
+    null,
+  );
 
   // Auto-switch to timeline when script becomes available
   useEffect(() => {
@@ -173,8 +184,60 @@ export function TimelineCanvas({
     options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) =>
     onGenerateStoryboard?.(segId, scriptFile, quality, options);
-  const handleGenVid = (segId: string, quality?: GenerationQuality) =>
-    onGenerateVideo?.(segId, scriptFile, quality);
+  const handleGenVid = (
+    segId: string,
+    quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
+  ) =>
+    onGenerateVideo?.(segId, scriptFile, quality, options);
+
+  const handleBatchGenerateStoryboards = async () => {
+    if (!hasScript || batchingStoryboards) return;
+    setBatchingStoryboards(true);
+    try {
+      for (const segment of segments) {
+        const segId = getSegmentId(segment, contentMode);
+        await Promise.resolve(handleGenSb(segId));
+      }
+    } finally {
+      setBatchingStoryboards(false);
+    }
+  };
+
+  const handleBatchGenerateVideos = async () => {
+    if (!hasScript || batchingVideos) return;
+    setBatchingVideos(true);
+    try {
+      for (const segment of segments) {
+        const segId = getSegmentId(segment, contentMode);
+        if (!segment.generated_assets?.storyboard_image) continue;
+        await Promise.resolve(handleGenVid(segId));
+      }
+    } finally {
+      setBatchingVideos(false);
+    }
+  };
+
+  const storyboardBatchCount = segments.length;
+  const videoBatchCount = segments.filter((segment) => segment.generated_assets?.storyboard_image).length;
+
+  const handleConfirmBatchGenerate = async () => {
+    if (batchConfirmAction === "storyboards") {
+      try {
+        await handleBatchGenerateStoryboards();
+      } finally {
+        setBatchConfirmAction(null);
+      }
+      return;
+    }
+    if (batchConfirmAction === "videos") {
+      try {
+        await handleBatchGenerateVideos();
+      } finally {
+        setBatchConfirmAction(null);
+      }
+    }
+  };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -246,19 +309,35 @@ export function TimelineCanvas({
             <button
               type="button"
               className="sv-navbtn inline-flex items-center gap-1.5"
-              disabled
+              disabled={batchingStoryboards || !onGenerateStoryboard}
               title={t("batch_generate_storyboards")}
+              onClick={() => {
+                if (storyboardBatchCount <= 0) return;
+                setBatchConfirmAction("storyboards");
+              }}
             >
-              <Sparkles className="h-3 w-3" />
+              {batchingStoryboards ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
               <span>{t("batch_generate_storyboards")}</span>
             </button>
             <button
               type="button"
               className="sv-navbtn inline-flex items-center gap-1.5"
-              disabled
+              disabled={batchingVideos || !onGenerateVideo}
               title={t("batch_generate_videos")}
+              onClick={() => {
+                if (videoBatchCount <= 0) return;
+                setBatchConfirmAction("videos");
+              }}
             >
-              <Sparkles className="h-3 w-3" />
+              {batchingVideos ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
               <span>{t("batch_generate_videos")}</span>
             </button>
           </div>
@@ -282,7 +361,6 @@ export function TimelineCanvas({
             aspectRatio={aspectRatio}
             projectName={projectName}
             scriptFile={scriptFile}
-            isGridMode={false}
             onUpdatePrompt={handleUpdatePrompt}
             onGenerateStoryboard={handleGenSb}
             onGenerateVideo={handleGenVid}
@@ -291,12 +369,35 @@ export function TimelineCanvas({
             generatingStoryboard={generatingStoryboard}
             generatingVideo={generatingVideo}
             durationOptions={durationOptions}
-            videoContinuityPolicy={videoContinuityPolicy}
             videoContinuitySupport={videoContinuitySupport}
-            shotTierProfiles={projectData.shot_tier_profiles}
           />
         ) : null}
       </div>
+
+      <ConfirmDialog
+        open={batchConfirmAction !== null}
+        title={
+          batchConfirmAction === "storyboards"
+            ? t("batch_generate_storyboards")
+            : t("batch_generate_videos")
+        }
+        description={
+          batchConfirmAction === "storyboards"
+            ? t("batch_generate_storyboards_confirm_desc", { count: storyboardBatchCount })
+            : t("batch_generate_videos_confirm_desc", { count: videoBatchCount })
+        }
+        confirmLabel={t("common:confirm")}
+        loadingLabel={t("submitting")}
+        loading={
+          batchConfirmAction === "storyboards"
+            ? batchingStoryboards
+            : batchConfirmAction === "videos"
+              ? batchingVideos
+              : false
+        }
+        onConfirm={() => void handleConfirmBatchGenerate()}
+        onCancel={() => setBatchConfirmAction(null)}
+      />
     </div>
   );
 }

@@ -387,9 +387,9 @@ export default {
   segments_and_status: "{{count}} segments · {{status}}",
   project_settings: "Project Settings",
   back_to_project: "Back to project",
-  model_config_project_desc: "Choose the project's default models and base specs. Actual generation specs come from the quality strategy; leave empty to follow global defaults.",
-  generation_profiles_section_title: "Generation quality strategy",
-  generation_profiles_section_desc: "Controls the models, resolution, audio, and continuity policy used by each task. The model settings above mainly initialize or fall back for these specs.",
+  model_config_project_desc: "Choose the project's default models and base specs. When a storyboard or video has no override, it falls back to these defaults.",
+  generation_profiles_section_title: "Generation defaults",
+  generation_profiles_section_desc: "Set project-level default resolutions. Individual storyboards and videos can still override model, resolution, and continuity later.",
   generation_profile_asset: "Character / scene / prop masters",
   generation_profile_storyboard_draft: "Fast storyboard",
   generation_profile_storyboard_final: "Refined storyboard",
@@ -898,7 +898,17 @@ export default {
   grid_preview_batch_generate: "Generate grid board",
   grid_preview_empty_episode: "No shots in this episode — split the script in Preprocessing first",
   batch_generate_storyboards: "Batch generate storyboards",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "Batch generate videos",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "Search shots…",
   shots_collapsed_label: "SHOTS · {{count}}",
   shots_section_title: "Shots",

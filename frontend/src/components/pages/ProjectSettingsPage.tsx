@@ -36,16 +36,13 @@ import {
   defaultScriptSplittingTemplateId,
   scriptSplittingTemplateSupportsGenerationMode,
 } from "@/components/shared/ScriptSplittingTemplateSelector";
-import { SelectMenu, type SelectMenuOption } from "@/components/ui/SelectMenu";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { DEFAULT_TEMPLATE_ID, type StyleTemplate } from "@/data/style-templates";
 import type {
   CustomProviderInfo,
   GenerationProfiles,
   ImageGenerationProfile,
   ProviderInfo,
-  ShotTier,
-  ShotTierProfile,
-  VideoContinuityPolicy,
   VideoGenerationProfile,
 } from "@/types";
 import { GenerationModeSelector } from "@/components/shared/GenerationModeSelector";
@@ -53,20 +50,16 @@ import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, GHOST_BTN_LG_CLS, radioCardClass }
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { normalizeMode, type GenerationMode } from "@/utils/generation-mode";
-import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import { getProjectDisplayName } from "@/utils/project-display";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import {
+  compactGenerationProfiles,
   IMAGE_PROFILE_RESOLUTIONS,
-  SHOT_TIERS,
   VIDEO_PROFILE_RESOLUTIONS,
   coerceResolutionForOptions,
   createDefaultGenerationProfiles,
-  createDefaultShotTierProfiles,
   generationProfilesSignature,
   normalizeGenerationProfiles,
-  normalizeShotTierProfiles,
-  shotTierProfilesSignature,
 } from "@/utils/generation-profiles";
 
 function deriveStyleValue(
@@ -189,6 +182,7 @@ const VIDEO_PROFILE_KEYS: VideoProfileKey[] = [
 
 interface InitialProjectSettingsSnapshot {
   videoBackend: string;
+  videoServiceTier: string;
   imageBackendT2I: string;
   imageBackendI2I: string;
   audioOverride: boolean | null;
@@ -197,63 +191,23 @@ interface InitialProjectSettingsSnapshot {
   textStyle: string;
   aspectRatio: string;
   generationMode: string;
-  videoContinuityPolicy: VideoContinuityPolicy;
   defaultDuration: number | null;
   episodeTargetUnits: string;
   sourceLanguage: SourceLanguage;
   videoResolution: string | null;
   imageResolution: string | null;
   generationProfiles: string;
-  shotTierProfiles: string;
 }
 
 const SOURCE_LANGUAGES: SourceLanguage[] = ["zh", "en", "vi"];
 const DEFAULT_EPISODE_TARGET_UNITS = 1000;
 const PROFILE_INPUT_CLS =
   "h-9 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12.5px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
-const SERVICE_TIERS = ["default", "flex"] as const satisfies readonly VideoServiceTier[];
-
 function resolutionSelectOptions(resolutions: readonly string[]) {
   return resolutions.map((resolution) => ({
     value: resolution,
     label: resolution,
   }));
-}
-
-function serviceTierSelectOption(
-  t: (key: string, options?: Record<string, unknown>) => string,
-  tier: VideoServiceTier,
-  supportedTiers?: readonly VideoServiceTier[] | null,
-): SelectMenuOption {
-  const disabled = supportedTiers ? !supportedTiers.includes(tier) : false;
-  const label = t(`service_tier_${tier}`, {
-    defaultValue: tier === "default" ? "Default" : "Flex",
-  });
-  const description = t(`service_tier_${tier}_desc`, {
-    defaultValue:
-      tier === "default"
-        ? "Standard scheduling. Generation quality is unchanged; speed and cost follow the provider default."
-        : "Flexible scheduling. Generation quality is unchanged; speed is lower and cost is reduced.",
-  });
-  const unsupported = t("service_tier_unsupported_desc", {
-    defaultValue: "当前视频模型不支持此档位。",
-  });
-  return {
-    value: tier,
-    label,
-    description: disabled ? `${description} ${unsupported}` : description,
-    hint: disabled
-      ? t("service_tier_unsupported_hint", { defaultValue: "不可选" })
-      : undefined,
-    disabled,
-  };
-}
-
-function serviceTierSelectOptions(
-  t: (key: string, options?: Record<string, unknown>) => string,
-  supportedTiers?: readonly VideoServiceTier[] | null,
-): SelectMenuOption[] {
-  return SERVICE_TIERS.map((tier) => serviceTierSelectOption(t, tier, supportedTiers));
 }
 
 function normalizeServiceTier(value?: string | null): VideoServiceTier {
@@ -410,12 +364,21 @@ export function ProjectSettingsPage() {
   } | null>(null);
   const [globalDefaults, setGlobalDefaults] = useState<{
     video: string;
+    videoServiceTier: string;
     imageT2I: string;
     imageI2I: string;
     textScript: string;
     textOverview: string;
     textStyle: string;
-  }>({ video: "", imageT2I: "", imageI2I: "", textScript: "", textOverview: "", textStyle: "" });
+  }>({
+    video: "",
+    videoServiceTier: "default",
+    imageT2I: "",
+    imageI2I: "",
+    textScript: "",
+    textOverview: "",
+    textStyle: "",
+  });
 
   const allProviderNames = useMemo(
     () => ({ ...PROVIDER_NAMES, ...(options?.provider_names ?? {}) }),
@@ -425,6 +388,7 @@ export function ProjectSettingsPage() {
   // Project-level overrides (from project.json)
   // "" means "follow global default"
   const [videoBackend, setVideoBackend] = useState<string>("");
+  const [videoServiceTier, setVideoServiceTier] = useState<string>("");
   const [imageBackendT2I, setImageBackendT2I] = useState<string>("");
   const [imageBackendI2I, setImageBackendI2I] = useState<string>("");
   const [audioOverride, setAudioOverride] = useState<boolean | null>(null);
@@ -434,7 +398,6 @@ export function ProjectSettingsPage() {
   const [aspectRatio, setAspectRatio] = useState<string>("");
   const [contentMode, setContentMode] = useState<"narration" | "drama">("narration");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("storyboard");
-  const [videoContinuityPolicy, setVideoContinuityPolicy] = useState<VideoContinuityPolicy>("auto");
   const [defaultDuration, setDefaultDuration] = useState<number | null>(null);
   const [episodeTargetUnits, setEpisodeTargetUnits] = useState<string>(String(DEFAULT_EPISODE_TARGET_UNITS));
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("zh");
@@ -443,9 +406,6 @@ export function ProjectSettingsPage() {
   const [modelSettings, setModelSettings] = useState<Record<string, { resolution: string | null }>>({});
   const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(
     () => createDefaultGenerationProfiles(),
-  );
-  const [shotTierProfiles, setShotTierProfiles] = useState<Record<ShotTier, ShotTierProfile>>(
-    () => createDefaultShotTierProfiles(),
   );
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
@@ -505,17 +465,15 @@ export function ProjectSettingsPage() {
   const [deletingFavoriteTemplateId, setDeletingFavoriteTemplateId] = useState<string | null>(null);
   const [favoriteDeleteTargetId, setFavoriteDeleteTargetId] = useState<string | null>(null);
   const initialRef = useRef<InitialProjectSettingsSnapshot>({
-    videoBackend: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null,
+    videoBackend: "", videoServiceTier: "", imageBackendT2I: "", imageBackendI2I: "", audioOverride: null,
     textScript: "", textOverview: "", textStyle: "",
     aspectRatio: "", generationMode: "storyboard",
-    videoContinuityPolicy: "auto",
     defaultDuration: null,
     episodeTargetUnits: String(DEFAULT_EPISODE_TARGET_UNITS),
     sourceLanguage: "zh",
     videoResolution: null,
     imageResolution: null,
     generationProfiles: generationProfilesSignature(),
-    shotTierProfiles: shotTierProfilesSignature(),
   });
   // 风格区独立保存，但"未保存就离开"也需被 isDirty 拦截。
   const initialStyleRef = useRef<StylePickerValue | null>(null);
@@ -557,6 +515,7 @@ export function ProjectSettingsPage() {
       });
       setGlobalDefaults({
         video: configRes.settings?.default_video_backend ?? "",
+        videoServiceTier: configRes.settings?.default_video_service_tier ?? "default",
         imageT2I:
           configRes.settings?.default_image_backend_t2i ??
           configRes.settings?.default_image_backend ??
@@ -575,6 +534,8 @@ export function ProjectSettingsPage() {
 
       const project = projectRes.project as unknown as Record<string, unknown>;
       const vb = (project.video_backend as string | undefined) ?? "";
+      const rawVideoServiceTier =
+        typeof project.video_service_tier === "string" ? project.video_service_tier : "";
       // Read T2I/I2I split fields; lazy-upgrade in project_manager populates both from legacy image_backend
       const ibt2i = (project.image_provider_t2i as string | undefined) ?? "";
       const ibi2i = (project.image_provider_i2i as string | undefined) ?? "";
@@ -607,13 +568,33 @@ export function ProjectSettingsPage() {
               scriptTemplatesRes.templates,
               gm,
             );
-      const vcp = normalizeVideoContinuityPolicy(project.video_continuity_policy);
       const dd = project.default_duration != null ? (project.default_duration as number) : null;
       const targetUnits = normalizeEpisodeTargetUnits(project.episode_target_units);
       const targetUnitsInput = String(targetUnits);
       const lang = normalizeSourceLanguage(project.source_language);
 
+      // model_settings 的 key 以 effective backend（override ‖ global default）读写，
+      // 与 handleSave 保持一致；legacy video_model_settings 作为旧项目兼容回退。
+      const defaultVideo = configRes.settings?.default_video_backend ?? "";
+      const defaultImageT2I =
+        configRes.settings?.default_image_backend_t2i ||
+        configRes.settings?.default_image_backend ||
+        "";
+      const effectiveVb = vb || defaultVideo;
+      const effectiveIb = ibt2i || defaultImageT2I; // T2I treated as canonical for resolution
+      const initialVideoServiceTiers = (() => {
+        const capsBackend = videoCaps ? `${videoCaps.provider_id}/${videoCaps.model}` : "";
+        if (capsBackend === effectiveVb) {
+          return videoServiceTiersFromCapabilities(videoCaps);
+        }
+        return effectiveVb ? lookupVideoServiceTiers(providerList, effectiveVb, customProviderList) : null;
+      })();
       setVideoBackend(vb);
+      setVideoServiceTier(
+        rawVideoServiceTier
+          ? supportedServiceTierValue(rawVideoServiceTier, initialVideoServiceTiers)
+          : "",
+      );
       setImageBackendT2I(ibt2i);
       setImageBackendI2I(ibi2i);
       setAudioOverride(ao);
@@ -625,29 +606,18 @@ export function ProjectSettingsPage() {
       setGenerationMode(gm);
       setScriptSplittingTemplateId(currentScriptSplittingTemplateId);
       setInitialScriptSplittingTemplateId(currentScriptSplittingTemplateId);
-      setVideoContinuityPolicy(vcp);
       setDefaultDuration(dd);
       setEpisodeTargetUnits(targetUnitsInput);
       setSourceLanguage(lang);
       setProjectTitle(typeof project.title === "string" ? project.title : "");
-
-      // model_settings 的 key 以 effective backend（override ‖ global default）读写，
-      // 与 handleSave 保持一致；legacy video_model_settings 作为旧项目兼容回退。
-      const defaultVideo = configRes.settings?.default_video_backend ?? "";
-      const defaultImageT2I =
-        configRes.settings?.default_image_backend_t2i ||
-        configRes.settings?.default_image_backend ||
-        "";
-      const effectiveVb = vb || defaultVideo;
-      const effectiveIb = ibt2i || defaultImageT2I; // T2I treated as canonical for resolution
       const ms = (project.model_settings ?? {}) as Record<string, { resolution: string | null }>;
       const legacyVideo = (project.video_model_settings ?? {}) as Record<string, { resolution?: string | null }>;
       const vModelId = effectiveVb && effectiveVb.includes("/") ? effectiveVb.split("/")[1] : effectiveVb;
-      const vRes: string | null =
+      const rawVideoResolution: string | null =
         (effectiveVb ? (ms[effectiveVb]?.resolution ?? null) : null) ||
         (vModelId ? (legacyVideo[vModelId]?.resolution ?? null) : null) ||
         null;
-      const iRes = effectiveIb ? (ms[effectiveIb]?.resolution ?? null) : null;
+      const rawImageResolution = effectiveIb ? (ms[effectiveIb]?.resolution ?? null) : null;
       const initialImageResolutionOptions = (() => {
         if (!effectiveIb) return [...IMAGE_PROFILE_RESOLUTIONS];
         const res = lookupResolutions(providerList, effectiveIb, customProviderList);
@@ -658,13 +628,17 @@ export function ProjectSettingsPage() {
         const res = lookupResolutions(providerList, effectiveVb, customProviderList);
         return res.options.length > 0 ? res.options : [...VIDEO_PROFILE_RESOLUTIONS];
       })();
+      const iRes = coerceResolutionForOptions(
+        rawImageResolution,
+        initialImageResolutionOptions,
+        "1K",
+      );
+      const vRes = coerceResolutionForOptions(
+        rawVideoResolution,
+        initialVideoResolutionOptions,
+        "720p",
+      );
       const initialDefaultGenerationProfiles = createDefaultGenerationProfiles({
-        imageResolution: iRes,
-        videoResolution: vRes,
-        imageResolutionOptions: initialImageResolutionOptions,
-        videoResolutionOptions: initialVideoResolutionOptions,
-      });
-      const initialDefaultShotTierProfiles = createDefaultShotTierProfiles({
         imageResolution: iRes,
         videoResolution: vRes,
         imageResolutionOptions: initialImageResolutionOptions,
@@ -677,24 +651,26 @@ export function ProjectSettingsPage() {
         project.generation_profiles as GenerationProfiles | undefined,
         initialDefaultGenerationProfiles,
       );
-      setGenerationProfiles(normalizedProfiles);
-      const normalizedShotTiers = normalizeShotTierProfiles(
-        project.shot_tier_profiles as Partial<Record<ShotTier, ShotTierProfile>> | undefined,
-        initialDefaultShotTierProfiles,
+      setGenerationProfiles(
+        compactGenerationProfiles(normalizedProfiles, initialDefaultGenerationProfiles),
       );
-      setShotTierProfiles(normalizedShotTiers);
 
       const derivedStyle = deriveStyleValue(project, projectName, templates, templatePrompts);
       setStyleValue(derivedStyle);
       initialStyleRef.current = derivedStyle;
       initialRef.current = {
-        videoBackend: vb, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i, audioOverride: ao,
+        videoBackend: vb,
+        videoServiceTier: rawVideoServiceTier
+          ? supportedServiceTierValue(rawVideoServiceTier, initialVideoServiceTiers)
+          : "",
+        imageBackendT2I: ibt2i,
+        imageBackendI2I: ibi2i,
+        audioOverride: ao,
         textScript: ts, textOverview: to, textStyle: tst,
-        aspectRatio: ar, generationMode: gm, videoContinuityPolicy: vcp, defaultDuration: dd,
+        aspectRatio: ar, generationMode: gm, defaultDuration: dd,
         episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
         videoResolution: vRes, imageResolution: iRes,
         generationProfiles: generationProfilesSignature(normalizedProfiles),
-        shotTierProfiles: shotTierProfilesSignature(normalizedShotTiers),
       };
     }));
 
@@ -762,70 +738,43 @@ export function ProjectSettingsPage() {
       }),
     [imageResolution, imageResolutionOptions, videoResolution, videoResolutionOptions],
   );
-  const defaultShotTierProfiles = useMemo(
-    () =>
-      createDefaultShotTierProfiles({
-        imageResolution,
-        videoResolution,
-        imageResolutionOptions,
-        videoResolutionOptions,
-      }),
-    [imageResolution, imageResolutionOptions, videoResolution, videoResolutionOptions],
-  );
   const normalizedGenerationProfiles = useMemo(
     () => normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles),
     [defaultGenerationProfiles, generationProfiles],
   );
-  const normalizedShotTierProfiles = useMemo(
-    () => normalizeShotTierProfiles(shotTierProfiles, defaultShotTierProfiles),
-    [defaultShotTierProfiles, shotTierProfiles],
-  );
   const normalizedGenerationProfilesSignature = generationProfilesSignature(normalizedGenerationProfiles);
-  const normalizedShotTierProfilesSignature = shotTierProfilesSignature(normalizedShotTierProfiles);
+  const supportedVideoServiceTiers = useMemo(
+    () => getVideoServiceTiers(effectiveVideoBackendForContinuity),
+    [effectiveVideoBackendForContinuity, getVideoServiceTiers],
+  );
   const scriptSplittingTemplateDirty =
     Boolean(scriptSplittingTemplateId)
     && scriptSplittingTemplateId !== initialScriptSplittingTemplateId;
-  const videoProfileRows: Array<[VideoProfileKey, string]> = [
-    ["video_draft", t("generation_profile_video_draft")],
-    ["video_final", t("generation_profile_video_final")],
-    ...(generationMode === "reference_video"
-      ? ([
-          ["reference_video_draft", t("generation_profile_reference_video_draft")],
-          ["reference_video_final", t("generation_profile_reference_video_final")],
-        ] as Array<[VideoProfileKey, string]>)
-      : []),
-  ];
   const routePreviewRequest = useMemo<GenerationRoutePreviewRequest>(() => {
     const routes: GenerationRoutePreviewRequest["routes"] = [
       { label: t("generation_profile_asset"), task_kind: "character", quality: "final", capability: "t2i" },
-      { label: t("generation_profile_storyboard_draft"), task_kind: "storyboard", quality: "draft", capability: "t2i" },
-      { label: t("generation_profile_storyboard_final"), task_kind: "storyboard", quality: "final", capability: "i2i" },
-      { label: `${t("generation_profile_grid")} T2I`, task_kind: "grid", quality: "final", capability: "t2i" },
-      { label: `${t("generation_profile_grid")} I2I`, task_kind: "grid", quality: "final", capability: "i2i" },
-      { label: t("generation_profile_video_draft"), task_kind: "video", quality: "draft" },
-      { label: t("generation_profile_video_final"), task_kind: "video", quality: "final" },
-      ...SHOT_TIERS.map((tier) => ({
-        label: `${tier} ${t("generation_profile_video_final")}`,
-        task_kind: "video" as const,
-        quality: "final" as const,
-        payload: { shot_tier: tier },
-      })),
+      { label: t("storyboard_defaults_label", { defaultValue: "分镜图" }), task_kind: "storyboard", quality: "draft", capability: "t2i" },
+      { label: t("video_defaults_label", { defaultValue: "分镜视频" }), task_kind: "video", quality: "draft" },
     ];
+    if (generationMode === "grid") {
+      routes.push(
+        { label: `${t("generation_profile_grid")} T2I`, task_kind: "grid", quality: "final", capability: "t2i" },
+        { label: `${t("generation_profile_grid")} I2I`, task_kind: "grid", quality: "final", capability: "i2i" },
+      );
+    }
     if (generationMode === "reference_video") {
       routes.push(
-        { label: t("generation_profile_reference_video_draft"), task_kind: "reference_video", quality: "draft" },
-        { label: t("generation_profile_reference_video_final"), task_kind: "reference_video", quality: "final" },
+        { label: t("reference_video_defaults_label", { defaultValue: "参考视频" }), task_kind: "reference_video", quality: "draft" },
       );
     }
     return {
       project_overrides: {
         generation_profiles: normalizedGenerationProfiles,
-        shot_tier_profiles: normalizedShotTierProfiles,
         video_backend: videoBackend || null,
+        video_service_tier: videoServiceTier || null,
         image_provider_t2i: imageBackendT2I || null,
         image_provider_i2i: imageBackendI2I || null,
         video_generate_audio: audioOverride,
-        video_continuity_policy: videoContinuityPolicy,
         default_duration: defaultDuration,
         model_settings: modelSettings,
       },
@@ -839,14 +788,14 @@ export function ProjectSettingsPage() {
     imageBackendT2I,
     modelSettings,
     normalizedGenerationProfiles,
-    normalizedShotTierProfiles,
     t,
     videoBackend,
-    videoContinuityPolicy,
+    videoServiceTier,
   ]);
 
   const isDirty =
     videoBackend !== initialRef.current.videoBackend ||
+    videoServiceTier !== initialRef.current.videoServiceTier ||
     imageBackendT2I !== initialRef.current.imageBackendT2I ||
     imageBackendI2I !== initialRef.current.imageBackendI2I ||
     audioOverride !== initialRef.current.audioOverride ||
@@ -854,14 +803,12 @@ export function ProjectSettingsPage() {
     textOverview !== initialRef.current.textOverview ||
     textStyle !== initialRef.current.textStyle ||
     aspectRatio !== initialRef.current.aspectRatio ||
-    videoContinuityPolicy !== initialRef.current.videoContinuityPolicy ||
     defaultDuration !== initialRef.current.defaultDuration ||
     episodeTargetUnits !== initialRef.current.episodeTargetUnits ||
     sourceLanguage !== initialRef.current.sourceLanguage ||
     videoResolution !== initialRef.current.videoResolution ||
     imageResolution !== initialRef.current.imageResolution ||
     normalizedGenerationProfilesSignature !== initialRef.current.generationProfiles ||
-    normalizedShotTierProfilesSignature !== initialRef.current.shotTierProfiles ||
     scriptSplittingTemplateDirty ||
     styleIsDirty;
   /* eslint-enable react-hooks/refs */
@@ -874,6 +821,29 @@ export function ProjectSettingsPage() {
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
+
+      const nextImageResolution = coerceResolutionForOptions(
+        imageResolution,
+        imageResolutionOptions,
+        "1K",
+      );
+      const nextVideoResolution = coerceResolutionForOptions(
+        videoResolution,
+        videoResolutionOptions,
+        "720p",
+      );
+      if (nextImageResolution !== imageResolution) {
+        setImageResolution(nextImageResolution);
+      }
+      if (nextVideoResolution !== videoResolution) {
+        setVideoResolution(nextVideoResolution);
+      }
+      if (
+        videoServiceTier
+        && !serviceTierSupported(normalizeServiceTier(videoServiceTier), supportedVideoServiceTiers)
+      ) {
+        setVideoServiceTier("default");
+      }
 
       setGenerationProfiles((prev) => {
         const base = normalizeGenerationProfiles(prev, defaultGenerationProfiles);
@@ -900,77 +870,9 @@ export function ProjectSettingsPage() {
           }
         }
 
-        return changed ? next : prev;
+        return changed ? compactGenerationProfiles(next, defaultGenerationProfiles) : prev;
       });
 
-      setShotTierProfiles((prev) => {
-        const base = normalizeShotTierProfiles(prev, defaultShotTierProfiles);
-        let changed = false;
-        const next: Record<ShotTier, ShotTierProfile> = { ...base };
-
-        const updateTierProfile = (
-          tier: ShotTier,
-          profileKey: "storyboard_final" | "video_final",
-          patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
-        ) => {
-          const tierProfile = next[tier];
-          next[tier] = {
-            ...tierProfile,
-            profiles: {
-              ...(tierProfile.profiles ?? {}),
-              [profileKey]: {
-                ...(tierProfile.profiles?.[profileKey] ?? {}),
-                ...patch,
-              },
-            },
-          };
-        };
-
-        for (const tier of SHOT_TIERS) {
-          const tierProfile = base[tier];
-          const storyboardProfile = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
-          const storyboardResolution = storyboardProfile.resolution;
-          if (storyboardResolution) {
-            const coerced = coerceResolutionForOptions(
-              storyboardResolution,
-              imageResolutionOptions,
-              storyboardResolution,
-            );
-            if (coerced !== storyboardResolution) {
-              updateTierProfile(tier, "storyboard_final", { resolution: coerced });
-              changed = true;
-            }
-          }
-
-          const videoProfile = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
-          const videoResolutionOverride = videoProfile.resolution;
-          const tierVideoBackend = videoProfile.video_backend || effectiveVideoBackendForContinuity;
-          if (videoResolutionOverride) {
-            const tierVideoOptions = getProfileResolutionOptions(
-              tierVideoBackend,
-              VIDEO_PROFILE_RESOLUTIONS,
-            );
-            const coerced = coerceResolutionForOptions(
-              videoResolutionOverride,
-              tierVideoOptions,
-              videoResolutionOverride,
-            );
-            if (coerced !== videoResolutionOverride) {
-              updateTierProfile(tier, "video_final", { resolution: coerced });
-              changed = true;
-            }
-          }
-
-          const videoServiceTier = normalizeServiceTier(videoProfile.service_tier);
-          const supportedServiceTiers = getVideoServiceTiers(tierVideoBackend);
-          if (!serviceTierSupported(videoServiceTier, supportedServiceTiers)) {
-            updateTierProfile(tier, "video_final", { service_tier: "default" });
-            changed = true;
-          }
-        }
-
-        return changed ? next : prev;
-      });
     });
 
     return () => {
@@ -978,12 +880,12 @@ export function ProjectSettingsPage() {
     };
   }, [
     defaultGenerationProfiles,
-    defaultShotTierProfiles,
-    effectiveVideoBackendForContinuity,
-    getProfileResolutionOptions,
-    getVideoServiceTiers,
+    imageResolution,
     imageResolutionOptions,
     options,
+    supportedVideoServiceTiers,
+    videoResolution,
+    videoServiceTier,
     videoResolutionOptions,
   ]);
 
@@ -1100,13 +1002,13 @@ export function ProjectSettingsPage() {
   ) => {
     setGenerationProfiles((prev) => {
       const base = normalizeGenerationProfiles(prev, normalizedGenerationProfiles);
-      return {
+      return compactGenerationProfiles({
         ...base,
         [key]: {
           ...base[key],
           ...patch,
         },
-      };
+      }, defaultGenerationProfiles);
     });
   };
 
@@ -1116,60 +1018,51 @@ export function ProjectSettingsPage() {
   ) => {
     setGenerationProfiles((prev) => {
       const base = normalizeGenerationProfiles(prev, normalizedGenerationProfiles);
-      return {
+      return compactGenerationProfiles({
         ...base,
         [key]: {
           ...base[key],
           ...patch,
         },
-      };
+      }, defaultGenerationProfiles);
     });
   };
-
-  const updateShotTierProfile = (
-    tier: ShotTier,
-    patch: Partial<ShotTierProfile>,
-  ) => {
-    setShotTierProfiles((prev) => {
-      const base = normalizeShotTierProfiles(prev);
-      return {
-        ...base,
-        [tier]: {
-          ...base[tier],
-          ...patch,
-          profiles: {
-            ...(base[tier].profiles ?? {}),
-            ...(patch.profiles ?? {}),
-          },
-        },
-      };
-    });
+  const updateStoryboardDefaults = (patch: Partial<ImageGenerationProfile>) => {
+    updateImageProfile("storyboard_draft", patch);
+    updateImageProfile("storyboard_final", patch);
   };
-
-  const updateShotTierOverride = (
-    tier: ShotTier,
-    key: "storyboard_final" | "video_final",
-    patch: Partial<ImageGenerationProfile | VideoGenerationProfile>,
-  ) => {
-    setShotTierProfiles((prev) => {
-      const base = normalizeShotTierProfiles(prev);
-      const currentProfiles = base[tier].profiles ?? {};
-      const currentProfile = currentProfiles[key] ?? {};
-      return {
-        ...base,
-        [tier]: {
-          ...base[tier],
-          profiles: {
-            ...currentProfiles,
-            [key]: {
-              ...currentProfile,
-              ...patch,
-            },
-          },
-        },
-      };
-    });
+  const updateVideoDefaults = (patch: Partial<VideoGenerationProfile>) => {
+    updateVideoProfile("video_draft", patch);
+    updateVideoProfile("video_final", patch);
   };
+  const updateReferenceVideoDefaults = (patch: Partial<VideoGenerationProfile>) => {
+    updateVideoProfile("reference_video_draft", patch);
+    updateVideoProfile("reference_video_final", patch);
+  };
+  const storyboardDefaultResolution =
+    normalizedGenerationProfiles.storyboard_final?.resolution
+    ?? normalizedGenerationProfiles.storyboard_draft?.resolution
+    ?? "";
+  const videoDefaultResolution =
+    normalizedGenerationProfiles.video_final?.resolution
+    ?? normalizedGenerationProfiles.video_draft?.resolution
+    ?? "";
+  const referenceVideoDefaultResolution =
+    normalizedGenerationProfiles.reference_video_final?.resolution
+    ?? normalizedGenerationProfiles.reference_video_draft?.resolution
+    ?? "";
+  const videoDefaultAudioValue =
+    normalizedGenerationProfiles.video_final?.generate_audio == null
+      ? "false"
+      : normalizedGenerationProfiles.video_final.generate_audio
+        ? "true"
+        : "false";
+  const referenceVideoDefaultAudioValue =
+    normalizedGenerationProfiles.reference_video_final?.generate_audio == null
+      ? "false"
+      : normalizedGenerationProfiles.reference_video_final.generate_audio
+        ? "true"
+        : "false";
 
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
 
@@ -1444,10 +1337,13 @@ export function ProjectSettingsPage() {
         generationProfiles,
         defaultGenerationProfiles,
       );
-      const savedShotTierProfiles = normalizeShotTierProfiles(shotTierProfiles, defaultShotTierProfiles);
-
+      const compactedGenerationProfiles = compactGenerationProfiles(
+        savedGenerationProfiles,
+        defaultGenerationProfiles,
+      );
       await API.updateProject(projectName, {
         video_backend: videoBackend || null,
+        video_service_tier: videoServiceTier || null,
         image_provider_t2i: imageBackendT2I || null,
         image_provider_i2i: imageBackendI2I || null,
         video_generate_audio: audioOverride,
@@ -1455,29 +1351,25 @@ export function ProjectSettingsPage() {
         text_backend_overview: textOverview || null,
         text_backend_style: textStyle || null,
         aspect_ratio: aspectRatio || undefined,
-        video_continuity_policy: videoContinuityPolicy,
         default_duration: defaultDuration,
         episode_target_units: normalizedEpisodeTargetUnits,
         source_language: sourceLanguage,
         model_settings: newModelSettings,
-        generation_profiles: savedGenerationProfiles,
-        shot_tier_profiles: savedShotTierProfiles,
+        generation_profiles: compactedGenerationProfiles,
       });
       const savedEpisodeTargetUnits = String(normalizedEpisodeTargetUnits);
       const refreshedVideoCaps = await API.getVideoCapabilities(projectName).catch(() => null);
       setVideoCapabilities(refreshedVideoCaps);
       setEpisodeTargetUnits(savedEpisodeTargetUnits);
       setModelSettings(newModelSettings);
-      setGenerationProfiles(savedGenerationProfiles);
-      setShotTierProfiles(savedShotTierProfiles);
+      setGenerationProfiles(compactedGenerationProfiles);
       initialRef.current = {
-        videoBackend, imageBackendT2I, imageBackendI2I, audioOverride,
+        videoBackend, videoServiceTier, imageBackendT2I, imageBackendI2I, audioOverride,
         textScript, textOverview, textStyle,
-        aspectRatio, generationMode, videoContinuityPolicy, defaultDuration,
+        aspectRatio, generationMode, defaultDuration,
         episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
         videoResolution, imageResolution,
         generationProfiles: generationProfilesSignature(savedGenerationProfiles),
-        shotTierProfiles: shotTierProfilesSignature(savedShotTierProfiles),
       };
       useAppStore.getState().pushToast(t("saved"), "success");
     } catch (e: unknown) {
@@ -1485,7 +1377,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, videoContinuityPolicy, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, shotTierProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I, defaultGenerationProfiles, defaultShotTierProfiles]);
+  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, videoServiceTier, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I, defaultGenerationProfiles]);
 
   return (
     <div
@@ -1739,45 +1631,29 @@ export function ProjectSettingsPage() {
                   }}
                   globalDefaults={{
                     video: globalDefaults.video,
+                    videoServiceTier: globalDefaults.videoServiceTier,
                     imageT2I: globalDefaults.imageT2I ?? "",
                     imageI2I: globalDefaults.imageI2I ?? "",
                     textScript: globalDefaults.textScript ?? "",
                     textOverview: globalDefaults.textOverview ?? "",
                     textStyle: globalDefaults.textStyle ?? "",
                   }}
+                  videoServiceTier={videoServiceTier}
+                  onVideoServiceTierChange={setVideoServiceTier}
+                  globalVideoServiceTier={globalDefaults.videoServiceTier}
+                  supportedVideoServiceTiers={supportedVideoServiceTiers}
                   videoContinuitySupport={videoContinuitySupport}
                   storyboardVideoStartImageUnsupported={storyboardVideoStartImageUnsupported}
                 />
-                <div className="mt-4 rounded-[10px] border border-hairline-soft bg-bg-grad-a/35 p-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[13px] font-semibold text-text">
-                        {t("video_continuity_policy_label")}
-                      </div>
-                      <div className="mt-1 text-[11.5px] leading-[1.45] text-text-4">
-                        {t(`video_continuity_policy_${videoContinuityPolicy}_hint`)}
-                      </div>
-                    </div>
-                    <div className="w-44 shrink-0">
-                      <SelectMenu
-                        value={videoContinuityPolicy}
-                        options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
-                          value: policy,
-                          label: t(`video_continuity_policy_${policy}`),
-                        }))}
-                        onChange={(next) => setVideoContinuityPolicy(normalizeVideoContinuityPolicy(next))}
-                        ariaLabel={t("video_continuity_policy_label")}
-                        panelLabel={t("video_continuity_policy_label")}
-                      />
-                    </div>
-                  </div>
-                </div>
               </SectionCard>
 
               <SectionCard
-                kicker="Quality Strategy"
+                kicker="Generation Defaults"
                 title={t("generation_profiles_section_title")}
-                description={t("generation_profiles_section_desc")}
+                description={t("generation_profiles_section_desc", {
+                  defaultValue:
+                    "设置项目级默认分辨率。单个分镜和单个视频后续仍可在镜头面板里单独覆盖模型、分辨率和连续性。",
+                })}
               >
                 <div className="space-y-4">
                   <div className="rounded-[10px] border border-hairline-soft bg-bg-grad-b/35 p-3">
@@ -1858,186 +1734,12 @@ export function ProjectSettingsPage() {
                     )}
                   </div>
 
-                  <div className="space-y-2">
-                    {SHOT_TIERS.map((tier) => {
-                      const tierProfile = normalizedShotTierProfiles[tier];
-                      const storyboardOverride = (tierProfile.profiles?.storyboard_final ?? {}) as ImageGenerationProfile;
-                      const videoOverride = (tierProfile.profiles?.video_final ?? {}) as VideoGenerationProfile;
-                      const tierVideoBackend = videoOverride.video_backend || effectiveVideoBackendForContinuity;
-                      const tierVideoResolutionOptions = getProfileResolutionOptions(
-                        tierVideoBackend,
-                        VIDEO_PROFILE_RESOLUTIONS,
-                      );
-                      const tierVideoServiceTiers = getVideoServiceTiers(tierVideoBackend);
-                      const tierVideoServiceTierOptions = serviceTierSelectOptions(t, tierVideoServiceTiers);
-                      const tierVideoServiceTierValue = supportedServiceTierValue(
-                        videoOverride.service_tier,
-                        tierVideoServiceTiers,
-                      );
-                      const tierVideoStartImageUnsupported = Boolean(
-                        generationMode !== "reference_video" &&
-                          videoOverride.video_backend &&
-                          lookupStoryboardVideoStartImageSupport(videoOverride.video_backend, customProviders) === false,
-                      );
-                      return (
-                        <div
-                          key={tier}
-                          className="rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3"
-                        >
-                          <div className="mb-3 flex items-center gap-2">
-                            <span className="num inline-flex h-6 min-w-6 items-center justify-center rounded-md bg-accent-soft px-2 text-[12px] font-bold text-bg-grad-b">
-                              {tier}
-                            </span>
-                            <span className="text-[13px] font-semibold text-text">
-                              {t("shot_tier_strategy_title", {
-                                defaultValue: "{{tier}} 档策略",
-                                tier,
-                              })}
-                            </span>
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-4">
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("shot_tier_retry_budget", { defaultValue: "重试预算" })}
-                              </span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={6}
-                                step={1}
-                                value={tierProfile.retry_budget ?? 1}
-                                onChange={(event) =>
-                                  updateShotTierProfile(tier, {
-                                    retry_budget: Math.max(1, Number(event.currentTarget.value) || 1),
-                                  })
-                                }
-                                className={PROFILE_INPUT_CLS}
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("video_continuity_policy_label")}
-                              </span>
-                              <SelectMenu
-                                value={tierProfile.video_continuity_policy ?? "auto"}
-                                options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
-                                  value: policy,
-                                  label: t(`video_continuity_policy_${policy}`),
-                                }))}
-                                onChange={(next) =>
-                                  updateShotTierProfile(tier, {
-                                    video_continuity_policy: normalizeVideoContinuityPolicy(next),
-                                  })
-                                }
-                                ariaLabel={t("video_continuity_policy_label")}
-                                panelLabel={t("video_continuity_policy_label")}
-                                className={PROFILE_INPUT_CLS}
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("generation_profile_storyboard_final")}
-                              </span>
-                              <SelectMenu
-                                value={storyboardOverride.resolution ?? ""}
-                                options={[
-                                  { value: "", label: t("follow_global_default") },
-                                  ...resolutionSelectOptions(imageResolutionOptions),
-                                ]}
-                                onChange={(next) =>
-                                  updateShotTierOverride(tier, "storyboard_final", {
-                                    resolution: next || null,
-                                  })
-                                }
-                                ariaLabel={t("generation_profile_storyboard_final")}
-                                panelLabel={t("generation_profile_storyboard_final")}
-                                className={PROFILE_INPUT_CLS}
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("generation_profile_video_final")}
-                              </span>
-                              <SelectMenu
-                                value={videoOverride.resolution ?? ""}
-                                options={[
-                                  { value: "", label: t("follow_global_default") },
-                                  ...resolutionSelectOptions(tierVideoResolutionOptions),
-                                ]}
-                                onChange={(next) =>
-                                  updateShotTierOverride(tier, "video_final", {
-                                    resolution: next || null,
-                                  })
-                                }
-                                ariaLabel={t("generation_profile_video_final")}
-                                panelLabel={t("generation_profile_video_final")}
-                                className={PROFILE_INPUT_CLS}
-                              />
-                            </label>
-                            <label className="block sm:col-span-2">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("video_backend_label", { defaultValue: "视频供应商" })}
-                              </span>
-                              <SelectMenu
-                                value={videoOverride.video_backend ?? ""}
-                                options={[
-                                  { value: "", label: t("follow_global_default") },
-                                  ...options.video_backends.map((backend) => ({
-                                    value: backend,
-                                    label: backend,
-                                  })),
-                                ]}
-                                onChange={(next) =>
-                                  updateShotTierOverride(tier, "video_final", {
-                                    video_backend: next || null,
-                                    resolution: null,
-                                  })
-                                }
-                                ariaLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
-                                panelLabel={t("video_backend_label", { defaultValue: "视频供应商" })}
-                                className={PROFILE_INPUT_CLS}
-                              />
-                              {tierVideoStartImageUnsupported && (
-                                <span
-                                  role="status"
-                                  className="mt-1.5 block text-[11.5px] leading-[1.45] text-warm"
-                                >
-                                  {t("templates:storyboard_video_model_requires_start_image", {
-                                    defaultValue:
-                                      "当前图生视频 / 宫格生视频流程会用当前分镜作为视频起始图。此模型不支持首帧输入，可能失败或偏离当前分镜，请切换到支持 I2V / 首帧的视频模型。",
-                                  })}
-                                </span>
-                              )}
-                            </label>
-                            <label className="block">
-                              <span className="mb-1.5 block text-[11px] text-text-3">
-                                {t("video_service_tier_label", { defaultValue: "服务档位" })}
-                              </span>
-                              <SelectMenu
-                                value={tierVideoServiceTierValue}
-                                options={tierVideoServiceTierOptions}
-                                onChange={(next) =>
-                                  updateShotTierOverride(tier, "video_final", {
-                                    service_tier: normalizeServiceTier(next),
-                                  })
-                                }
-                                ariaLabel={t("video_service_tier_label", { defaultValue: "服务档位" })}
-                                panelLabel={t("video_service_tier_label", { defaultValue: "服务档位" })}
-                                className={PROFILE_INPUT_CLS}
-                                minPanelWidth={280}
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
                   {([
                     ["asset", t("generation_profile_asset")],
-                    ["storyboard_draft", t("generation_profile_storyboard_draft")],
-                    ["storyboard_final", t("generation_profile_storyboard_final")],
-                    ["grid", t("generation_profile_grid")],
+                    ["storyboard", t("storyboard_defaults_label", { defaultValue: "分镜图" })],
+                    ...(generationMode === "grid"
+                      ? ([["grid", t("generation_profile_grid")]] as const)
+                      : []),
                   ] as const).map(([key, label]) => (
                     <div
                       key={key}
@@ -2051,11 +1753,19 @@ export function ProjectSettingsPage() {
                           {t("resolution_label")}
                         </span>
                         <SelectMenu
-                          value={normalizedGenerationProfiles[key]?.resolution ?? ""}
-                          options={resolutionSelectOptions(imageResolutionOptions)}
-                          onChange={(next) =>
-                            updateImageProfile(key, { resolution: next || null })
+                          value={
+                            key === "storyboard"
+                              ? storyboardDefaultResolution
+                              : normalizedGenerationProfiles[key]?.resolution ?? ""
                           }
+                          options={resolutionSelectOptions(imageResolutionOptions)}
+                          onChange={(next) => {
+                            if (key === "storyboard") {
+                              updateStoryboardDefaults({ resolution: next || null });
+                              return;
+                            }
+                            updateImageProfile(key, { resolution: next || null });
+                          }}
                           ariaLabel={t("resolution_label")}
                           panelLabel={t("resolution_label")}
                           className={PROFILE_INPUT_CLS}
@@ -2064,14 +1774,15 @@ export function ProjectSettingsPage() {
                     </div>
                   ))}
 
-                  {videoProfileRows.map(([key, label]) => {
-                    const profile = normalizedGenerationProfiles[key];
-                    const audioValue =
-                      profile?.generate_audio == null
-                        ? "project"
-                        : profile.generate_audio
-                          ? "true"
-                          : "false";
+                  {([
+                    ["video", t("video_defaults_label", { defaultValue: "分镜视频" })],
+                    ...(generationMode === "reference_video"
+                      ? ([["reference_video", t("reference_video_defaults_label", { defaultValue: "参考视频" })]] as const)
+                      : []),
+                  ] as const).map(([key, label]) => {
+                    const audioValue = key === "video" ? videoDefaultAudioValue : referenceVideoDefaultAudioValue;
+                    const resolutionValue =
+                      key === "video" ? videoDefaultResolution : referenceVideoDefaultResolution;
                     return (
                       <div
                         key={key}
@@ -2085,11 +1796,16 @@ export function ProjectSettingsPage() {
                             {t("resolution_label")}
                           </span>
                           <SelectMenu
-                            value={profile?.resolution ?? ""}
+                            value={resolutionValue}
                             options={resolutionSelectOptions(videoResolutionOptions)}
-                            onChange={(next) =>
-                              updateVideoProfile(key, { resolution: next || null })
-                            }
+                            onChange={(next) => {
+                              const patch = { resolution: next || null };
+                              if (key === "video") {
+                                updateVideoDefaults(patch);
+                                return;
+                              }
+                              updateReferenceVideoDefaults(patch);
+                            }}
                             ariaLabel={t("resolution_label")}
                             panelLabel={t("resolution_label")}
                             className={PROFILE_INPUT_CLS}
@@ -2102,15 +1818,18 @@ export function ProjectSettingsPage() {
                           <SelectMenu
                             value={audioValue}
                             options={[
-                              { value: "project", label: t("follow_global_default") },
                               { value: "true", label: t("enabled_label") },
                               { value: "false", label: t("disabled_label") },
                             ]}
                             onChange={(value) => {
-                              updateVideoProfile(key, {
-                                generate_audio:
-                                  value === "project" ? null : value === "true",
-                              });
+                              const patch = {
+                                generate_audio: value === "true",
+                              };
+                              if (key === "video") {
+                                updateVideoDefaults(patch);
+                                return;
+                              }
+                              updateReferenceVideoDefaults(patch);
                             }}
                             ariaLabel={t("generate_audio_label")}
                             panelLabel={t("generate_audio_label")}

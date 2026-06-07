@@ -347,6 +347,7 @@ class ConfigResolver:
     # 与 Seedance / Grok 默认开启、storyboard 用户期望一致。
     # server/routers/system_config.py 与 lib/media_generator.py 均通过引用此常量读取。
     _DEFAULT_VIDEO_GENERATE_AUDIO = True
+    _DEFAULT_VIDEO_SERVICE_TIER = "default"
 
     def __init__(
         self,
@@ -386,6 +387,11 @@ class ConfigResolver:
         """
         async with self._open_session() as (session, svc):
             return await self._resolve_video_generate_audio(svc, project_name)
+
+    async def default_video_service_tier(self) -> str:
+        """返回系统级默认视频服务档位。"""
+        async with self._open_session() as (session, svc):
+            return await self._resolve_default_video_service_tier(svc)
 
     async def default_video_backend(self) -> tuple[str, str]:
         """返回系统级默认 (provider_id, model_id)（不含项目级覆盖）。"""
@@ -508,6 +514,11 @@ class ConfigResolver:
                     value = bool(override)
 
         return value
+
+    async def _resolve_default_video_service_tier(self, svc: ConfigService) -> str:
+        raw = await svc.get_setting("default_video_service_tier", "")
+        value = raw.strip().lower() if isinstance(raw, str) else ""
+        return value if value in {"default", "flex"} else self._DEFAULT_VIDEO_SERVICE_TIER
 
     async def _resolve_default_video_backend(self, svc: ConfigService, session: AsyncSession) -> tuple[str, str]:
         raw = await svc.get_setting("default_video_backend", "")

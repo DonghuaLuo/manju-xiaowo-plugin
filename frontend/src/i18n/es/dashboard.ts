@@ -900,7 +900,17 @@ export default {
   grid_preview_batch_generate: "Generar grilla",
   grid_preview_empty_episode: "No hay tomas en este episodio: primero divida el guión en Preprocesamiento",
   batch_generate_storyboards: "Generar guiones gráficos por lotes",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "Generar videos por lotes",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "Buscar tomas…",
   shots_collapsed_label: "DISPAROS · {{count}}",
   shots_section_title: "Disparos",

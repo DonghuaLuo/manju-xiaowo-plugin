@@ -281,7 +281,6 @@ class GenerateStoryboardRequest(BaseModel):
     script_file: str
     quality: Literal["draft", "final", "custom"] | None = None
     final_generation_mode: Literal["draft_locked", "fresh_sample"] | None = None
-    shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
     image_provider_t2i: str | None = None
@@ -294,13 +293,13 @@ class GenerateVideoRequest(BaseModel):
     prompt: str | dict
     script_file: str
     quality: Literal["draft", "final", "custom"] | None = None
-    shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
     video_backend: str | None = None
     video_provider: str | None = None
     video_model: str | None = None
     duration_seconds: int | None = None  # 改为 None，由服务层解析
+    video_continuity_policy: Literal["auto", "start_only", "end_frame", "reference_assisted"] | None = None
     generate_audio: bool | None = None
     service_tier: str | None = None
     seed: int | None = None
@@ -359,7 +358,6 @@ class StoryboardReferencePreflightRequest(BaseModel):
     props: list[str] | None = None
     quality: Literal["draft", "final", "custom"] | None = None
     final_generation_mode: Literal["draft_locked", "fresh_sample"] | None = None
-    shot_tier: Literal["S", "A", "B"] | None = None
     resolution: str | None = None
     source_version: int | None = None
     image_provider_t2i: str | None = None
@@ -371,7 +369,6 @@ class StoryboardReferencePreflightRequest(BaseModel):
 _IMAGE_GENERATION_FIELDS = (
     "quality",
     "final_generation_mode",
-    "shot_tier",
     "resolution",
     "source_version",
     "image_provider_t2i",
@@ -382,13 +379,13 @@ _IMAGE_GENERATION_FIELDS = (
 
 _VIDEO_GENERATION_FIELDS = (
     "quality",
-    "shot_tier",
     "resolution",
     "source_version",
     "video_backend",
     "video_provider",
     "video_model",
     "duration_seconds",
+    "video_continuity_policy",
     "generate_audio",
     "service_tier",
     "seed",
@@ -402,12 +399,12 @@ def _request_generation_payload(req: BaseModel, fields: tuple[str, ...]) -> dict
 _ROUTE_PREVIEW_PROJECT_FIELDS = frozenset(
     {
         "generation_profiles",
-        "shot_tier_profiles",
         "video_backend",
         "image_backend",
         "image_provider_t2i",
         "image_provider_i2i",
         "video_generate_audio",
+        "video_service_tier",
         "default_duration",
         "model_settings",
     }
@@ -445,8 +442,6 @@ def _route_to_preview_dict(route) -> dict[str, Any]:
         "supported_resolutions": route.supported_resolutions,
         "supported_durations": route.supported_durations,
         "duration_resolution_constraints": route.duration_resolution_constraints,
-        "shot_tier": route.shot_tier,
-        "shot_tier_strategy": route.shot_tier_strategy,
         "warnings": route.warnings,
         "metadata": route.metadata,
     }

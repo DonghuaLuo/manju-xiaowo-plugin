@@ -900,7 +900,17 @@ export default {
   grid_preview_batch_generate: "Создать эту сетку",
   grid_preview_empty_episode: "В этой серии пока нет кадров; сначала разделите сценарий в «Предобработке»",
   batch_generate_storyboards: "Пакетно создать раскадровки",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "Пакетно создать видео",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "Поиск кадров...",
   shots_collapsed_label: "Кадры · {{count}}",
   shots_section_title: "Кадры",

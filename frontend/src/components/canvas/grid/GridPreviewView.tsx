@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API } from "@/api";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAppStore } from "@/stores/app-store";
 import { groupBySegmentBreak, computeGridSize, matchGridsForGroup } from "@/utils/grid-layout";
 import { GridPreviewPanel } from "@/components/canvas/timeline/GridPreviewPanel";
@@ -44,6 +45,9 @@ export function GridPreviewView({
   const [grids, setGrids] = useState<GridGeneration[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [generatingGroups, setGeneratingGroups] = useState<Set<string>>(new Set());
+  const [pendingGroup, setPendingGroup] = useState<{ key: string; segments: Segment[] } | null>(
+    null,
+  );
 
   const groups = useMemo(() => groupBySegmentBreak(segments), [segments]);
 
@@ -123,102 +127,124 @@ export function GridPreviewView({
   const canGenerate = Boolean(onGenerateGrid && scriptFile);
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4">
-      <div
-        className="mb-4 flex flex-wrap items-center gap-2 rounded-md border px-3.5 py-2.5"
-        style={{
-          borderColor: "var(--color-hairline-soft)",
-          background: "oklch(0.18 0.010 265 / 0.5)",
-        }}
-      >
-        <span
-          className="num text-[11.5px] tabular-nums"
-          style={{ color: "var(--color-text-3)", fontFamily: "var(--font-mono)" }}
+    <>
+      <div className="h-full overflow-y-auto px-5 py-4">
+        <div
+          className="mb-4 flex flex-wrap items-center gap-2 rounded-md border px-3.5 py-2.5"
+          style={{
+            borderColor: "var(--color-hairline-soft)",
+            background: "oklch(0.18 0.010 265 / 0.5)",
+          }}
         >
-          {t("grid_preview_summary", stats)}
-        </span>
+          <span
+            className="num text-[11.5px] tabular-nums"
+            style={{ color: "var(--color-text-3)", fontFamily: "var(--font-mono)" }}
+          >
+            {t("grid_preview_summary", stats)}
+          </span>
+        </div>
+
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))]">
+          {groups.map((group, idx) => {
+            const layout = computeGridSize(group.length, aspectRatio);
+            const ids = getGridIdsForGroup(group);
+            const groupKey = group
+              .map((s) => getSegmentId(s, contentMode))
+              .sort()
+              .join(",");
+            const generating = generatingGroups.has(groupKey);
+            return (
+              <div
+                key={groupKey || idx}
+                data-workspace-focus-surface
+                className="overflow-hidden rounded-md border"
+                style={{
+                  borderColor: "var(--color-hairline-soft)",
+                  background: "oklch(0.20 0.011 265 / 0.35)",
+                }}
+              >
+                {ids.map((gridId) => (
+                  <span
+                    key={gridId}
+                    id={`grid-${gridId}`}
+                    className="sr-only"
+                    aria-hidden="true"
+                  />
+                ))}
+                <div
+                  className="flex items-center gap-2 px-4 py-2"
+                  style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
+                >
+                  <span
+                    className="num text-[11px] font-semibold uppercase tracking-wider"
+                    style={{
+                      color: "var(--color-text-3)",
+                      fontFamily: "var(--font-mono)",
+                      letterSpacing: "0.6px",
+                    }}
+                  >
+                    {t("grid_preview_batch_card_title", {
+                      index: idx + 1,
+                      cellCount: group.length,
+                      rows: layout.rows,
+                      cols: layout.cols,
+                    })}
+                  </span>
+                  <span className="flex-1" />
+                  {canGenerate && (
+                    <button
+                      type="button"
+                      onClick={() => setPendingGroup({ key: groupKey, segments: group })}
+                      disabled={generating}
+                      className="sv-navbtn inline-flex items-center gap-1.5"
+                    >
+                      {generating ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3 w-3" />
+                      )}
+                      <span>
+                        {generating
+                          ? t("submitting")
+                          : ids.length > 0
+                            ? t("grid_regenerate_btn")
+                            : t("grid_preview_batch_generate")}
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <GridPreviewPanel
+                  projectName={projectName}
+                  gridIds={ids}
+                  onRegenerated={refreshGrids}
+                  refreshKey={refreshKey}
+                  defaultExpanded
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))]">
-        {groups.map((group, idx) => {
-          const layout = computeGridSize(group.length, aspectRatio);
-          const ids = getGridIdsForGroup(group);
-          const groupKey = group
-            .map((s) => getSegmentId(s, contentMode))
-            .sort()
-            .join(",");
-          const generating = generatingGroups.has(groupKey);
-          return (
-            <div
-              key={groupKey || idx}
-              data-workspace-focus-surface
-              className="overflow-hidden rounded-md border"
-              style={{
-                borderColor: "var(--color-hairline-soft)",
-                background: "oklch(0.20 0.011 265 / 0.35)",
-              }}
-            >
-              {ids.map((gridId) => (
-                <span
-                  key={gridId}
-                  id={`grid-${gridId}`}
-                  className="sr-only"
-                  aria-hidden="true"
-                />
-              ))}
-              <div
-                className="flex items-center gap-2 px-4 py-2"
-                style={{ borderBottom: "1px solid var(--color-hairline-soft)" }}
-              >
-                <span
-                  className="num text-[11px] font-semibold uppercase tracking-wider"
-                  style={{
-                    color: "var(--color-text-3)",
-                    fontFamily: "var(--font-mono)",
-                    letterSpacing: "0.6px",
-                  }}
-                >
-                  {t("grid_preview_batch_card_title", {
-                    index: idx + 1,
-                    cellCount: group.length,
-                    rows: layout.rows,
-                    cols: layout.cols,
-                  })}
-                </span>
-                <span className="flex-1" />
-                {canGenerate && (
-                  <button
-                    type="button"
-                    onClick={() => void handleGenerateGroup(groupKey, group)}
-                    disabled={generating}
-                    className="sv-navbtn inline-flex items-center gap-1.5"
-                  >
-                    {generating ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3 w-3" />
-                    )}
-                    <span>
-                      {generating
-                        ? t("submitting")
-                        : ids.length > 0
-                          ? t("grid_regenerate_btn")
-                          : t("grid_preview_batch_generate")}
-                    </span>
-                  </button>
-                )}
-              </div>
-              <GridPreviewPanel
-                projectName={projectName}
-                gridIds={ids}
-                onRegenerated={refreshGrids}
-                refreshKey={refreshKey}
-                defaultExpanded
-              />
-            </div>
-          );
+      <ConfirmDialog
+        open={pendingGroup !== null}
+        title={t("grid_preview_batch_generate")}
+        description={t("grid_preview_batch_generate_confirm_desc", {
+          count: pendingGroup?.segments.length ?? 0,
         })}
-      </div>
-    </div>
+        confirmLabel={t("common:confirm")}
+        loadingLabel={t("submitting")}
+        loading={pendingGroup ? generatingGroups.has(pendingGroup.key) : false}
+        onConfirm={async () => {
+          if (!pendingGroup) return;
+          try {
+            await handleGenerateGroup(pendingGroup.key, pendingGroup.segments);
+          } finally {
+            setPendingGroup(null);
+          }
+        }}
+        onCancel={() => setPendingGroup(null)}
+      />
+    </>
   );
 }

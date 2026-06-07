@@ -61,25 +61,32 @@ def _current_version_metadata(project_dir: Path, resource_type: str, resource_id
 def _metadata_defaults(metadata: dict[str, Any]) -> dict[str, Any]:
     route = metadata.get("generation_route")
     route = route if isinstance(route, dict) else {}
-    strategy = metadata.get("shot_tier_strategy")
-    if not isinstance(strategy, dict):
-        strategy = route.get("shot_tier_strategy")
-    strategy = strategy if isinstance(strategy, dict) else {}
+    video_continuity = metadata.get("video_continuity")
+    video_continuity = video_continuity if isinstance(video_continuity, dict) else {}
     reference_policy = metadata.get("provider_image_reference_policy")
+    if not isinstance(reference_policy, dict):
+        reference_policy = metadata.get("reference_image_policy")
     reference_policy = reference_policy if isinstance(reference_policy, dict) else {}
+    requested_video_continuity = (
+        video_continuity.get("requested_policy")
+        or metadata.get("video_continuity_policy")
+    )
+    effective_video_continuity = video_continuity.get("effective_policy") or requested_video_continuity
     return {
         "provider": route.get("provider"),
         "model": route.get("model"),
         "generation_quality": metadata.get("generation_quality"),
         "generation_profile_key": metadata.get("generation_profile_key"),
-        "shot_tier": metadata.get("shot_tier") or route.get("shot_tier"),
         "resolution": route.get("resolution") or metadata.get("resolution"),
         "task_kind": route.get("task_kind"),
         "media_type": route.get("media_type"),
         "service_tier": route.get("service_tier"),
-        "shot_tier_strategy_label": strategy.get("label"),
-        "retry_budget": strategy.get("retry_budget"),
-        "video_continuity_policy": strategy.get("video_continuity_policy"),
+        "final_generation_mode": metadata.get("final_generation_mode"),
+        "source_storyboard_generation_quality": metadata.get("source_storyboard_generation_quality"),
+        "source_storyboard_provider": metadata.get("source_storyboard_provider"),
+        "source_storyboard_model": metadata.get("source_storyboard_model"),
+        "video_continuity_policy": requested_video_continuity,
+        "video_continuity_effective_policy": effective_video_continuity,
         "reference_image_count": reference_policy.get("reference_image_count"),
         "reference_image_submitted_count": reference_policy.get("reference_image_submitted_count"),
     }
@@ -142,16 +149,44 @@ def _group_value(item: dict[str, Any], group_key: str) -> tuple[str, dict[str, A
             "model": model,
             "label": f"{provider} / {model}",
         }
-    if group_key == "model_shot_tier":
-        provider = str(item.get("provider") or unknown)
-        model = str(item.get("model") or unknown)
-        shot_tier = str(item.get("shot_tier") or unknown)
-        return f"{provider}/{model}/{shot_tier}", {
-            "provider": provider,
-            "model": model,
-            "shot_tier": shot_tier,
-            "label": f"{provider} / {model} · {shot_tier}",
+    if group_key in {"video_continuity_policy", "video_continuity_effective_policy"}:
+        value = str(item.get(group_key) or unknown)
+        continuity_labels = {
+            "auto": "自动",
+            "start_only": "仅首帧",
+            "end_frame": "首尾帧连续",
+            "reference_assisted": "参考图辅助",
+            unknown: unknown,
         }
+        return value, {"label": continuity_labels.get(value, value), group_key: value}
+    if group_key == "final_generation_mode":
+        value = str(item.get(group_key) or unknown)
+        mode_labels = {
+            "draft_locked": "沿当前分镜",
+            "fresh_sample": "重新出图",
+            unknown: unknown,
+        }
+        return value, {"label": mode_labels.get(value, value), group_key: value}
+    if group_key == "service_tier":
+        value = str(item.get(group_key) or unknown)
+        service_tier_labels = {
+            "default": "默认",
+            "flex": "Flex",
+            unknown: unknown,
+        }
+        return value, {"label": service_tier_labels.get(value, value), group_key: value}
+    if group_key == "source_storyboard_provider_model":
+        provider = str(item.get("source_storyboard_provider") or unknown)
+        model = str(item.get("source_storyboard_model") or unknown)
+        return f"{provider}/{model}", {
+            "source_storyboard_provider": provider,
+            "source_storyboard_model": model,
+            "label": f"{provider} / {model}",
+        }
+    if group_key == "reference_image_count":
+        value = str(item.get(group_key) or unknown)
+        label = f"{value} 张" if value != unknown else unknown
+        return value, {"label": label, group_key: value}
     value = str(item.get(group_key) or unknown)
     return value, {"label": value, group_key: value}
 
@@ -211,7 +246,6 @@ class QualityMetricsService:
         provider: str | None = None,
         model: str | None = None,
         generation_quality: str | None = None,
-        shot_tier: str | None = None,
     ) -> dict[str, Any]:
         self.pm.load_project(project_name)
         project_dir = self.pm.get_project_path(project_name)
@@ -236,16 +270,18 @@ class QualityMetricsService:
             "model": model or defaults.get("model"),
             "generation_quality": generation_quality or defaults.get("generation_quality"),
             "generation_profile_key": defaults.get("generation_profile_key"),
-            "shot_tier": shot_tier or defaults.get("shot_tier"),
             "resolution": defaults.get("resolution"),
             "task_kind": defaults.get("task_kind"),
             "media_type": defaults.get("media_type"),
             "service_tier": defaults.get("service_tier"),
-            "shot_tier_strategy_label": defaults.get("shot_tier_strategy_label"),
-            "retry_budget": defaults.get("retry_budget"),
+            "final_generation_mode": defaults.get("final_generation_mode"),
+            "source_storyboard_generation_quality": defaults.get("source_storyboard_generation_quality"),
             "video_continuity_policy": defaults.get("video_continuity_policy"),
+            "video_continuity_effective_policy": defaults.get("video_continuity_effective_policy"),
             "reference_image_count": defaults.get("reference_image_count"),
             "reference_image_submitted_count": defaults.get("reference_image_submitted_count"),
+            "source_storyboard_provider": defaults.get("source_storyboard_provider"),
+            "source_storyboard_model": defaults.get("source_storyboard_model"),
             "user_id": user_id,
             "updated_at": now,
         }
@@ -283,7 +319,6 @@ class QualityMetricsService:
             "model": {},
             "resource_type": {},
             "generation_quality": {},
-            "shot_tier": {},
         }
         dimension_scores: dict[str, list[float]] = {}
         for item in items:
@@ -366,14 +401,17 @@ class QualityMetricsService:
             "provider",
             "model",
             "provider_model",
-            "model_shot_tier",
+            "source_storyboard_provider_model",
             "resource_type",
             "generation_quality",
             "generation_profile_key",
-            "shot_tier",
             "service_tier",
             "resolution",
             "video_continuity_policy",
+            "video_continuity_effective_policy",
+            "final_generation_mode",
+            "reference_image_count",
+            "source_storyboard_generation_quality",
         ]
         return {
             "count": len(valid_scores),

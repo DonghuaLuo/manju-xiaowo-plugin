@@ -900,7 +900,17 @@ export default {
   grid_preview_batch_generate: "이 그리드 생성",
   grid_preview_empty_episode: "이 에피소드에는 아직 샷이 없습니다. 먼저 「전처리」에서 대본을 분할하세요",
   batch_generate_storyboards: "스토리보드 이미지 일괄 생성",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "동영상 일괄 생성",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "샷 검색...",
   shots_collapsed_label: "샷 · {{count}}",
   shots_section_title: "샷",

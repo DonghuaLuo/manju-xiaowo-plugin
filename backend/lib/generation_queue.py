@@ -53,20 +53,13 @@ _VIDEO_CONTINUITY_POLICIES = {"auto", "start_only", "end_frame", "reference_assi
 
 def _storyboard_video_continuity_policy(project: dict[str, Any], payload: dict[str, Any], item: dict[str, Any]) -> str:
     raw = payload.get("video_continuity_policy") or payload.get("continuity_policy")
-    if raw is None:
-        tier = payload.get("shot_tier")
-        if tier not in {"S", "A", "B"}:
-            tier = item.get("shot_tier")
-        if tier not in {"S", "A", "B"}:
-            tier = "A"
-        defaults = {"S": "auto", "A": "auto", "B": "start_only"}
-        raw_profiles = project.get("shot_tier_profiles") or project.get("shot_tiers")
-        tier_profile = raw_profiles.get(tier) if isinstance(raw_profiles, dict) else None
-        raw = tier_profile.get("video_continuity_policy") if isinstance(tier_profile, dict) else None
-        if raw is None:
-            raw = defaults[tier]
-    if raw is None:
-        raw = project.get("video_continuity_policy") or project.get("continuity_policy")
+    if raw is None and isinstance(item, dict):
+        video_generation = item.get("video_generation")
+        if isinstance(video_generation, dict):
+            raw = video_generation.get("video_continuity_policy")
+    if raw is None and isinstance(item, dict):
+        transition = str(item.get("transition_to_next") or "cut").strip().lower()
+        raw = "start_only" if transition in {"fade", "dissolve"} else "end_frame"
     policy = str(raw or "auto").strip().lower()
     return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
 

@@ -5,6 +5,7 @@ import { EpisodeHeader } from "../timeline/EpisodeHeader";
 import { PreprocessingView } from "../timeline/PreprocessingView";
 import { ShotSplitView } from "../timeline/ShotSplitView";
 import { GridPreviewView } from "./GridPreviewView";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAppStore } from "@/stores/app-store";
 import { useCostStore } from "@/stores/cost-store";
 import { useTasksStore } from "@/stores/tasks-store";
@@ -25,6 +26,12 @@ import type { VideoContinuitySupport } from "@/utils/provider-models";
 type Segment = NarrationSegment | DramaScene;
 type GridTab = "preprocessing" | "grid_preview" | "units";
 
+function getSegmentId(seg: Segment, mode: "narration" | "drama"): string {
+  return mode === "narration"
+    ? (seg as NarrationSegment).segment_id
+    : (seg as DramaScene).scene_id;
+}
+
 interface GridImageToVideoCanvasProps {
   projectName: string;
   episode: number;
@@ -34,7 +41,6 @@ interface GridImageToVideoCanvasProps {
   scriptFile?: string;
   projectData: ProjectData | null;
   durationOptions?: number[];
-  videoContinuityPolicy?: VideoContinuityPolicy;
   videoContinuitySupport?: VideoContinuitySupport | null;
   onUpdatePrompt?: (
     segmentId: string,
@@ -52,6 +58,7 @@ interface GridImageToVideoCanvasProps {
     segmentId: string,
     scriptFile?: string,
     quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
   ) => void;
   onGenerateGrid?: (
     episode: number,
@@ -71,7 +78,6 @@ export function GridImageToVideoCanvas({
   scriptFile,
   projectData,
   durationOptions,
-  videoContinuityPolicy,
   videoContinuitySupport,
   onUpdatePrompt,
   onGenerateStoryboard,
@@ -87,6 +93,10 @@ export function GridImageToVideoCanvas({
   const showTabs = Boolean(hasDraft);
   const defaultTab: GridTab = hasScript ? "units" : "preprocessing";
   const [activeTab, setActiveTab] = useState<GridTab>(defaultTab);
+  const [batchingVideos, setBatchingVideos] = useState(false);
+  const [batchConfirmAction, setBatchConfirmAction] = useState<"all-grids" | "videos" | null>(
+    null,
+  );
   const prepareGridScrollTarget = useCallback(() => {
     setActiveTab("grid_preview");
     return true;
@@ -204,8 +214,46 @@ export function GridImageToVideoCanvas({
     options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) =>
     onGenerateStoryboard?.(segId, scriptFile, quality, options);
-  const handleGenVid = (segId: string, quality?: GenerationQuality) =>
-    onGenerateVideo?.(segId, scriptFile, quality);
+  const handleGenVid = (
+    segId: string,
+    quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
+  ) =>
+    onGenerateVideo?.(segId, scriptFile, quality, options);
+
+  const handleBatchGenerateVideos = async () => {
+    if (!hasScript || batchingVideos) return;
+    setBatchingVideos(true);
+    try {
+      for (const segment of segments) {
+        const segId = getSegmentId(segment, contentMode);
+        if (!segment.generated_assets?.storyboard_image) continue;
+        await Promise.resolve(handleGenVid(segId));
+      }
+    } finally {
+      setBatchingVideos(false);
+    }
+  };
+
+  const videoBatchCount = segments.filter((segment) => segment.generated_assets?.storyboard_image).length;
+
+  const handleConfirmBatchGenerate = async () => {
+    if (batchConfirmAction === "all-grids") {
+      try {
+        await handleGenerateAllGrids();
+      } finally {
+        setBatchConfirmAction(null);
+      }
+      return;
+    }
+    if (batchConfirmAction === "videos") {
+      try {
+        await handleBatchGenerateVideos();
+      } finally {
+        setBatchConfirmAction(null);
+      }
+    }
+  };
 
   const renderTabButton = (key: GridTab, label: string, disabled = false) => (
     <button
@@ -262,7 +310,7 @@ export function GridImageToVideoCanvas({
           <div className="mr-1 inline-flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => void handleGenerateAllGrids()}
+              onClick={() => setBatchConfirmAction("all-grids")}
               disabled={generatingAllGrids}
               className="sv-navbtn inline-flex items-center gap-1.5"
             >
@@ -281,11 +329,19 @@ export function GridImageToVideoCanvas({
             <button
               type="button"
               className="sv-navbtn inline-flex items-center gap-1.5"
-              disabled
+              disabled={batchingVideos || !onGenerateVideo}
               title={t("batch_generate_videos")}
               aria-label={t("batch_generate_videos")}
+              onClick={() => {
+                if (videoBatchCount <= 0) return;
+                setBatchConfirmAction("videos");
+              }}
             >
-              <Sparkles className="h-3 w-3" />
+              {batchingVideos ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
               <span>{t("batch_generate_videos")}</span>
             </button>
           </div>
@@ -318,7 +374,6 @@ export function GridImageToVideoCanvas({
             aspectRatio={aspectRatio}
             projectName={projectName}
             scriptFile={scriptFile}
-            isGridMode
             onUpdatePrompt={handleUpdatePrompt}
             onGenerateStoryboard={handleGenSb}
             onGenerateVideo={handleGenVid}
@@ -327,12 +382,35 @@ export function GridImageToVideoCanvas({
             generatingStoryboard={generatingStoryboard}
             generatingVideo={generatingVideo}
             durationOptions={durationOptions}
-            videoContinuityPolicy={videoContinuityPolicy}
             videoContinuitySupport={videoContinuitySupport}
-            shotTierProfiles={projectData.shot_tier_profiles}
           />
         ) : null}
       </div>
+
+      <ConfirmDialog
+        open={batchConfirmAction !== null}
+        title={
+          batchConfirmAction === "all-grids"
+            ? t("generate_all_grids")
+            : t("batch_generate_videos")
+        }
+        description={
+          batchConfirmAction === "all-grids"
+            ? t("generate_all_grids_confirm_desc")
+            : t("batch_generate_videos_confirm_desc", { count: videoBatchCount })
+        }
+        confirmLabel={t("common:confirm")}
+        loadingLabel={t("submitting")}
+        loading={
+          batchConfirmAction === "all-grids"
+            ? generatingAllGrids
+            : batchConfirmAction === "videos"
+              ? batchingVideos
+              : false
+        }
+        onConfirm={() => void handleConfirmBatchGenerate()}
+        onCancel={() => setBatchConfirmAction(null)}
+      />
     </div>
   );
 }

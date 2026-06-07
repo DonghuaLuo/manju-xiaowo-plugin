@@ -79,7 +79,8 @@ interface AnalysisTableProps {
   subtitle: string;
   items: QualityAnalysisGroupItem[];
   emptyText: string;
-  columns?: "model" | "tier" | "project";
+  secondaryLabel?: string;
+  secondaryValue?: (item: QualityAnalysisGroupItem) => string | null;
 }
 
 function AnalysisTable({
@@ -87,7 +88,8 @@ function AnalysisTable({
   subtitle,
   items,
   emptyText,
-  columns = "model",
+  secondaryLabel,
+  secondaryValue,
 }: AnalysisTableProps) {
   const { t } = useTranslation("dashboard");
   const rows = items.slice(0, 10);
@@ -110,12 +112,7 @@ function AnalysisTable({
             <thead className="bg-bg-grad-a/55 font-mono text-[9.5px] uppercase tracking-[0.14em] text-text-4">
               <tr>
                 <th className="px-3 py-2 font-bold">{t("quality_analysis_column_name", { defaultValue: "对象" })}</th>
-                {columns === "model" ? (
-                  <th className="px-3 py-2 font-bold">{t("quality_analysis_column_tier", { defaultValue: "S/A/B" })}</th>
-                ) : null}
-                {columns === "project" ? (
-                  <th className="px-3 py-2 font-bold">{t("quality_analysis_column_project", { defaultValue: "项目" })}</th>
-                ) : null}
+                {secondaryLabel ? <th className="px-3 py-2 font-bold">{secondaryLabel}</th> : null}
                 <th className="px-3 py-2 text-right font-bold">{t("quality_analysis_column_count", { defaultValue: "样本" })}</th>
                 <th className="px-3 py-2 text-right font-bold">{t("quality_analysis_column_score", { defaultValue: "评分" })}</th>
               </tr>
@@ -124,21 +121,16 @@ function AnalysisTable({
               {rows.map((item) => (
                 <tr key={item.key} className="border-t border-hairline-soft">
                   <td className="min-w-0 px-3 py-2.5 text-text">
-                    <div className="truncate">{groupLabel(item)}</div>
-                    {item.provider && item.model && columns !== "model" ? (
+                      <div className="truncate">{groupLabel(item)}</div>
+                    {item.provider && item.model && !secondaryValue ? (
                       <div className="mt-0.5 truncate font-mono text-[10px] text-text-4">
                         {String(item.provider)} / {String(item.model)}
                       </div>
                     ) : null}
                   </td>
-                  {columns === "model" ? (
+                  {secondaryValue ? (
                     <td className="px-3 py-2.5 font-mono text-[11px] text-text-3">
-                      {String(item.shot_tier || "-")}
-                    </td>
-                  ) : null}
-                  {columns === "project" ? (
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-text-3">
-                      {String(item.project_name || "-")}
+                      {secondaryValue(item) ?? "-"}
                     </td>
                   ) : null}
                   <td className="px-3 py-2.5 text-right font-mono tabular-nums text-text-3">
@@ -191,8 +183,12 @@ export function QualityAnalysisSection() {
     [analysis],
   );
   const modelRows = analysis?.groups.provider_model ?? [];
-  const modelTierRows = analysis?.groups.model_shot_tier ?? [];
-  const tierRows = analysis?.groups.shot_tier ?? [];
+  const resolutionRows = analysis?.groups.resolution ?? [];
+  const serviceTierRows = analysis?.groups.service_tier ?? [];
+  const continuityRows = analysis?.groups.video_continuity_effective_policy ?? analysis?.groups.video_continuity_policy ?? [];
+  const storyboardModeRows = analysis?.groups.final_generation_mode ?? [];
+  const sourceStoryboardModelRows = analysis?.groups.source_storyboard_provider_model ?? [];
+  const referenceImageCountRows = analysis?.groups.reference_image_count ?? [];
   const projectRows = analysis?.groups.project ?? [];
 
   const emptyText = t("quality_analysis_empty", {
@@ -210,7 +206,7 @@ export function QualityAnalysisSection() {
         </h3>
         <p className="mt-1.5 text-[12.5px] leading-[1.6] text-text-3">
           {t("quality_analysis_desc", {
-            defaultValue: "汇总所有项目的分镜和视频评分，按模型、S/A/B 策略、项目和评分维度分析实际生成质量。",
+            defaultValue: "汇总所有项目的分镜和视频评分，按模型、分辨率、首尾帧连续性、分镜生成方式和评分维度分析实际生成质量。",
           })}
         </p>
       </div>
@@ -311,28 +307,50 @@ export function QualityAnalysisSection() {
               subtitle={t("quality_analysis_model_desc", { defaultValue: "按供应商和模型汇总所有已评分版本。" })}
               items={modelRows}
               emptyText={emptyText}
-              columns="tier"
             />
             <AnalysisTable
-              title={t("quality_analysis_tier_title", { defaultValue: "S/A/B 策略对比" })}
-              subtitle={t("quality_analysis_tier_desc", { defaultValue: "对比不同质量档位的平均评分和样本量。" })}
-              items={tierRows}
+              title={t("quality_analysis_resolution_title", { defaultValue: "分辨率对比" })}
+              subtitle={t("quality_analysis_resolution_desc", { defaultValue: "对比不同分辨率下的平均评分和样本量。" })}
+              items={resolutionRows}
               emptyText={emptyText}
-              columns="tier"
             />
             <AnalysisTable
-              title={t("quality_analysis_model_tier_title", { defaultValue: "模型 + S/A/B 组合" })}
-              subtitle={t("quality_analysis_model_tier_desc", { defaultValue: "观察某个模型在不同档位下的真实表现。" })}
-              items={modelTierRows}
+              title={t("quality_analysis_service_tier_title", { defaultValue: "服务档位对比" })}
+              subtitle={t("quality_analysis_service_tier_desc", { defaultValue: "对比默认调度和 Flex 调度下的平均评分与样本量。" })}
+              items={serviceTierRows}
               emptyText={emptyText}
-              columns="model"
+            />
+            <AnalysisTable
+              title={t("quality_analysis_continuity_title", { defaultValue: "视频连续性对比" })}
+              subtitle={t("quality_analysis_continuity_desc", { defaultValue: "观察仅首帧、首尾帧连续等策略的真实表现。" })}
+              items={continuityRows}
+              emptyText={emptyText}
+            />
+            <AnalysisTable
+              title={t("quality_analysis_storyboard_mode_title", { defaultValue: "分镜生成方式对比" })}
+              subtitle={t("quality_analysis_storyboard_mode_desc", { defaultValue: "观察沿当前分镜继续生成与重新出图的实际表现。" })}
+              items={storyboardModeRows}
+              emptyText={emptyText}
+            />
+            <AnalysisTable
+              title={t("quality_analysis_source_storyboard_model_title", { defaultValue: "来源分镜模型" })}
+              subtitle={t("quality_analysis_source_storyboard_model_desc", { defaultValue: "观察视频引用的是哪种分镜模型，对最终评分有什么影响。" })}
+              items={sourceStoryboardModelRows}
+              emptyText={emptyText}
+            />
+            <AnalysisTable
+              title={t("quality_analysis_reference_count_title", { defaultValue: "参考图数量对比" })}
+              subtitle={t("quality_analysis_reference_count_desc", { defaultValue: "对比不同参考图数量下的平均评分和样本量。" })}
+              items={referenceImageCountRows}
+              emptyText={emptyText}
             />
             <AnalysisTable
               title={t("quality_analysis_project_title", { defaultValue: "项目质量排行" })}
               subtitle={t("quality_analysis_project_desc", { defaultValue: "按项目汇总评分，帮助发现表现稳定或需要调参的项目。" })}
               items={projectRows}
               emptyText={emptyText}
-              columns="project"
+              secondaryLabel={t("quality_analysis_column_project", { defaultValue: "项目" })}
+              secondaryValue={(item) => String(item.project_name || "-")}
             />
           </div>
         </>

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { PluginSDK } from "xiaowo-sdk";
-import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Star, Upload, ChevronDown } from "lucide-react";
+import { Sparkles, Download, ImageIcon, Film, Loader2, Maximize2, Star, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API, type VersionInfo, type VersionResourceType } from "@/api";
 import { useAppStore } from "@/stores/app-store";
@@ -8,15 +8,13 @@ import { useProjectsStore } from "@/stores/projects-store";
 import { AspectFrame } from "@/components/ui/AspectFrame";
 import { ImageFlipReveal } from "@/components/ui/ImageFlipReveal";
 import { PreviewableImageFrame } from "@/components/ui/PreviewableImageFrame";
-import { Popover } from "@/components/ui/Popover";
 import { SelectMenu } from "@/components/ui/SelectMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { VideoLightbox } from "@/components/ui/VideoLightbox";
-import { DROPDOWN_PANEL_CLS, SELECT_MENU_PANEL_STYLE } from "@/components/ui/darkroom-tokens";
 import { errMsg } from "@/utils/async";
 import { pickDesktopFile } from "@/utils/desktop-file";
 import { downloadProjectVideoWithDialog } from "@/utils/video-export";
-import type { CostBreakdown, GenerationQuality, StoryboardFinalGenerationMode } from "@/types";
+import type { CostBreakdown, StoryboardFinalGenerationMode } from "@/types";
 import { VersionTimeMachine } from "./VersionTimeMachine";
 import {
   videoContinuityMetadataToPlan,
@@ -51,8 +49,6 @@ interface MediaCardProps {
   aspectRatio: "9:16" | "16:9";
   /** 是否在 grid 模式下隐藏单独生成按钮 */
   hideGenerateButton?: boolean;
-  /** 是否只隐藏快速版生成按钮。宫格模式下单格已经是快速版，仍允许生成精修版。 */
-  hideDraftGenerateButton?: boolean;
   /** 生成按钮是否禁用（视频生成需要先有分镜图） */
   generateDisabled?: boolean;
   /** 外部上传按钮是否禁用（通常仅在当前提示词有未保存编辑时禁用） */
@@ -63,10 +59,10 @@ interface MediaCardProps {
   generating?: boolean;
   /** 估算费用（按币种 breakdown，例如 {USD: 0.12} 或 {CNY: 5.25}） */
   estimatedCost?: CostBreakdown;
-  /** 未生成时展示的预计分镜视频连续性策略 */
-  expectedVideoContinuity?: ShotVideoContinuityPlan;
+  /** 评分下方、生成按钮上方的附加设置区 */
+  settingsContent?: React.ReactNode;
   /** 触发生成 */
-  onGenerate?: (quality: GenerationQuality, options?: MediaGenerateOptions) => void;
+  onGenerate?: (options?: MediaGenerateOptions) => void;
   /** 版本恢复回调 */
   onRestore?: () => Promise<void> | void;
   /** 外部上传成新版本后的回调 */
@@ -80,15 +76,15 @@ function qualityLabel(
 ): string | null {
   if (quality === "draft") {
     return kind === "storyboard"
-      ? t("generation_profile_storyboard_draft")
-      : t("generation_profile_video_draft");
+      ? t("media_storyboard_final_mode_fresh_sample", { defaultValue: "重新出图" })
+      : t("video_defaults_label", { defaultValue: "分镜视频" });
   }
   if (quality === "final") {
     return kind === "storyboard"
-      ? t("generation_profile_storyboard_final")
-      : t("generation_profile_video_final");
+      ? t("media_storyboard_final_mode_draft_locked", { defaultValue: "沿当前分镜" })
+      : t("video_defaults_label", { defaultValue: "分镜视频" });
   }
-  if (quality === "custom") return "Custom";
+  if (quality === "custom") return t("generation_profile_custom", { defaultValue: "自定义" });
   return null;
 }
 
@@ -130,10 +126,10 @@ function sourceStoryboardLabel(
   if (kind !== "video") return null;
   const quality = info?.source_storyboard_generation_quality;
   if (quality === "final") {
-    return t("media_based_on_final_storyboard", { defaultValue: "基于当前精修分镜" });
+    return t("media_based_on_final_storyboard", { defaultValue: "基于当前沿用分镜" });
   }
   if (quality === "draft") {
-    return t("media_based_on_draft_storyboard", { defaultValue: "基于当前快速分镜" });
+    return t("media_based_on_draft_storyboard", { defaultValue: "基于当前分镜" });
   }
   if (quality === "custom") {
     return t("media_based_on_custom_storyboard", { defaultValue: "基于当前自定义分镜" });
@@ -180,18 +176,10 @@ function currentVersionBadges(
 function videoContinuityBadge(
   t: (key: string, options?: Record<string, unknown>) => string,
   plan: ShotVideoContinuityPlan | null,
-  source: "actual" | "expected",
 ): string | null {
   if (!plan) return null;
-  return t("media_video_continuity_badge", {
-    defaultValue: "{{source}}：{{policy}}",
-    source:
-      source === "actual"
-        ? t("media_video_continuity_actual", { defaultValue: "实际" })
-        : t("media_video_continuity_expected", { defaultValue: "预计" }),
-    policy: t(`media_video_continuity_${plan.effectivePolicy}`, {
-      defaultValue: plan.effectivePolicy,
-    }),
+  return t(`media_video_continuity_${plan.effectivePolicy}`, {
+    defaultValue: plan.effectivePolicy,
   });
 }
 
@@ -218,12 +206,11 @@ export function MediaCard({
   posterPath,
   aspectRatio,
   hideGenerateButton,
-  hideDraftGenerateButton,
   generateDisabled,
   uploadDisabled,
   generateDisabledHint,
   generating,
-  expectedVideoContinuity,
+  settingsContent,
   onGenerate,
   onRestore,
   onUploaded,
@@ -235,8 +222,6 @@ export function MediaCard({
   const [currentVersionInfo, setCurrentVersionInfo] = useState<VersionInfo | null>(null);
   const [qualityRatingInfo, setQualityRatingInfo] = useState<QualityRatingState | null>(null);
   const [ratingSaving, setRatingSaving] = useState(false);
-  const [finalModeOpen, setFinalModeOpen] = useState(false);
-  const finalModeAnchorRef = useRef<HTMLDivElement>(null);
 
   const assetFp = useProjectsStore((s) =>
     assetPath ? s.getAssetFingerprint(assetPath) : null,
@@ -252,46 +237,14 @@ export function MediaCard({
   const Icon = kind === "storyboard" ? ImageIcon : Film;
   const title =
     kind === "storyboard" ? t("media_storyboard_title") : t("media_video_title");
-  const draftGenerateLabel =
+  const generateLabel =
     kind === "storyboard"
       ? assetPath
-        ? t("media_regenerate_storyboard_draft", {
-            defaultValue: t("media_regenerate_storyboard"),
-          })
-        : t("media_generate_storyboard_draft", {
-            defaultValue: t("media_generate_storyboard"),
-          })
+        ? t("media_regenerate_storyboard", { defaultValue: "重新生成分镜图" })
+        : t("media_generate_storyboard", { defaultValue: "生成分镜图" })
       : assetPath
-        ? t("media_regenerate_video_draft", {
-            defaultValue: t("media_regenerate_video"),
-          })
-        : t("media_generate_video_draft", {
-            defaultValue: t("media_generate_video"),
-          });
-  const finalGenerateLabel =
-    kind === "storyboard"
-      ? t("media_generate_storyboard_final", { defaultValue: "精修版" })
-      : t("media_generate_video_final", { defaultValue: "精修版" });
-  const storyboardFinalModes: Array<{
-    value: StoryboardFinalGenerationMode;
-    label: string;
-    description: string;
-  }> = [
-    {
-      value: "draft_locked",
-      label: t("media_storyboard_final_mode_draft_locked", { defaultValue: "沿当前分镜精修" }),
-      description: t("media_storyboard_final_mode_draft_locked_desc", {
-        defaultValue: "保留当前分镜构图、角色位置和镜头关系，适合稳定出正式分镜。",
-      }),
-    },
-    {
-      value: "fresh_sample",
-      label: t("media_storyboard_final_mode_fresh_sample", { defaultValue: "重新出图" }),
-      description: t("media_storyboard_final_mode_fresh_sample_desc", {
-        defaultValue: "不锁定当前分镜，只按提示词与角色、场景、道具参考重新抽一张。",
-      }),
-    },
-  ];
+        ? t("media_regenerate_video", { defaultValue: "重新生成视频" })
+        : t("media_generate_video", { defaultValue: "生成视频" });
   const resourceType: VersionResourceType =
     kind === "storyboard" ? "storyboards" : "videos";
   const previewTitle = `${segmentId} ${title}`;
@@ -302,22 +255,10 @@ export function MediaCard({
   const effectiveQualityDimensions =
     qualityRatingInfo?.version === currentVersionNumber ? qualityRatingInfo.dimensions : {};
   const actualVideoContinuity = videoContinuityMetadataToPlan(effectiveVersionInfo?.video_continuity);
-  const continuityPlan = kind === "video"
-    ? actualVideoContinuity ?? expectedVideoContinuity ?? null
-    : null;
-  const continuityBadge = kind === "video"
-    ? videoContinuityBadge(t, continuityPlan, actualVideoContinuity ? "actual" : "expected")
-    : null;
   const metaBadges = [
     ...currentVersionBadges(t, kind, effectiveVersionInfo),
-    continuityBadge,
   ].filter((badge): badge is string => Boolean(badge));
-  const ratingVersionBadge = effectiveVersionInfo
-    ? [
-        `v${effectiveVersionInfo.version}`,
-        qualityLabel(t, kind, effectiveVersionInfo.generation_quality),
-      ].filter(Boolean).join(" · ")
-    : "";
+  const currentVersionBadge = effectiveVersionInfo ? `v${effectiveVersionInfo.version}` : null;
   const qualityDimensions = qualityDimensionsForKind(kind);
   const dimensionHint = t("media_quality_dimension_hint", {
     defaultValue: "可选细项，不选不参与维度统计。",
@@ -460,7 +401,6 @@ export function MediaCard({
         provider: effectiveVersionInfo.generation_route?.provider ?? null,
         model: effectiveVersionInfo.generation_route?.model ?? null,
         generation_quality: effectiveVersionInfo.generation_quality ?? null,
-        shot_tier: effectiveVersionInfo.shot_tier ?? effectiveVersionInfo.generation_route?.shot_tier ?? null,
       });
       setQualityRatingInfo({ version: effectiveVersionInfo.version, rating, dimensions });
       useAppStore
@@ -489,14 +429,6 @@ export function MediaCard({
       nextDimensions[key] = value;
     }
     await saveQualityRating(effectiveQualityRating, nextDimensions);
-  };
-
-  const handleGenerateFinal = (mode?: StoryboardFinalGenerationMode) => {
-    if (kind === "storyboard") {
-      onGenerate?.("final", { finalGenerationMode: mode ?? "draft_locked" });
-      return;
-    }
-    onGenerate?.("final");
   };
 
   return (
@@ -531,6 +463,7 @@ export function MediaCard({
           resourceType={resourceType}
           resourceId={segmentId}
           onRestore={onRestore}
+          currentVersionLabel={currentVersionBadge}
         />
       </div>
 
@@ -641,23 +574,6 @@ export function MediaCard({
 
       {assetPath && effectiveVersionInfo && (
         <div className="mt-2 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[10.5px] font-medium text-text-4">
-              {t("media_quality_current_version", { defaultValue: "当前版本评分" })}
-            </span>
-            {ratingVersionBadge && (
-              <span
-                className="num rounded-full border px-1.5 py-0.5 text-[9.5px]"
-                style={{
-                  borderColor: "var(--color-hairline-soft)",
-                  background: "oklch(1 0 0 / 0.04)",
-                  color: "var(--color-text-3)",
-                }}
-              >
-                {ratingVersionBadge}
-              </span>
-            )}
-          </div>
           <div className="flex items-center gap-1.5">
             {[1, 2, 3, 4, 5].map((rating) => {
               const active = effectiveQualityRating != null && rating <= effectiveQualityRating;
@@ -685,6 +601,13 @@ export function MediaCard({
                 </button>
               );
             })}
+            {kind === "video" && actualVideoContinuity ? (
+              <span
+                className="ml-1 rounded-full border border-hairline-soft bg-bg-grad-a/45 px-2 py-0.5 text-[10px] text-text-3"
+              >
+                {videoContinuityBadge(t, actualVideoContinuity)}
+              </span>
+            ) : null}
           </div>
           <div className="grid grid-cols-3 gap-1.5">
             {qualityDimensions.map((dimension) => {
@@ -705,7 +628,7 @@ export function MediaCard({
                             label: String(score),
                           })),
                         ]}
-                        onChange={(raw) => {
+                        onChange={(raw: string) => {
                           void handleDimensionRating(dimension.key, raw ? Number(raw) : null);
                         }}
                         disabled={dimensionDisabled}
@@ -726,123 +649,31 @@ export function MediaCard({
         </div>
       )}
 
+      {settingsContent ? <div className="mt-2.5">{settingsContent}</div> : null}
+
       {/* Generate CTA */}
       {!hideGenerateButton && onGenerate && (
-        <div
-          className={`mt-2.5 grid gap-2 ${
-            hideDraftGenerateButton
-              ? "grid-cols-1"
-              : "grid-cols-2"
-          }`}
-        >
-          {!hideDraftGenerateButton && (
-            <button
-              type="button"
-              onClick={() => onGenerate("draft")}
-              disabled={generateDisabled || generating}
-              title={
-                generateDisabled
-                  ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-                  : undefined
-              }
-              className="focus-ring inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                color: "oklch(0.14 0 0)",
-                background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
-                boxShadow:
-                  "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
-              }}
-            >
-              <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{draftGenerateLabel}</span>
-            </button>
-          )}
-          {kind === "storyboard" ? (
-            <div ref={finalModeAnchorRef} className="relative flex min-w-0">
-              <button
-                type="button"
-                onClick={() => setFinalModeOpen((v) => !v)}
-                disabled={generateDisabled || generating}
-                title={
-                  generateDisabled
-                    ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-                    : t("media_storyboard_final_mode_menu", {
-                        defaultValue: "选择精修版生成方式",
-                      })
-                }
-                className="focus-ring inline-flex h-full w-full min-w-0 items-center justify-center gap-1.5 rounded-[10px] border px-3 py-2.5 text-[12px] font-semibold transition-colors hover:bg-[oklch(1_0_0_/_0.06)] disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  borderColor: "var(--color-hairline)",
-                  color: "var(--color-text-2)",
-                  background: "oklch(1 0 0 / 0.045)",
-                }}
-              >
-                <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{finalGenerateLabel}</span>
-                <ChevronDown
-                  className={`h-3.5 w-3.5 shrink-0 text-text-3 transition-transform ${finalModeOpen ? "rotate-180" : ""}`}
-                />
-              </button>
-              <Popover
-                open={finalModeOpen}
-                onClose={() => setFinalModeOpen(false)}
-                anchorRef={finalModeAnchorRef}
-                align="end"
-                sideOffset={6}
-                width="w-72"
-                layer="modal"
-                className={DROPDOWN_PANEL_CLS}
-                style={SELECT_MENU_PANEL_STYLE}
-              >
-                <div className="space-y-1">
-                  {storyboardFinalModes.map((mode) => (
-                    <button
-                      key={mode.value}
-                      type="button"
-                      onClick={() => {
-                        setFinalModeOpen(false);
-                        handleGenerateFinal(mode.value);
-                      }}
-                      className="focus-ring flex w-full items-start rounded-md px-2 py-2 text-left transition-colors hover:bg-[oklch(1_0_0_/_0.08)]"
-                      style={{ background: "transparent" }}
-                    >
-                      <span className="min-w-0">
-                        <span
-                          className="block text-[12.5px] font-semibold"
-                          style={{ color: "var(--color-text-2)" }}
-                        >
-                          {mode.label}
-                        </span>
-                        <span className="mt-0.5 block text-[11px] leading-snug text-text-4">
-                          {mode.description}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </Popover>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => handleGenerateFinal()}
-              disabled={generateDisabled || generating}
-              title={
-                generateDisabled
-                  ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
-                  : finalGenerateLabel
-              }
-              className="focus-ring inline-flex h-full w-full items-center justify-center gap-1.5 rounded-[10px] border px-3 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                borderColor: "var(--color-hairline)",
-                color: "var(--color-text-2)",
-                background: "oklch(1 0 0 / 0.045)",
-              }}
-            >
-              <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{finalGenerateLabel}</span>
-            </button>
-          )}
+        <div className="mt-2.5">
+          <button
+            type="button"
+            onClick={() => onGenerate()}
+            disabled={generateDisabled || generating}
+            title={
+              generateDisabled
+                ? (generateDisabledHint ?? t("media_generate_video_disabled_hint"))
+                : undefined
+            }
+            className="focus-ring inline-flex w-full min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2.5 text-[13px] font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              color: "oklch(0.14 0 0)",
+              background: "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))",
+              boxShadow:
+                "inset 0 1px 0 oklch(1 0 0 / 0.3), 0 4px 14px -4px var(--color-accent-glow)",
+            }}
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{generateLabel}</span>
+          </button>
         </div>
       )}
       {videoLightboxOpen && assetUrl && kind === "video" && (

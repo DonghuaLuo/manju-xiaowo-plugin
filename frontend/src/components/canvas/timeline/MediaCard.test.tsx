@@ -121,12 +121,12 @@ describe("MediaCard", () => {
       />,
     );
 
-    expect(await screen.findByText("视频精修版")).toBeInTheDocument();
+    expect(await screen.findByText("分镜视频")).toBeInTheDocument();
     expect(screen.getByText("1080p")).toBeInTheDocument();
     expect(screen.getByText("6s")).toBeInTheDocument();
     expect(screen.getByText("doubao/seedance")).toBeInTheDocument();
     expect(screen.getByText("已优化输入图")).toBeInTheDocument();
-    expect(screen.getByText("基于当前精修分镜")).toBeInTheDocument();
+    expect(screen.getByText("基于当前沿用分镜")).toBeInTheDocument();
   });
 
   it("shows grid storyboard as a valid video source badge", async () => {
@@ -219,7 +219,7 @@ describe("MediaCard", () => {
     );
   });
 
-  it("opens storyboard final generation modes before triggering generation", async () => {
+  it("triggers storyboard generation directly from the single action button", async () => {
     const onGenerate = vi.fn();
 
     render(
@@ -233,25 +233,11 @@ describe("MediaCard", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "精修版" }));
-    expect(onGenerate).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /精修版 ·/ })).not.toBeInTheDocument();
-
-    const draftLockedOption = await screen.findByRole("button", { name: /沿当前分镜精修/ });
-    expect(draftLockedOption.querySelector("svg")).not.toBeInTheDocument();
-    fireEvent.click(draftLockedOption);
-    expect(onGenerate).toHaveBeenLastCalledWith("final", {
-      finalGenerationMode: "draft_locked",
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "精修版" }));
-    fireEvent.click(await screen.findByRole("button", { name: /重新出图/ }));
-    expect(onGenerate).toHaveBeenLastCalledWith("final", {
-      finalGenerationMode: "fresh_sample",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "生成分镜" }));
+    expect(onGenerate).toHaveBeenCalledWith();
   });
 
-  it("renders the video final button with the same action icon", () => {
+  it("renders the single video generate button with the action icon", () => {
     render(
       <MediaCard
         kind="video"
@@ -264,8 +250,7 @@ describe("MediaCard", () => {
       />,
     );
 
-    const finalButton = screen.getByRole("button", { name: "精修版" });
-    expect(finalButton.querySelector("svg")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成快速版" })).toBeInTheDocument();
+    const generateButton = screen.getByRole("button", { name: "生成视频" });
+    expect(generateButton.querySelector("svg")).toBeInTheDocument();
   });
 });

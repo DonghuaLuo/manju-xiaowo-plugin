@@ -6,13 +6,20 @@ import { useWarnUnsaved } from "@/hooks/useWarnUnsaved";
 import { API } from "@/api";
 import type { SystemConfigSettings, SystemConfigOptions, SystemConfigPatch } from "@/types/system";
 import type { CustomProviderInfo } from "@/types/custom-provider";
+import type { ProviderInfo } from "@/types/provider";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { ImageModelDualSelect } from "@/components/shared/ImageModelDualSelect";
 import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useAppStore } from "@/stores/app-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { errMsg } from "@/utils/async";
-import { getCustomProviderModels } from "@/utils/provider-models";
+import {
+  getCustomProviderModels,
+  getProviderModels,
+  lookupVideoServiceTiers,
+  type VideoServiceTier,
+} from "@/utils/provider-models";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, CARD_STYLE } from "@/components/ui/darkroom-tokens";
 
 interface CardProps {
@@ -46,6 +53,7 @@ function SectionCard({ kicker, title, description, children }: CardProps) {
 
 export function MediaModelSection() {
   const { t } = useTranslation("dashboard");
+  const SERVICE_TIERS = useMemo(() => ["default", "flex"] as const satisfies readonly VideoServiceTier[], []);
 
   const TEXT_MODEL_FIELDS = useMemo(
     () =>
@@ -59,6 +67,7 @@ export function MediaModelSection() {
 
   const [settings, setSettings] = useState<SystemConfigSettings | null>(null);
   const [options, setOptions] = useState<SystemConfigOptions | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const [draft, setDraft] = useState<SystemConfigPatch>({});
   const [saving, setSaving] = useState(false);
@@ -72,12 +81,14 @@ export function MediaModelSection() {
   );
 
   const fetchConfig = useCallback(async () => {
-    const [res, custom] = await Promise.all([
+    const [res, providerList, custom] = await Promise.all([
       API.getSystemConfig(),
+      getProviderModels().catch(() => [] as ProviderInfo[]),
       getCustomProviderModels().catch(() => [] as CustomProviderInfo[]),
     ]);
     setSettings(res.settings);
     setOptions(res.options);
+    setProviders(providerList);
     setCustomProviders(custom);
     setDraft({});
   }, []);
@@ -103,6 +114,42 @@ export function MediaModelSection() {
     }
   }, [draft, fetchConfig, t]);
 
+  const currentVideo = draft.default_video_backend ?? settings?.default_video_backend ?? "";
+  const currentVideoServiceTier =
+    draft.default_video_service_tier ?? settings?.default_video_service_tier ?? "default";
+  const currentImageT2I =
+    draft.default_image_backend_t2i ??
+    settings?.default_image_backend_t2i ??
+    settings?.default_image_backend ??
+    "";
+  const currentImageI2I =
+    draft.default_image_backend_i2i ??
+    settings?.default_image_backend_i2i ??
+    settings?.default_image_backend ??
+    "";
+  const currentAudio = draft.video_generate_audio ?? settings?.video_generate_audio ?? false;
+  const supportedVideoServiceTiers = useMemo(
+    () => (currentVideo ? lookupVideoServiceTiers(providers, currentVideo, customProviders) : null),
+    [currentVideo, customProviders, providers],
+  );
+
+  useEffect(() => {
+    if (!currentVideo) return;
+    if (
+      !supportedVideoServiceTiers
+      || supportedVideoServiceTiers.includes(currentVideoServiceTier as VideoServiceTier)
+    ) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setDraft((prev) => ({ ...prev, default_video_service_tier: "default" }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentVideo, currentVideoServiceTier, supportedVideoServiceTiers]);
+
   if (!settings || !options) {
     return (
       <div className="flex items-center gap-2 px-1 py-12 text-text-3">
@@ -117,19 +164,6 @@ export function MediaModelSection() {
   const videoBackends: string[] = options.video_backends ?? [];
   const imageBackends: string[] = options.image_backends ?? [];
   const textBackends: string[] = options.text_backends ?? [];
-
-  const currentVideo = draft.default_video_backend ?? settings.default_video_backend ?? "";
-  const currentImageT2I =
-    draft.default_image_backend_t2i ??
-    settings.default_image_backend_t2i ??
-    settings.default_image_backend ??
-    "";
-  const currentImageI2I =
-    draft.default_image_backend_i2i ??
-    settings.default_image_backend_i2i ??
-    settings.default_image_backend ??
-    "";
-  const currentAudio = draft.video_generate_audio ?? settings.video_generate_audio ?? false;
 
   const emptyHint = (msg: string) => (
     <div className="rounded-[8px] border border-hairline-soft bg-bg-grad-a/45 px-3 py-2.5 text-[12px] text-text-3">
@@ -168,7 +202,18 @@ export function MediaModelSection() {
             value={currentVideo}
             options={videoBackends}
             providerNames={allProviderNames}
-            onChange={(v) => setDraft((prev) => ({ ...prev, default_video_backend: v }))}
+            onChange={(v) =>
+              setDraft((prev) => ({
+                ...prev,
+                default_video_backend: v,
+                default_video_service_tier:
+                  v && lookupVideoServiceTiers(providers, v, customProviders)?.includes(
+                    (prev.default_video_service_tier ?? currentVideoServiceTier) as VideoServiceTier,
+                  )
+                    ? prev.default_video_service_tier ?? currentVideoServiceTier
+                    : "default",
+              }))
+            }
             allowDefault
             defaultLabel={t("auto_select")}
             defaultHint={t("auto")}
@@ -176,6 +221,40 @@ export function MediaModelSection() {
         ) : (
           emptyHint(t("no_video_providers_hint"))
         )}
+
+        {currentVideo ? (
+          <div className="mt-4">
+            <div className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+              {t("video_service_tier_label")}
+            </div>
+            <SelectMenu
+              value={currentVideoServiceTier}
+              options={SERVICE_TIERS.map((tier) => ({
+                value: tier,
+                label: t(`service_tier_${tier}`),
+                description: t(`service_tier_${tier}_desc`),
+                disabled:
+                  tier !== "default"
+                  && Boolean(supportedVideoServiceTiers)
+                  && !(supportedVideoServiceTiers?.includes(tier) ?? false),
+                hint:
+                  tier !== "default"
+                  && Boolean(supportedVideoServiceTiers)
+                  && !(supportedVideoServiceTiers?.includes(tier) ?? false)
+                    ? t("service_tier_unsupported_hint")
+                    : undefined,
+              }))}
+              onChange={(v) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  default_video_service_tier: v || "default",
+                }))
+              }
+              ariaLabel={t("video_service_tier_label")}
+              panelLabel={t("video_service_tier_label")}
+            />
+          </div>
+        ) : null}
 
         <div className="mt-4 flex items-start gap-2.5 text-[12.5px] text-text-2">
           <input

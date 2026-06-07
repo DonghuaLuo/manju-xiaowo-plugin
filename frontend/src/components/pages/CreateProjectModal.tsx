@@ -13,10 +13,10 @@ import { PROVIDER_NAMES } from "@/components/ui/ProviderIcon";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useEscapeClose } from "@/hooks/useEscapeClose";
 import {
+  compactGenerationProfiles,
   IMAGE_PROFILE_RESOLUTIONS,
   VIDEO_PROFILE_RESOLUTIONS,
   createDefaultGenerationProfiles,
-  createDefaultShotTierProfiles,
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
 import { lookupResolutions, lookupVideoContinuitySupport } from "@/utils/provider-models";
@@ -30,7 +30,7 @@ import { WizardStep2Models, type WizardStep2Data } from "./create-project/Wizard
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { GenerationProfiles, MediaType, VideoContinuityPolicy } from "@/types";
+import type { GenerationProfiles, MediaType } from "@/types";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -214,7 +214,6 @@ export function CreateProjectModal() {
   const [generationProfilesExpanded, setGenerationProfilesExpanded] = useState(false);
   const [generationProfilesCustomized, setGenerationProfilesCustomized] = useState(false);
   const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>({});
-  const [videoContinuityPolicy, setVideoContinuityPolicy] = useState<VideoContinuityPolicy>("auto");
 
   const [style, setStyle] = useState<WizardStep3Value>({
     mode: "template",
@@ -428,6 +427,10 @@ export function CreateProjectModal() {
       const savedGenerationProfiles = generationProfilesCustomized
         ? normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles)
         : defaultGenerationProfiles;
+      const compactedGenerationProfiles = compactGenerationProfiles(
+        savedGenerationProfiles,
+        defaultGenerationProfiles,
+      );
 
       const resp = await API.createProject({
         title: basics.title.trim(),
@@ -436,7 +439,6 @@ export function CreateProjectModal() {
         aspect_ratio: basics.aspectRatio,
         generation_mode: basics.generationMode,
         script_splitting_template_id: basics.scriptSplittingTemplateId || null,
-        video_continuity_policy: videoContinuityPolicy,
         default_duration: models.defaultDuration,
         style_template_id: style.mode === "template" ? style.templateId : null,
         video_backend: models.videoBackend || null,
@@ -445,13 +447,7 @@ export function CreateProjectModal() {
         text_backend_script: models.textBackendScript || null,
         text_backend_overview: models.textBackendOverview || null,
         text_backend_style: models.textBackendStyle || null,
-        generation_profiles: savedGenerationProfiles,
-        shot_tier_profiles: createDefaultShotTierProfiles({
-          imageResolution: models.imageResolution,
-          videoResolution: models.videoResolution,
-          imageResolutionOptions: profileImageResolutionOptions,
-          videoResolutionOptions: profileVideoResolutionOptions,
-        }),
+        generation_profiles: compactedGenerationProfiles,
         ...(Object.keys(modelSettings).length > 0 ? { model_settings: modelSettings } : {}),
       });
 
@@ -608,8 +604,6 @@ export function CreateProjectModal() {
               onGenerationProfilesExpandedChange={setGenerationProfilesExpanded}
               generationProfiles={generationProfiles}
               onGenerationProfilesChange={handleGenerationProfilesChange}
-              videoContinuityPolicy={videoContinuityPolicy}
-              onVideoContinuityPolicyChange={setVideoContinuityPolicy}
               generationMode={basics.generationMode}
             />
           )}

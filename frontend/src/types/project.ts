@@ -7,10 +7,6 @@
  * - server/routers/projects.py (ProjectSummary list response)
  */
 
-import type { ShotTier } from "./script";
-
-export type VideoContinuityPolicy = "auto" | "start_only" | "end_frame" | "reference_assisted";
-
 export interface ProjectOverview {
   synopsis: string;
   genre: string;
@@ -130,14 +126,6 @@ export interface GenerationProfiles {
   reference_video_final?: VideoGenerationProfile;
 }
 
-export interface ShotTierProfile {
-  label?: string | null;
-  retry_budget?: number | null;
-  video_continuity_policy?: VideoContinuityPolicy | null;
-  prefer_final_storyboard_source?: boolean | null;
-  profiles?: Partial<Record<keyof GenerationProfiles, ImageGenerationProfile | VideoGenerationProfile>>;
-}
-
 export interface ProjectData {
   title: string;
   content_mode: "narration" | "drama";
@@ -204,13 +192,12 @@ export interface ProjectData {
   /** Canonical values: storyboard | grid | reference_video. "single" is legacy-only. */
   generation_mode?: "storyboard" | "grid" | "reference_video" | "single";
   video_generate_audio?: boolean | null;
+  video_service_tier?: string | null;
   text_backend_script?: string | null;
   text_backend_overview?: string | null;
   text_backend_style?: string | null;
   model_settings?: Record<string, ModelSettingEntry>;
   generation_profiles?: GenerationProfiles;
-  shot_tier_profiles?: Partial<Record<ShotTier, ShotTierProfile>>;
-  video_continuity_policy?: VideoContinuityPolicy | null;
   /** Legacy field: keyed by model_id only (before composite key refactor). Read-only at UI layer. */
   video_model_settings?: Record<string, { resolution?: string | null }>;
   metadata?: {

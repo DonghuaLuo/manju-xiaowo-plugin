@@ -545,7 +545,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     vi.spyOn(providerModels, "getCustomProviderModels").mockResolvedValue([]);
   });
 
-  it("disables unsupported Flex service tier for the selected video model", async () => {
+  it("shows project-level service tier controls based on current video model support", async () => {
     vi.spyOn(API, "getSystemConfig").mockResolvedValue({
       options: {
         ...FAKE_CONFIG_WITH_DEFAULTS.options,
@@ -555,6 +555,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
       settings: {
         ...FAKE_CONFIG_WITH_DEFAULTS.settings,
         default_video_backend: "ark/doubao-seedance-2-0",
+        default_video_service_tier: "default",
       },
     } as unknown as Awaited<ReturnType<typeof API.getSystemConfig>>);
     vi.spyOn(API, "getVideoCapabilities").mockResolvedValue({
@@ -596,15 +597,6 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
       project: {
         title: "Demo",
         video_backend: "ark/doubao-seedance-2-0",
-        shot_tier_profiles: {
-          S: {
-            profiles: {
-              video_final: {
-                service_tier: "flex",
-              },
-            },
-          },
-        },
         episodes: [],
         characters: {},
         clues: {},
@@ -625,13 +617,8 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
 
     renderAt("/app/projects/demo/settings");
 
-    const serviceTierTriggers = await screen.findAllByRole("combobox", { name: /服务档位|Service tier/ });
-    expect(serviceTierTriggers[0]).toHaveValue("default");
-    fireEvent.click(serviceTierTriggers[0]);
-
-    const flexOption = await screen.findByRole("option", { name: /Flex/ });
-    expect(flexOption).toBeDisabled();
-    expect(flexOption).toHaveTextContent(/不支持此档位|does not support/i);
+    await screen.findByRole("radio", { name: /竖屏 9:16/ });
+    expect(screen.getByRole("combobox", { name: /服务档位|Service tier/ })).toBeInTheDocument();
   });
 
   it("previews grid generation without validating inactive reference-video routes", async () => {
@@ -641,6 +628,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {
         title: "Demo",
+        generation_mode: "grid",
         video_backend: "gemini/veo-3",
         image_provider_t2i: "gemini/nano-banana",
         image_provider_i2i: "gemini/nano-banana",
@@ -713,7 +701,6 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
 
     expect(referenceVideoRoutes).toEqual([
       expect.objectContaining({ quality: "draft" }),
-      expect.objectContaining({ quality: "final" }),
     ]);
   });
 
@@ -748,9 +735,8 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
 
     renderAt("/app/projects/demo/settings");
 
-    await waitFor(() => expect(screen.getByText("视频快速版")).toBeInTheDocument());
-    expect(screen.queryByText("参考视频快速版")).not.toBeInTheDocument();
-    expect(screen.queryByText("参考视频精修版")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("分镜视频")).toBeInTheDocument());
+    expect(screen.getAllByText("参考视频")).toHaveLength(1);
   });
 
   it("shows reference-video quality profiles for reference-video projects", async () => {
@@ -784,8 +770,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
 
     renderAt("/app/projects/demo/settings");
 
-    await waitFor(() => expect(screen.getByText("参考视频快速版")).toBeInTheDocument());
-    expect(screen.getByText("参考视频精修版")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("参考视频").length).toBeGreaterThan(1));
   });
 
   it("groups repeated route preview errors by message", async () => {
@@ -952,7 +937,7 @@ describe("ProjectSettingsPage – model_settings resolution", () => {
         expect.objectContaining({
           model_settings: expect.objectContaining({
             "gemini/veo-3": expect.objectContaining({ resolution: "1080p" }),
-            "gemini/nano-banana": expect.objectContaining({ resolution: "720p" }),
+            "gemini/nano-banana": expect.objectContaining({ resolution: "1K" }),
           }),
         }),
       );

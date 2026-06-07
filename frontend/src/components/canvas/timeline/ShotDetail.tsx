@@ -13,19 +13,22 @@ import {
 } from "lucide-react";
 import { API } from "@/api";
 import type {
+  CustomProviderInfo,
   NarrationSegment,
   DramaScene,
   ImagePrompt,
   VideoPrompt,
   Dialogue,
   GenerationQuality,
+  ProviderInfo,
   StoryboardFinalGenerationMode,
-  ShotTier,
-  ShotTierProfile,
+  StoryboardGenerationSettings,
   TransitionType,
+  VideoGenerationSettings,
   VideoContinuityPolicy,
 } from "@/types";
 import { useAppStore } from "@/stores/app-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import { ImagePromptEditor } from "./ImagePromptEditor";
 import { VideoPromptEditor } from "./VideoPromptEditor";
 import { DialogueListEditor } from "./DialogueListEditor";
@@ -35,20 +38,25 @@ import { NotesDrawer } from "./NotesDrawer";
 import { ReferencesSection } from "./ReferencesSection";
 import { StatusBadge, statusFromAssets } from "./StatusBadge";
 import { Popover } from "@/components/ui/Popover";
+import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { useCostStore } from "@/stores/cost-store";
-import {
-  isStructuredImagePrompt,
-  isStructuredVideoPrompt,
-} from "@/utils/prompt-shape";
+import { isStructuredImagePrompt, isStructuredVideoPrompt } from "@/utils/prompt-shape";
 import { isContinuousIntegerRange } from "@/utils/duration_format";
 import { copyText } from "@/utils/clipboard";
 import { errMsg } from "@/utils/async";
 import { pickDesktopDirectory } from "@/utils/desktop-file";
 import { exportExternalGenerationPackage } from "@/utils/external-generation-export";
-import { resolveExpectedShotVideoContinuity } from "@/utils/video-continuity";
-import { normalizeShotTierProfiles } from "@/utils/generation-profiles";
-import type { VideoContinuitySupport } from "@/utils/provider-models";
+import { IMAGE_PROFILE_RESOLUTIONS, VIDEO_PROFILE_RESOLUTIONS } from "@/utils/generation-profiles";
+import {
+  getCustomProviderModels,
+  getProviderModels,
+  lookupResolutions,
+  lookupVideoContinuitySupport,
+  type VideoContinuitySupport,
+} from "@/utils/provider-models";
+import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 
 type Segment = NarrationSegment | DramaScene;
 type ImagePromptValue = ImagePrompt | string;
@@ -62,7 +70,6 @@ interface ShotDetailProps {
   aspectRatio: "9:16" | "16:9";
   projectName: string;
   scriptFile?: string;
-  isGridMode?: boolean;
   /** Total shot count for "1/N" indicator */
   selectedIndex: number;
   totalCount: number;
@@ -78,15 +85,17 @@ interface ShotDetailProps {
     quality?: GenerationQuality,
     options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) => void;
-  onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateVideo?: (
+    segmentId: string,
+    quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
+  ) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
   generatingStoryboard?: boolean;
   generatingVideo?: boolean;
   durationOptions?: number[];
-  videoContinuityPolicy?: VideoContinuityPolicy;
   videoContinuitySupport?: VideoContinuitySupport | null;
-  shotTierProfiles?: Partial<Record<ShotTier, ShotTierProfile>>;
 }
 
 function getNovelText(seg: Segment, mode: "narration" | "drama"): string {
@@ -102,6 +111,8 @@ interface DraftState {
 // 字段集合稳定（ImagePrompt/VideoPrompt/string），JSON.stringify 即可作等值签名：
 // 任何字段顺序差异都来自我们自己的 setter 或上游同一构造路径，键序一致。
 const stableSig = (value: unknown): string => JSON.stringify(value ?? null);
+const PROFILE_INPUT_CLS =
+  "h-8 w-full rounded-[7px] border border-hairline-soft bg-bg-grad-a/45 px-2.5 text-[12px] text-text outline-none transition-colors hover:border-hairline focus:border-accent focus:ring-2 focus:ring-accent/30";
 
 interface DurationPillProps {
   seconds: number;
@@ -110,103 +121,7 @@ interface DurationPillProps {
   onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
 }
 
-const SHOT_TIERS: ShotTier[] = ["S", "A", "B"];
 const TRANSITION_TYPES: TransitionType[] = ["cut", "fade", "dissolve"];
-
-function isShotTier(value: unknown): value is ShotTier {
-  return value === "S" || value === "A" || value === "B";
-}
-
-function normalizeShotTier(value: unknown): ShotTier {
-  return isShotTier(value) ? value : "A";
-}
-
-function ShotTierPill({
-  tier,
-  explicit,
-  segmentId,
-  onUpdatePrompt,
-}: {
-  tier: ShotTier;
-  explicit: boolean;
-  segmentId: string;
-  onUpdatePrompt?: ShotDetailProps["onUpdatePrompt"];
-}) {
-  const { t } = useTranslation("dashboard");
-  const editable = !!onUpdatePrompt;
-  const label = t("shot_tier_label", { defaultValue: "镜头档位" });
-  const tierHints: Record<ShotTier, string> = {
-    S: t("shot_tier_hint_s", {
-      defaultValue: "S 重点镜头：用于关键画面、主角特写或重要剧情点。",
-    }),
-    A: t("shot_tier_hint_a", {
-      defaultValue: "A 标准镜头：默认档位，适合大多数普通分镜。",
-    }),
-    B: t("shot_tier_hint_b", {
-      defaultValue: "B 辅助镜头：适合过渡、环境补充或次要镜头。",
-    }),
-  };
-
-  if (!editable) {
-    return (
-      <span
-        className="num inline-flex items-center rounded-md px-2 py-[3px] text-[11.5px] font-semibold"
-        title={`${label} · ${tierHints[tier]}`}
-        aria-label={`${label} · ${tierHints[tier]}`}
-        style={{
-          background: "oklch(0.22 0.011 265 / 0.6)",
-          border: "1px solid var(--color-hairline-soft)",
-          color: "var(--color-text-2)",
-        }}
-      >
-        {tier}
-      </span>
-    );
-  }
-
-  return (
-    <div
-      className="inline-flex items-center rounded-md p-0.5"
-      role="radiogroup"
-      aria-label={label}
-      style={{
-        background: "oklch(0.22 0.011 265 / 0.6)",
-        border: "1px solid var(--color-hairline-soft)",
-      }}
-    >
-      {SHOT_TIERS.map((candidate) => {
-        const active = candidate === tier;
-        const hint = `${label} · ${tierHints[candidate]}`;
-        return (
-          <Tooltip key={candidate}>
-            <TooltipTrigger>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={active}
-                aria-label={hint}
-                onClick={() => {
-                  if (!active || !explicit) void onUpdatePrompt?.(segmentId, "shot_tier", candidate);
-                }}
-                className="num rounded px-1.5 py-0.5 text-[11px] font-bold transition-colors focus-ring"
-                style={{
-                  minWidth: 22,
-                  color: active ? "oklch(0.14 0 0)" : "var(--color-text-3)",
-                  background: active
-                    ? "linear-gradient(180deg, var(--color-accent-2), var(--color-accent))"
-                    : "transparent",
-                }}
-              >
-                {candidate}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">{tierHints[candidate]}</TooltipContent>
-          </Tooltip>
-        );
-      })}
-    </div>
-  );
-}
 
 function TransitionPill({
   value,
@@ -488,7 +403,6 @@ export function ShotDetail({
   aspectRatio,
   projectName,
   scriptFile,
-  isGridMode,
   selectedIndex,
   totalCount,
   onPrev,
@@ -501,32 +415,143 @@ export function ShotDetail({
   generatingStoryboard,
   generatingVideo,
   durationOptions = [],
-  videoContinuityPolicy,
   videoContinuitySupport,
-  shotTierProfiles,
 }: ShotDetailProps) {
   const { t } = useTranslation("dashboard");
+  const currentProjectData = useProjectsStore((s) => s.currentProjectData);
+  const endpointToMediaType = useEndpointCatalogStore((s) => s.endpointToMediaType);
+  const fetchEndpointCatalog = useEndpointCatalogStore((s) => s.fetch);
+  const [providerOptions, setProviderOptions] = useState<{
+    providers: ProviderInfo[];
+    customProviders: CustomProviderInfo[];
+    imageBackends: string[];
+    videoBackends: string[];
+    providerNames: Record<string, string>;
+    globalVideoBackend: string;
+    globalImageBackendT2I: string;
+  }>({
+    providers: [],
+    customProviders: [],
+    imageBackends: [],
+    videoBackends: [],
+    providerNames: {},
+    globalVideoBackend: "",
+    globalImageBackendT2I: "",
+  });
+
+  useEffect(() => {
+    let disposed = false;
+    Promise.all([getProviderModels(), getCustomProviderModels(), API.getSystemConfig()])
+      .then(([providers, customProviders, systemConfig]) => {
+        if (disposed) return;
+        setProviderOptions({
+          providers,
+          customProviders,
+          imageBackends: systemConfig.options.image_backends ?? [],
+          videoBackends: systemConfig.options.video_backends ?? [],
+          providerNames: systemConfig.options.provider_names ?? {},
+          globalVideoBackend: systemConfig.settings.default_video_backend ?? "",
+          globalImageBackendT2I:
+            systemConfig.settings.default_image_backend_t2i
+            ?? systemConfig.settings.default_image_backend
+            ?? "",
+        });
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (providerOptions.customProviders.length > 0) void fetchEndpointCatalog();
+  }, [fetchEndpointCatalog, providerOptions.customProviders.length]);
+
   const status = statusFromAssets(segment.generated_assets?.status);
   const novelText = getNovelText(segment, contentMode);
-  const shotTierExplicit = isShotTier(segment.shot_tier);
-  const shotTier = normalizeShotTier(segment.shot_tier);
-  const shotTierProfile = useMemo(
-    () => normalizeShotTierProfiles(shotTierProfiles)[shotTier],
-    [shotTier, shotTierProfiles],
+  const storyboardSettings = segment.storyboard_generation ?? {};
+  const videoSettings = segment.video_generation ?? {};
+  const projectImageBackend =
+    currentProjectData?.image_provider_t2i
+    || currentProjectData?.image_backend
+    || providerOptions.globalImageBackendT2I;
+  const projectVideoBackend =
+    currentProjectData?.video_backend
+    || providerOptions.globalVideoBackend;
+  const effectiveStoryboardBackend = storyboardSettings.image_backend || projectImageBackend || "";
+  const derivedVideoContinuityPolicy: VideoContinuityPolicy = useMemo(() => {
+    const transition = String(segment.transition_to_next || "cut").trim().toLowerCase();
+    if (!nextSegment || transition === "fade" || transition === "dissolve") return "start_only";
+    return "end_frame";
+  }, [nextSegment, segment.transition_to_next]);
+  const effectiveVideoBackend = videoSettings.video_backend || projectVideoBackend || "";
+  const storyboardResolutionOptions = useMemo(() => {
+    if (!effectiveStoryboardBackend) return [...IMAGE_PROFILE_RESOLUTIONS];
+    const resolved = lookupResolutions(
+      providerOptions.providers,
+      effectiveStoryboardBackend,
+      providerOptions.customProviders,
+      endpointToMediaType,
+    );
+    return resolved.options.length > 0 ? resolved.options : [...IMAGE_PROFILE_RESOLUTIONS];
+  }, [
+    effectiveStoryboardBackend,
+    endpointToMediaType,
+    providerOptions.customProviders,
+    providerOptions.providers,
+  ]);
+  const videoResolutionOptions = useMemo(() => {
+    if (!effectiveVideoBackend) return [...VIDEO_PROFILE_RESOLUTIONS];
+    const resolved = lookupResolutions(
+      providerOptions.providers,
+      effectiveVideoBackend,
+      providerOptions.customProviders,
+      endpointToMediaType,
+    );
+    return resolved.options.length > 0 ? resolved.options : [...VIDEO_PROFILE_RESOLUTIONS];
+  }, [
+    effectiveVideoBackend,
+    endpointToMediaType,
+    providerOptions.customProviders,
+    providerOptions.providers,
+  ]);
+  const effectiveVideoContinuitySupport = useMemo(
+    () =>
+      effectiveVideoBackend
+        ? lookupVideoContinuitySupport(effectiveVideoBackend, providerOptions.customProviders)
+        : videoContinuitySupport,
+    [effectiveVideoBackend, providerOptions.customProviders, videoContinuitySupport],
+  );
+  const continuityOptions = useMemo(
+    () => (
+      effectiveVideoContinuitySupport?.endFrame
+        ? [
+            {
+              value: "start_only",
+              label: t("video_continuity_policy_start_only"),
+            },
+            {
+              value: "end_frame",
+              label: t("video_continuity_policy_end_frame"),
+            },
+          ]
+        : [
+            {
+              value: "start_only",
+              label: t("video_continuity_policy_start_only"),
+            },
+          ]
+    ),
+    [effectiveVideoContinuitySupport?.endFrame, t],
   );
   const effectiveVideoContinuityPolicy =
-    shotTierProfile.video_continuity_policy ?? videoContinuityPolicy;
+    (
+      videoSettings.video_continuity_policy === "start_only"
+      || videoSettings.video_continuity_policy === "end_frame"
+    )
+      ? videoSettings.video_continuity_policy
+      : derivedVideoContinuityPolicy;
   const segCost = useCostStore((s) => s.getSegmentCost(segmentId));
-  const expectedVideoContinuity = useMemo(
-    () =>
-      resolveExpectedShotVideoContinuity({
-        policy: effectiveVideoContinuityPolicy,
-        support: videoContinuitySupport,
-        currentSegment: segment,
-        nextSegment,
-      }),
-    [effectiveVideoContinuityPolicy, nextSegment, segment, videoContinuitySupport],
-  );
 
   const ip = segment.image_prompt;
   const vp = segment.video_prompt;
@@ -542,6 +567,9 @@ export function ShotDetail({
   const [saving, setSaving] = useState(false);
   const [copyingPrompt, setCopyingPrompt] = useState<"storyboard" | "video" | null>(null);
   const [exportingRefs, setExportingRefs] = useState<"storyboard" | "video" | null>(null);
+  const [pendingVideoContinuityPolicy, setPendingVideoContinuityPolicy] = useState<VideoContinuityPolicy>(
+    effectiveVideoContinuityPolicy,
+  );
 
   const upstreamSig = useMemo(
     () => stableSig({ ip, vp }),
@@ -553,6 +581,16 @@ export function ShotDetail({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setPendingVideoContinuityPolicy(effectiveVideoContinuityPolicy);
+    });
+    return () => {
+      active = false;
+    };
+  }, [effectiveVideoContinuityPolicy, segmentId]);
 
   // 上游变更（保存完成 / agent 编辑）：草稿干净时静默跟随；脏时保留用户输入。
   // 把 draft 放到 ref 里读，避免每次 keystroke 都重跑 effect+stringify。
@@ -647,6 +685,44 @@ export function ShotDetail({
     if (saving) return;
     setDraft({ image_prompt: ip, video_prompt: vp });
   };
+
+  const updateStoryboardGeneration = useCallback(
+    async (patch: Partial<StoryboardGenerationSettings>) => {
+      if (!onUpdatePrompt) return;
+      await onUpdatePrompt(segmentId, "storyboard_generation", {
+        ...(segment.storyboard_generation ?? {}),
+        ...patch,
+      });
+    },
+    [onUpdatePrompt, segment.storyboard_generation, segmentId],
+  );
+
+  const updateVideoGeneration = useCallback(
+    async (patch: Partial<VideoGenerationSettings>) => {
+      if (!onUpdatePrompt) return;
+      await onUpdatePrompt(segmentId, "video_generation", {
+        ...(segment.video_generation ?? {}),
+        ...patch,
+      });
+    },
+    [onUpdatePrompt, segment.video_generation, segmentId],
+  );
+
+  useEffect(() => {
+    if (
+      pendingVideoContinuityPolicy === "end_frame"
+      && effectiveVideoContinuitySupport?.endFrame === false
+    ) {
+      let active = true;
+      queueMicrotask(() => {
+        if (active) setPendingVideoContinuityPolicy("start_only");
+      });
+      return () => {
+        active = false;
+      };
+    }
+    return undefined;
+  }, [pendingVideoContinuityPolicy, effectiveVideoContinuitySupport?.endFrame]);
 
   const dirtyHint = t("shot_detail_save_first");
 
@@ -998,6 +1074,160 @@ export function ShotDetail({
     </div>
   );
 
+  const storyboardSettingsPanel = (
+    <div className="space-y-2.5 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3">
+      <div>
+        <div className="mb-1 text-[11px] text-text-3">
+          {t("model_image", { defaultValue: "图片模型" })}
+        </div>
+        <ProviderModelSelect
+          value={storyboardSettings.image_backend ?? ""}
+          options={providerOptions.imageBackends}
+          providerNames={providerOptions.providerNames}
+          onChange={(next) => {
+            const nextBackend = next || null;
+            const nextOptions = nextBackend
+              ? lookupResolutions(
+                  providerOptions.providers,
+                  nextBackend,
+                  providerOptions.customProviders,
+                  endpointToMediaType,
+                ).options
+              : storyboardResolutionOptions;
+            const nextResolution = storyboardSettings.resolution
+              ? (nextOptions.includes(storyboardSettings.resolution)
+                  ? storyboardSettings.resolution
+                  : nextOptions.includes("1K")
+                    ? "1K"
+                    : nextOptions[0] ?? null)
+              : null;
+            void updateStoryboardGeneration({
+              image_backend: nextBackend,
+              resolution: nextResolution,
+            });
+          }}
+          allowDefault
+          defaultLabel={t("follow_global_default", { defaultValue: "跟随项目默认" })}
+          fallbackValue={projectImageBackend || undefined}
+          aria-label={t("model_image", { defaultValue: "图片模型" })}
+        />
+      </div>
+      <label className="block">
+        <span className="mb-1 block text-[11px] text-text-3">
+          {t("resolution_label")}
+        </span>
+        <SelectMenu
+          value={storyboardSettings.resolution ?? ""}
+          options={[
+            { value: "", label: t("follow_global_default", { defaultValue: "跟随项目默认" }) },
+            ...storyboardResolutionOptions.map((resolution) => ({
+              value: resolution,
+              label: resolution,
+            })),
+          ]}
+          onChange={(next) => {
+            void updateStoryboardGeneration({ resolution: next || null });
+          }}
+          ariaLabel={t("resolution_label")}
+          panelLabel={t("resolution_label")}
+          className={PROFILE_INPUT_CLS}
+        />
+      </label>
+      <label className="flex items-center gap-2 rounded-[8px] border border-hairline-soft bg-bg-grad-a/35 px-3 py-2 text-[12px] text-text-2">
+        <input
+          type="checkbox"
+          checked={storyboardSettings.use_current_as_reference === true}
+          onChange={(event) => {
+            void updateStoryboardGeneration({
+              use_current_as_reference: event.currentTarget.checked,
+            });
+          }}
+          className="accent-[var(--color-accent)]"
+        />
+        <span>
+          {t("media_storyboard_final_mode_draft_locked", { defaultValue: "沿当前分镜继续生成" })}
+        </span>
+      </label>
+    </div>
+  );
+
+  const videoSettingsPanel = (
+    <div className="space-y-2.5 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3">
+      <div>
+        <div className="mb-1 text-[11px] text-text-3">
+          {t("model_video", { defaultValue: "视频模型" })}
+        </div>
+        <ProviderModelSelect
+          value={videoSettings.video_backend ?? ""}
+          options={providerOptions.videoBackends}
+          providerNames={providerOptions.providerNames}
+          onChange={(next) => {
+            const nextBackend = next || null;
+            const nextOptions = nextBackend
+              ? lookupResolutions(
+                  providerOptions.providers,
+                  nextBackend,
+                  providerOptions.customProviders,
+                  endpointToMediaType,
+                ).options
+              : videoResolutionOptions;
+            const nextResolution = videoSettings.resolution
+              ? (nextOptions.includes(videoSettings.resolution)
+                  ? videoSettings.resolution
+                  : nextOptions.includes("720p")
+                    ? "720p"
+                    : nextOptions[0] ?? null)
+              : null;
+            void updateVideoGeneration({
+              video_backend: nextBackend,
+              resolution: nextResolution,
+            });
+          }}
+          allowDefault
+          defaultLabel={t("follow_global_default", { defaultValue: "跟随项目默认" })}
+          fallbackValue={projectVideoBackend || undefined}
+          aria-label={t("model_video", { defaultValue: "视频模型" })}
+        />
+      </div>
+      <label className="block">
+        <span className="mb-1 block text-[11px] text-text-3">
+          {t("resolution_label")}
+        </span>
+        <SelectMenu
+          value={videoSettings.resolution ?? ""}
+          options={[
+            { value: "", label: t("follow_global_default", { defaultValue: "跟随项目默认" }) },
+            ...videoResolutionOptions.map((resolution) => ({
+              value: resolution,
+              label: resolution,
+            })),
+          ]}
+          onChange={(next) => {
+            void updateVideoGeneration({ resolution: next || null });
+          }}
+          ariaLabel={t("resolution_label")}
+          panelLabel={t("resolution_label")}
+          className={PROFILE_INPUT_CLS}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-[11px] text-text-3">
+          {t("video_continuity_policy_label")}
+        </span>
+        <SelectMenu
+          value={pendingVideoContinuityPolicy}
+          options={continuityOptions}
+          onChange={(next) => {
+            setPendingVideoContinuityPolicy(next as VideoContinuityPolicy);
+          }}
+          ariaLabel={t("video_continuity_policy_label")}
+          panelLabel={t("video_continuity_policy_label")}
+          className={PROFILE_INPUT_CLS}
+        />
+      </label>
+    </div>
+  );
+
   const rightColumn = (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-[18px] pb-7 pt-3.5">
       <MediaCard
@@ -1007,10 +1237,10 @@ export function ShotDetail({
         assetPath={assets?.storyboard_image ?? null}
         scriptFile={scriptFile}
         aspectRatio={aspectRatio}
-        hideDraftGenerateButton={isGridMode}
         generating={generatingStoryboard}
         estimatedCost={sbEstimate ?? undefined}
-        onGenerate={(quality, options) => onGenerateStoryboard?.(segmentId, quality, options)}
+        settingsContent={storyboardSettingsPanel}
+        onGenerate={(options) => onGenerateStoryboard?.(segmentId, undefined, options)}
         onRestore={onRestoreStoryboard}
         onUploaded={onRestoreStoryboard}
         generateDisabled={dirty || saving}
@@ -1029,8 +1259,12 @@ export function ShotDetail({
         generateDisabled={!hasStoryboard || dirty || saving}
         generateDisabledHint={dirty ? dirtyHint : undefined}
         estimatedCost={vidEstimate ?? undefined}
-        expectedVideoContinuity={expectedVideoContinuity}
-        onGenerate={(quality) => onGenerateVideo?.(segmentId, quality)}
+        settingsContent={videoSettingsPanel}
+        onGenerate={() =>
+          onGenerateVideo?.(segmentId, undefined, {
+            videoContinuityPolicy: pendingVideoContinuityPolicy,
+          })
+        }
         onRestore={onRestoreVideo}
         onUploaded={onRestoreVideo}
         uploadDisabled={dirty || saving}
@@ -1069,12 +1303,6 @@ export function ShotDetail({
           seconds={segment.duration_seconds ?? 0}
           segmentId={segmentId}
           durationOptions={durationOptions}
-          onUpdatePrompt={onUpdatePrompt}
-        />
-        <ShotTierPill
-          tier={shotTier}
-          explicit={shotTierExplicit}
-          segmentId={segmentId}
           onUpdatePrompt={onUpdatePrompt}
         />
         {nextSegment ? (

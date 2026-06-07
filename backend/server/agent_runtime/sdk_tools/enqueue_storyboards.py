@@ -28,12 +28,6 @@ from server.agent_runtime.sdk_tools._generation_quality import (
     normalize_quality,
     route_summary,
 )
-from server.services.generation_route_resolver import (
-    default_shot_tier_for_task,
-    merged_shot_tier_profiles,
-    normalize_shot_tier,
-)
-
 StoryboardSelectionMode = Literal["missing", "selected", "current_unrefined", "current_all"]
 
 SELECTION_MODE_SCHEMA: dict[str, Any] = {
@@ -80,6 +74,18 @@ class _FailureRecorder:
             }
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self.output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _split_backend_pair(value: object) -> tuple[str, str] | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if "/" not in trimmed:
+        return None
+    provider, model = trimmed.split("/", 1)
+    if not provider or not model:
+        return None
+    return provider, model
 
 
 def _build_prompt(
@@ -221,6 +227,18 @@ def _build_specs(
     for plan in plans:
         item = items_by_id[plan.resource_id]
         prompt = _build_prompt(item, style, style_description, id_field)
+        storyboard_settings = item.get("storyboard_generation") if isinstance(item.get("storyboard_generation"), dict) else {}
+        use_current_as_reference = storyboard_settings.get("use_current_as_reference") is True
+        image_backend = _split_backend_pair(storyboard_settings.get("image_backend"))
+        effective_quality = "final" if use_current_as_reference and quality == "draft" else quality
+        extra_payload: dict[str, Any] = {"quality": effective_quality}
+        if effective_quality == "final":
+            extra_payload["final_generation_mode"] = "draft_locked" if use_current_as_reference else "fresh_sample"
+        if storyboard_settings.get("resolution"):
+            extra_payload["resolution"] = storyboard_settings["resolution"]
+        if image_backend is not None:
+            extra_payload["image_provider"] = image_backend[0]
+            extra_payload["image_model"] = image_backend[1]
         specs.append(
             TaskSpec.from_request(
                 task_type="storyboard",
@@ -228,7 +246,7 @@ def _build_specs(
                 resource_id=plan.resource_id,
                 prompt=prompt,
                 script_file=script_filename,
-                extra_payload={"quality": quality},
+                extra_payload=extra_payload,
                 dependency_resource_id=plan.dependency_resource_id,
                 dependency_group=plan.dependency_group,
                 dependency_index=plan.dependency_index,
@@ -238,12 +256,12 @@ def _build_specs(
 
 
 def _storyboard_needs_previous_reference(project_data: dict[str, Any], item: dict[str, Any]) -> bool:
-    shot_tier = normalize_shot_tier(item.get("shot_tier")) or default_shot_tier_for_task("storyboard")
-    strategy = merged_shot_tier_profiles(project_data).get(shot_tier) if shot_tier else None
-    raw = strategy.get("video_continuity_policy") if isinstance(strategy, dict) else None
+    video_settings = item.get("video_generation") if isinstance(item.get("video_generation"), dict) else {}
+    raw = video_settings.get("video_continuity_policy")
     if raw is None:
-        raw = project_data.get("video_continuity_policy") or project_data.get("continuity_policy")
-    policy = str(raw or "auto").strip().lower()
+        transition = str(item.get("transition_to_next") or "cut").strip().lower()
+        raw = "start_only" if transition in {"fade", "dissolve"} else "end_frame"
+    policy = str(raw).strip().lower()
     return policy != "start_only"
 
 

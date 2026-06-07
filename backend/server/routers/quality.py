@@ -28,7 +28,6 @@ class QualityRatingRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
     generation_quality: str | None = None
-    shot_tier: Literal["S", "A", "B"] | None = None
 
 
 def _service() -> QualityMetricsService:
@@ -54,7 +53,6 @@ async def upsert_quality_rating(
             provider=req.provider,
             model=req.model,
             generation_quality=req.generation_quality,
-            shot_tier=req.shot_tier,
             user_id=_user.id,
         )
     except FileNotFoundError as exc:

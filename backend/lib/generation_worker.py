@@ -69,28 +69,7 @@ async def _retry_budget_for_task(task: dict[str, Any]) -> int:
         return _coerce_positive_int(retry.get("max_attempts"), 1)
     if isinstance(payload, dict) and payload.get("retry_budget") is not None:
         return _coerce_positive_int(payload.get("retry_budget"), 1)
-
-    shot_tier = payload.get("shot_tier") if isinstance(payload, dict) else None
-    if shot_tier not in {"S", "A", "B"} and task.get("task_type") in {"storyboard", "video", "reference_video"}:
-        shot_tier = "A"
-    if shot_tier not in {"S", "A", "B"}:
-        return 1
-
-    try:
-        from lib.config.resolver import get_project_manager
-        from server.services.generation_route_resolver import merged_shot_tier_profiles
-
-        project_name = task.get("project_name")
-        project = (
-            await asyncio.to_thread(get_project_manager().load_project, project_name)
-            if project_name
-            else None
-        )
-        strategy = merged_shot_tier_profiles(project).get(shot_tier) or {}
-        return _coerce_positive_int(strategy.get("retry_budget"), 1)
-    except Exception:
-        logger.debug("读取 shot_tier retry_budget 失败，按单次尝试处理", exc_info=True)
-        return 1
+    return 1
 
 
 async def _retry_plan_for_failure(task: dict[str, Any]) -> tuple[dict[str, Any], int, int]:

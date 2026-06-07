@@ -470,6 +470,20 @@ class ScriptGenerator:
                 ):
                     item["transition_to_next"] = "fade"
 
+        def _apply_default_video_generation(items: list[dict]) -> None:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                next_item = items[index + 1] if index + 1 < len(items) else None
+                transition = str(item.get("transition_to_next") or "cut").strip().lower()
+                continuity = "end_frame"
+                if next_item is None or transition in {"fade", "dissolve"}:
+                    continuity = "start_only"
+                raw_video_generation = item.get("video_generation")
+                video_generation = dict(raw_video_generation) if isinstance(raw_video_generation, dict) else {}
+                video_generation.setdefault("video_continuity_policy", continuity)
+                item["video_generation"] = video_generation
+
         if gen_mode == "reference_video":
             units = [u for u in script_data.get("video_units") or [] if isinstance(u, dict)]
             for u in units:
@@ -482,12 +496,14 @@ class ScriptGenerator:
                 if isinstance(s, dict) and "segment_id" in s:
                     s["segment_id"] = _rewrite_episode_prefix(s.get("segment_id"), ep)
             _apply_default_transitions(segments)
+            _apply_default_video_generation(segments)
         else:
             scenes = [s for s in script_data.get("scenes") or [] if isinstance(s, dict)]
             for s in scenes:
                 if isinstance(s, dict) and "scene_id" in s:
                     s["scene_id"] = _rewrite_episode_prefix(s.get("scene_id"), ep)
             _apply_default_transitions(scenes)
+            _apply_default_video_generation(scenes)
         # content_mode 严格只是"内容类型"（narration/drama）；reference_video 属于
         # "视频来源"维度，由 generation_mode 表达。
         # 参考视频集必须强制覆盖：ReferenceVideoScript.content_mode 有 Pydantic 默认值

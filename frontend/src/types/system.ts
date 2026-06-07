@@ -1,5 +1,6 @@
 export interface SystemConfigSettings {
   default_video_backend: string;
+  default_video_service_tier?: string;
   default_image_backend: string;
   default_image_backend_t2i?: string;
   default_image_backend_i2i?: string;
@@ -33,6 +34,7 @@ export interface GetSystemConfigResponse {
 
 export interface SystemConfigPatch {
   default_video_backend?: string;
+  default_video_service_tier?: string;
   default_image_backend?: string;
   default_image_backend_t2i?: string;
   default_image_backend_i2i?: string;

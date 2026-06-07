@@ -61,8 +61,6 @@ const generationProfileProps = {
   onGenerationProfilesExpandedChange: vi.fn(),
   generationProfiles: createDefaultGenerationProfiles(),
   onGenerationProfilesChange: vi.fn(),
-  videoContinuityPolicy: "auto" as const,
-  onVideoContinuityPolicyChange: vi.fn(),
 };
 
 const startImageUnsupportedData = {

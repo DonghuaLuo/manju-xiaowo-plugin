@@ -2,6 +2,7 @@ import { useEffect, useMemo, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
 import { ProviderModelSelect } from "@/components/ui/ProviderModelSelect";
+import { SelectMenu } from "@/components/ui/SelectMenu";
 import {
   lookupSupportedDurations,
   lookupResolutions,
@@ -9,6 +10,7 @@ import {
   capabilityFromVideoContinuitySupport,
   type VideoContinuityCapability,
   type VideoContinuitySupport,
+  type VideoServiceTier,
 } from "@/utils/provider-models";
 import { isContinuousIntegerRange } from "@/utils/duration_format";
 import { ResolutionPicker } from "./ResolutionPicker";
@@ -45,6 +47,7 @@ export interface ModelConfigSectionProps {
   customProviders?: CustomProviderInfo[];
   globalDefaults: {
     video: string;
+    videoServiceTier?: string;
     imageT2I: string;
     imageI2I: string;
     textScript: string;
@@ -57,6 +60,10 @@ export interface ModelConfigSectionProps {
     text?: boolean;
     duration?: boolean;
   };
+  videoServiceTier?: string;
+  onVideoServiceTierChange?: (next: string) => void;
+  globalVideoServiceTier?: string;
+  supportedVideoServiceTiers?: readonly VideoServiceTier[] | null;
   videoContinuitySupport?: VideoContinuitySupport | null;
   storyboardVideoStartImageUnsupported?: boolean;
 }
@@ -89,10 +96,15 @@ export function ModelConfigSection({
   customProviders = EMPTY_CUSTOM_PROVIDERS,
   globalDefaults,
   enable,
+  videoServiceTier,
+  onVideoServiceTierChange,
+  globalVideoServiceTier = "default",
+  supportedVideoServiceTiers,
   videoContinuitySupport,
   storyboardVideoStartImageUnsupported = false,
 }: ModelConfigSectionProps) {
   const { t } = useTranslation("templates");
+  const SERVICE_TIERS = useMemo(() => ["default", "flex"] as const satisfies readonly VideoServiceTier[], []);
 
   const endpointToMediaType = useEndpointCatalogStore((s) => s.endpointToMediaType);
   const fetchEndpointCatalog = useEndpointCatalogStore((s) => s.fetch);
@@ -126,6 +138,9 @@ export function ModelConfigSection({
     const nextDurations = effectiveNext
       ? lookupSupportedDurations(providers, effectiveNext, customProviders) ?? null
       : null;
+    const nextResolutions = effectiveNext
+      ? lookupResolutions(providers, effectiveNext, customProviders, endpointToMediaType).options
+      : [];
     const shouldReset =
       value.defaultDuration !== null &&
       (!nextDurations || !nextDurations.includes(value.defaultDuration));
@@ -133,7 +148,14 @@ export function ModelConfigSection({
       ...value,
       videoBackend: next,
       defaultDuration: shouldReset ? null : value.defaultDuration,
-      videoResolution: null,
+      videoResolution:
+        nextResolutions.length > 0
+          ? (value.videoResolution && nextResolutions.includes(value.videoResolution)
+              ? value.videoResolution
+              : nextResolutions.includes("720p")
+                ? "720p"
+                : nextResolutions[0])
+          : value.videoResolution,
     });
   };
 
@@ -159,6 +181,7 @@ export function ModelConfigSection({
           value={resolution}
           onChange={onResolutionChange}
           placeholder={t("resolution_default_placeholder")}
+          allowEmpty={false}
           aria-label={t("resolution_label")}
         />
       </div>
@@ -211,6 +234,47 @@ export function ModelConfigSection({
             </div>
           )}
 
+          {onVideoServiceTierChange && effectiveVideoBackend ? (
+            <div className="mt-3">
+              <div className="mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+                {t("dashboard:video_service_tier_label", { defaultValue: "服务档位" })}
+              </div>
+              <SelectMenu
+                value={videoServiceTier ?? ""}
+                options={[
+                  {
+                    value: "",
+                    label: t("dashboard:follow_global_default", { defaultValue: "跟随全局默认" }),
+                    description: t("dashboard:current_global_default", {
+                      defaultValue: "当前全局默认：{{value}}",
+                      value: t(`dashboard:service_tier_${globalVideoServiceTier}`, {
+                        defaultValue: globalVideoServiceTier,
+                      }),
+                    }),
+                  },
+                  ...SERVICE_TIERS.map((tier) => ({
+                    value: tier,
+                    label: t(`dashboard:service_tier_${tier}`),
+                    description: t(`dashboard:service_tier_${tier}_desc`),
+                    disabled:
+                      tier !== "default"
+                      && Boolean(supportedVideoServiceTiers)
+                      && !(supportedVideoServiceTiers?.includes(tier) ?? false),
+                    hint:
+                      tier !== "default"
+                      && Boolean(supportedVideoServiceTiers)
+                      && !(supportedVideoServiceTiers?.includes(tier) ?? false)
+                        ? t("dashboard:service_tier_unsupported_hint", { defaultValue: "不可选" })
+                        : undefined,
+                  })),
+                ]}
+                onChange={(next) => onVideoServiceTierChange(next)}
+                ariaLabel={t("dashboard:video_service_tier_label", { defaultValue: "服务档位" })}
+                panelLabel={t("dashboard:video_service_tier_label", { defaultValue: "服务档位" })}
+              />
+            </div>
+          ) : null}
+
           {renderResolutionField(effectiveVideoBackend, value.videoResolution, (v) =>
             onChange({ ...value, videoResolution: v }),
           )}
@@ -258,7 +322,19 @@ export function ModelConfigSection({
                 imageBackendT2I: t2i,
                 imageBackendI2I: i2i,
               };
-              if (prevEffectiveT2I !== nextEffectiveT2I) next.imageResolution = null;
+              if (prevEffectiveT2I !== nextEffectiveT2I) {
+                const nextResolutions = nextEffectiveT2I
+                  ? lookupResolutions(providers, nextEffectiveT2I, customProviders, endpointToMediaType).options
+                  : [];
+                next.imageResolution =
+                  nextResolutions.length > 0
+                    ? (value.imageResolution && nextResolutions.includes(value.imageResolution)
+                        ? value.imageResolution
+                        : nextResolutions.includes("1K")
+                          ? "1K"
+                          : nextResolutions[0])
+                    : value.imageResolution;
+              }
               onChange(next);
             }}
             globalDefaultT2I={globalDefaults.imageT2I || undefined}

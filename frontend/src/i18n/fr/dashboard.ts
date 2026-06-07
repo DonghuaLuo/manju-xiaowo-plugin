@@ -900,7 +900,17 @@ export default {
   grid_preview_batch_generate: "Générer une grille",
   grid_preview_empty_episode: "Aucun plan dans cet épisode – divisez d'abord le script dans le prétraitement",
   batch_generate_storyboards: "Générer par lots des storyboards",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "Générer des vidéos par lots",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "Rechercher des plans…",
   shots_collapsed_label: "COUPS · {{count}}",
   shots_section_title: "Coups de feu",

@@ -209,9 +209,16 @@ def _build_video_specs(
         # 原样透传调用方显式指定的值，不在入队侧做 int() 截断式归一化（否则会把
         # 本应被执行层拒绝的非法值静默修正）。缺省由执行层按 caps 收口默认。
         extra_payload: dict[str, Any] = {"quality": quality}
+        video_settings = item.get("video_generation") if isinstance(item.get("video_generation"), dict) else {}
         duration = item.get("duration_seconds")
         if duration is not None:
             extra_payload["duration_seconds"] = duration
+        if video_settings.get("resolution"):
+            extra_payload["resolution"] = video_settings["resolution"]
+        if video_settings.get("video_backend"):
+            extra_payload["video_backend"] = video_settings["video_backend"]
+        if video_settings.get("video_continuity_policy"):
+            extra_payload["video_continuity_policy"] = video_settings["video_continuity_policy"]
 
         specs.append(
             TaskSpec.from_request(

@@ -89,6 +89,7 @@ async def _build_options(svc: ConfigService, session: AsyncSession) -> _OptionsD
 
 class SystemConfigPatchRequest(BaseModel):
     default_video_backend: str | None = None
+    default_video_service_tier: str | None = None
     default_image_backend: str | None = None
     default_image_backend_t2i: str | None = None
     default_image_backend_i2i: str | None = None
@@ -158,6 +159,7 @@ async def get_system_config(
 
     settings: dict[str, Any] = {
         "default_video_backend": all_s.get("default_video_backend", ""),
+        "default_video_service_tier": all_s.get("default_video_service_tier") or "default",
         "default_image_backend": all_s.get("default_image_backend", ""),
         "default_image_backend_t2i": all_s.get("default_image_backend_t2i", ""),
         "default_image_backend_i2i": all_s.get("default_image_backend_i2i", ""),
@@ -215,6 +217,12 @@ async def patch_system_config(
             if value:
                 validate_backend_value(value, backend_key, _t)
             await svc.set_setting(backend_key, value)
+
+    if "default_video_service_tier" in patch:
+        value = str(patch["default_video_service_tier"] or "default").strip().lower()
+        if value not in {"default", "flex"}:
+            raise HTTPException(status_code=422, detail="default_video_service_tier 只能是 default 或 flex")
+        await svc.set_setting("default_video_service_tier", value)
 
     # Boolean settings
     if "video_generate_audio" in patch and patch["video_generate_audio"] is not None:

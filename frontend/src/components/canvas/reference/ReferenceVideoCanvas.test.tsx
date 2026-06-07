@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import { ReferenceVideoCanvas } from "./ReferenceVideoCanvas";
 import { useReferenceVideoStore } from "@/stores/reference-video-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -60,7 +60,9 @@ describe("ReferenceVideoCanvas", () => {
     vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({ units: [mkUnit("E1U1")] });
     render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Generate video|生成视频/ })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Generate fast version|生成快速版/ }),
+      ).toBeInTheDocument();
     });
   });
 
@@ -167,7 +169,9 @@ describe("ReferenceVideoCanvas", () => {
       }),
     );
     render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
-    const btn = await screen.findByRole("button", { name: /Generate video|生成视频/ });
+    const btn = await screen.findByRole("button", {
+      name: /Generate fast version|生成快速版/,
+    });
     // 点击前 tasks store 为空，按钮启用
     expect(btn).not.toBeDisabled();
     fireEvent.click(btn);
@@ -179,6 +183,28 @@ describe("ReferenceVideoCanvas", () => {
     await waitFor(() => {
       expect(useAppStore.getState().toast?.text).toMatch(/Queued for generation|已加入生成队列/);
     });
+  });
+
+  it("asks for confirmation before batch generating pending units", async () => {
+    vi.spyOn(API, "listReferenceVideoUnits").mockResolvedValue({
+      units: [mkUnit("E1U1"), mkUnit("E1U2")],
+    });
+    const genSpy = vi
+      .spyOn(API, "generateReferenceVideoUnit")
+      .mockResolvedValue({ task_id: "t-1", deduped: false });
+
+    render(<ReferenceVideoCanvas projectName="proj" episode={1} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Batch generate videos|批量生成视频/ }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: /Batch generate videos|批量生成视频/,
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Confirm|确认/ }));
+
+    await waitFor(() => expect(genSpy).toHaveBeenCalledTimes(2));
+    expect(genSpy).toHaveBeenNthCalledWith(1, "proj", 1, "E1U1", { quality: "draft" });
+    expect(genSpy).toHaveBeenNthCalledWith(2, "proj", 1, "E1U2", { quality: "draft" });
   });
 
   // 后台任务失败通知已统一迁移到全局 useTaskFailureNotifications hook（转变驱动 /

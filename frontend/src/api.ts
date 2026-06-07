@@ -44,6 +44,8 @@ import type {
   GenerationProfiles,
   GenerationQuality,
   StoryboardFinalGenerationMode,
+  StoryboardGenerationSettings,
+  VideoGenerationSettings,
   VideoContinuityPolicy,
 } from "@/types";
 import type { GenerationMode } from "@/utils/generation-mode";
@@ -155,8 +157,6 @@ export interface VersionInfo {
     generate_audio?: boolean;
     service_tier?: string;
     seed?: number;
-    shot_tier?: "S" | "A" | "B";
-    shot_tier_strategy?: Record<string, unknown>;
     supported_resolutions?: string[];
     supported_durations?: number[];
     duration_resolution_constraints?: Record<string, number[]>;
@@ -165,8 +165,6 @@ export interface VersionInfo {
   };
   generation_route_warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
   provider_capability_hash?: string | null;
-  shot_tier?: "S" | "A" | "B" | null;
-  shot_tier_strategy?: Record<string, unknown> | null;
   provider_input_images?: Record<
     string,
     ProviderInputImageMetadata | ProviderInputImageMetadata[] | null | undefined
@@ -314,6 +312,8 @@ export interface SegmentUpdatePayload {
   characters_in_segment?: string[];
   scenes?: string[];
   props?: string[];
+  storyboard_generation?: StoryboardGenerationSettings;
+  video_generation?: VideoGenerationSettings;
 }
 
 /** Payload for {@link API.createProject}. */
@@ -338,17 +338,19 @@ export interface CreateProjectPayload {
   text_backend_style?: string | null;
   model_settings?: Record<string, { resolution?: string | null }>;
   generation_profiles?: GenerationProfiles;
-  shot_tier_profiles?: ProjectData["shot_tier_profiles"];
-  video_continuity_policy?: VideoContinuityPolicy | null;
+  video_service_tier?: string | null;
 }
 
 export interface GenerationRequestOptions {
   quality?: GenerationQuality;
   final_generation_mode?: StoryboardFinalGenerationMode | null;
-  shot_tier?: "S" | "A" | "B" | null;
   resolution?: string | null;
   source_version?: number | null;
+  image_provider?: string | null;
+  image_model?: string | null;
   duration_seconds?: number | null;
+  video_backend?: string | null;
+  video_continuity_policy?: VideoContinuityPolicy | null;
   generate_audio?: boolean | null;
   service_tier?: string | null;
   seed?: number | null;
@@ -382,8 +384,6 @@ export interface GenerationRoutePreviewItem {
   supported_resolutions?: string[];
   supported_durations?: number[];
   duration_resolution_constraints?: Record<string, number[]>;
-  shot_tier?: "S" | "A" | "B" | null;
-  shot_tier_strategy?: Record<string, unknown>;
   warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
   error?: string;
 }
@@ -619,7 +619,6 @@ export interface QualityRatingRequest {
   provider?: string | null;
   model?: string | null;
   generation_quality?: string | null;
-  shot_tier?: "S" | "A" | "B" | null;
 }
 
 export interface QualityStatsResponse {
@@ -639,7 +638,6 @@ export interface QualityAnalysisGroupItem {
   project_title?: string;
   provider?: string;
   model?: string;
-  shot_tier?: string;
   dimension_averages?: Array<{ key: string; count: number; average_rating: number | null }>;
   [key: string]: unknown;
 }
@@ -1652,7 +1650,6 @@ class API {
       props?: string[] | null;
       quality?: GenerationQuality | null;
       final_generation_mode?: StoryboardFinalGenerationMode | null;
-      shot_tier?: "S" | "A" | "B" | null;
       resolution?: string | null;
       source_version?: number | null;
       image_provider_t2i?: string | null;

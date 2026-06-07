@@ -1,4 +1,4 @@
-import type { GenerationProfiles, ShotTier, ShotTierProfile } from "@/types";
+import type { GenerationProfiles } from "@/types";
 
 export const IMAGE_PROFILE_RESOLUTIONS = ["512px", "1K", "2K", "4K"] as const;
 export const VIDEO_PROFILE_RESOLUTIONS = ["480p", "720p", "1080p", "4K"] as const;
@@ -10,10 +10,10 @@ interface DefaultProfileInput {
   videoResolutionOptions?: readonly string[] | null;
 }
 
-const IMAGE_FINAL_FALLBACK = "2K";
-const IMAGE_DRAFT_FALLBACK = "1K";
-const VIDEO_FINAL_FALLBACK = "1080p";
-const VIDEO_DRAFT_FALLBACK = "720p";
+const IMAGE_CHANNEL_FALLBACK = "1K";
+const VIDEO_CHANNEL_FALLBACK = "720p";
+const ASSET_FALLBACK = "2K";
+const GRID_FALLBACK = "2K";
 
 function uniqueOptions(options?: readonly string[] | null): string[] {
   return Array.from(
@@ -78,75 +78,71 @@ export function createDefaultGenerationProfiles({
   imageResolutionOptions,
   videoResolutionOptions,
 }: DefaultProfileInput = {}): GenerationProfiles {
-  const finalImageResolution = coerceResolutionForOptions(
+  const channelImageResolution = coerceResolutionForOptions(
     imageResolution,
     imageResolutionOptions,
-    IMAGE_FINAL_FALLBACK,
+    IMAGE_CHANNEL_FALLBACK,
   );
-  const draftImageResolution = coerceResolutionForOptions(
-    IMAGE_DRAFT_FALLBACK,
+  const assetResolution = coerceResolutionForOptions(
+    ASSET_FALLBACK,
     imageResolutionOptions,
-    finalImageResolution,
+    channelImageResolution,
   );
-  const finalVideoResolution = coerceResolutionForOptions(
+  const gridResolution = coerceResolutionForOptions(
+    GRID_FALLBACK,
+    imageResolutionOptions,
+    channelImageResolution,
+  );
+  const channelVideoResolution = coerceResolutionForOptions(
     videoResolution,
     videoResolutionOptions,
-    VIDEO_FINAL_FALLBACK,
-  );
-  const draftVideoResolution = coerceResolutionForOptions(
-    VIDEO_DRAFT_FALLBACK,
-    videoResolutionOptions,
-    finalVideoResolution,
+    VIDEO_CHANNEL_FALLBACK,
   );
 
   return {
     asset: {
       image_provider_t2i: null,
       image_provider_i2i: null,
-      resolution: finalImageResolution,
+      resolution: assetResolution,
     },
     storyboard_draft: {
       image_provider_t2i: null,
       image_provider_i2i: null,
-      resolution: draftImageResolution,
+      resolution: channelImageResolution,
     },
     storyboard_final: {
       image_provider_t2i: null,
       image_provider_i2i: null,
-      resolution: finalImageResolution,
+      resolution: channelImageResolution,
     },
     grid: {
       image_provider_t2i: null,
       image_provider_i2i: null,
-      resolution: finalImageResolution,
+      resolution: gridResolution,
     },
     video_draft: {
       video_backend: null,
-      resolution: draftVideoResolution,
+      resolution: channelVideoResolution,
       duration_seconds: null,
       generate_audio: false,
-      service_tier: "default",
     },
     video_final: {
       video_backend: null,
-      resolution: finalVideoResolution,
+      resolution: channelVideoResolution,
       duration_seconds: null,
       generate_audio: true,
-      service_tier: "default",
     },
     reference_video_draft: {
       video_backend: null,
-      resolution: draftVideoResolution,
+      resolution: channelVideoResolution,
       duration_seconds: null,
       generate_audio: false,
-      service_tier: "default",
     },
     reference_video_final: {
       video_backend: null,
-      resolution: finalVideoResolution,
+      resolution: channelVideoResolution,
       duration_seconds: null,
       generate_audio: true,
-      service_tier: "default",
     },
   };
 }
@@ -158,6 +154,7 @@ export function normalizeGenerationProfiles(
   const normalizeVideo = (profile?: GenerationProfiles["video_draft"]) => {
     const normalized = { ...(profile ?? {}) };
     delete normalized.duration_seconds;
+    delete normalized.service_tier;
     return normalized;
   };
 
@@ -194,97 +191,49 @@ export function normalizeGenerationProfiles(
   };
 }
 
+function pruneNullishEntries<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== null && item !== undefined),
+  ) as Partial<T>;
+}
+
+function isShallowEqualRecord(
+  left: Record<string, unknown> | null | undefined,
+  right: Record<string, unknown> | null | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  if (leftEntries.length !== rightEntries.length) return false;
+  return leftEntries.every(([key, value]) => right?.[key] === value);
+}
+
+export function compactGenerationProfiles(
+  profiles?: GenerationProfiles | null,
+  defaults: GenerationProfiles = createDefaultGenerationProfiles(),
+): GenerationProfiles {
+  const normalized = normalizeGenerationProfiles(profiles, defaults);
+  const compact: GenerationProfiles = {};
+
+  const collect = (key: keyof GenerationProfiles) => {
+    const current = pruneNullishEntries((normalized[key] ?? {}) as Record<string, unknown>);
+    const baseline = pruneNullishEntries((defaults[key] ?? {}) as Record<string, unknown>);
+    if (!isShallowEqualRecord(current, baseline) && Object.keys(current).length > 0) {
+      compact[key] = current;
+    }
+  };
+
+  collect("asset");
+  collect("storyboard_draft");
+  collect("storyboard_final");
+  collect("grid");
+  collect("video_draft");
+  collect("video_final");
+  collect("reference_video_draft");
+  collect("reference_video_final");
+
+  return compact;
+}
+
 export function generationProfilesSignature(profiles?: GenerationProfiles | null): string {
   return JSON.stringify(normalizeGenerationProfiles(profiles));
-}
-
-export const SHOT_TIERS = ["S", "A", "B"] as const satisfies readonly ShotTier[];
-const VIDEO_CONTINUITY_PROFILE_POLICIES = ["auto", "start_only", "end_frame", "reference_assisted"] as const;
-
-export type ShotTierProfiles = Partial<Record<ShotTier, ShotTierProfile>>;
-
-export function createDefaultShotTierProfiles(
-  input: DefaultProfileInput = {},
-): Record<ShotTier, ShotTierProfile> {
-  const defaults = createDefaultGenerationProfiles(input);
-  const finalImageResolution = defaults.storyboard_final?.resolution ?? IMAGE_FINAL_FALLBACK;
-  const draftImageResolution = defaults.storyboard_draft?.resolution ?? finalImageResolution;
-  const finalVideoResolution = defaults.video_final?.resolution ?? VIDEO_FINAL_FALLBACK;
-  const draftVideoResolution = defaults.video_draft?.resolution ?? finalVideoResolution;
-
-  return {
-    S: {
-      label: "hero",
-      retry_budget: 1,
-      video_continuity_policy: "auto",
-      prefer_final_storyboard_source: true,
-      profiles: {
-        storyboard_final: {
-          resolution: finalImageResolution,
-        },
-        video_final: {
-          resolution: finalVideoResolution,
-          generate_audio: true,
-          service_tier: "default",
-        },
-      },
-    },
-    A: {
-      label: "standard",
-      retry_budget: 1,
-      video_continuity_policy: "auto",
-      prefer_final_storyboard_source: true,
-      profiles: {},
-    },
-    B: {
-      label: "utility",
-      retry_budget: 1,
-      video_continuity_policy: "start_only",
-      prefer_final_storyboard_source: false,
-      profiles: {
-        storyboard_final: {
-          resolution: draftImageResolution,
-        },
-        video_final: {
-          resolution: draftVideoResolution,
-          generate_audio: false,
-          service_tier: "default",
-        },
-      },
-    },
-  };
-}
-
-export function normalizeShotTierProfiles(
-  profiles?: ShotTierProfiles | null,
-  defaults: Record<ShotTier, ShotTierProfile> = createDefaultShotTierProfiles(),
-): Record<ShotTier, ShotTierProfile> {
-  return Object.fromEntries(
-    SHOT_TIERS.map((tier) => {
-      const raw: ShotTierProfile = profiles?.[tier] ?? {};
-      return [
-        tier,
-        {
-          ...defaults[tier],
-          ...raw,
-          retry_budget: Number.isFinite(Number(raw.retry_budget))
-            ? Math.max(1, Math.floor(Number(raw.retry_budget)))
-            : defaults[tier].retry_budget,
-          profiles: {
-            ...(defaults[tier].profiles ?? {}),
-            ...(raw.profiles ?? {}),
-          },
-          video_continuity_policy: VIDEO_CONTINUITY_PROFILE_POLICIES.includes(
-            raw.video_continuity_policy as typeof VIDEO_CONTINUITY_PROFILE_POLICIES[number],
-          )
-            ? raw.video_continuity_policy
-            : defaults[tier].video_continuity_policy,
-        },
-      ];
-    }),
-  ) as Record<ShotTier, ShotTierProfile>;
-}
-
-export function shotTierProfilesSignature(profiles?: ShotTierProfiles | null): string {
-  return JSON.stringify(normalizeShotTierProfiles(profiles));
 }

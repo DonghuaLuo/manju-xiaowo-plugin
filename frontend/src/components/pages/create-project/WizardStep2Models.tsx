@@ -11,7 +11,6 @@ import {
   createDefaultGenerationProfiles,
   normalizeGenerationProfiles,
 } from "@/utils/generation-profiles";
-import { VIDEO_CONTINUITY_POLICIES, normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { GenerationMode } from "@/utils/generation-mode";
 import {
   lookupResolutions,
@@ -24,7 +23,6 @@ import type {
   ImageGenerationProfile,
   MediaType,
   ProviderInfo,
-  VideoContinuityPolicy,
   VideoGenerationProfile,
 } from "@/types";
 import type { CustomProviderInfo } from "@/types/custom-provider";
@@ -55,8 +53,6 @@ export interface WizardStep2ModelsProps {
   onGenerationProfilesExpandedChange: (next: boolean) => void;
   generationProfiles: GenerationProfiles;
   onGenerationProfilesChange: (next: GenerationProfiles) => void;
-  videoContinuityPolicy: VideoContinuityPolicy;
-  onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
   generationMode?: GenerationMode;
   onBack: () => void;
   onNext: () => void;
@@ -103,8 +99,6 @@ export function WizardStep2Models({
   onGenerationProfilesExpandedChange,
   generationProfiles,
   onGenerationProfilesChange,
-  videoContinuityPolicy,
-  onVideoContinuityPolicyChange,
   generationMode,
   onBack,
   onNext,
@@ -173,6 +167,36 @@ export function WizardStep2Models({
 
   useEffect(() => {
     if (!data) return;
+    const nextImageResolution = coerceResolutionForOptions(
+      value.imageResolution,
+      imageResolutionOptions,
+      "1K",
+    );
+    const nextVideoResolution = coerceResolutionForOptions(
+      value.videoResolution,
+      videoResolutionOptions,
+      "720p",
+    );
+    if (
+      nextImageResolution !== value.imageResolution ||
+      nextVideoResolution !== value.videoResolution
+    ) {
+      onChange({
+        ...value,
+        imageResolution: nextImageResolution,
+        videoResolution: nextVideoResolution,
+      });
+    }
+  }, [
+    data,
+    imageResolutionOptions,
+    onChange,
+    value,
+    videoResolutionOptions,
+  ]);
+
+  useEffect(() => {
+    if (!data) return;
     let changed = false;
     const next = normalizeGenerationProfiles(generationProfiles, defaultGenerationProfiles);
 
@@ -209,24 +233,6 @@ export function WizardStep2Models({
   const updateImageProfile = (
     key: ImageProfileKey,
     patch: Partial<ImageGenerationProfile>,
-  ) => {
-    onGenerationProfilesChange(
-      normalizeGenerationProfiles(
-        {
-          ...normalizedGenerationProfiles,
-          [key]: {
-            ...normalizedGenerationProfiles[key],
-            ...patch,
-          },
-        },
-        defaultGenerationProfiles,
-      ),
-    );
-  };
-
-  const updateVideoProfile = (
-    key: VideoProfileKey,
-    patch: Partial<VideoGenerationProfile>,
   ) => {
     onGenerationProfilesChange(
       normalizeGenerationProfiles(
@@ -290,10 +296,12 @@ export function WizardStep2Models({
             expanded={generationProfilesExpanded}
             onExpandedChange={onGenerationProfilesExpandedChange}
             profiles={normalizedGenerationProfiles}
+            onReplaceProfiles={(next) =>
+              onGenerationProfilesChange(
+                normalizeGenerationProfiles(next, defaultGenerationProfiles),
+              )
+            }
             onUpdateImage={updateImageProfile}
-            onUpdateVideo={updateVideoProfile}
-            videoContinuityPolicy={videoContinuityPolicy}
-            onVideoContinuityPolicyChange={onVideoContinuityPolicyChange}
             generationMode={generationMode}
             imageResolutionOptions={imageResolutionOptions}
             videoResolutionOptions={videoResolutionOptions}
@@ -341,10 +349,8 @@ function GenerationProfilesEditor({
   expanded,
   onExpandedChange,
   profiles,
+  onReplaceProfiles,
   onUpdateImage,
-  onUpdateVideo,
-  videoContinuityPolicy,
-  onVideoContinuityPolicyChange,
   generationMode,
   imageResolutionOptions,
   videoResolutionOptions,
@@ -352,25 +358,68 @@ function GenerationProfilesEditor({
   expanded: boolean;
   onExpandedChange: (next: boolean) => void;
   profiles: GenerationProfiles;
+  onReplaceProfiles: (next: GenerationProfiles) => void;
   onUpdateImage: (key: ImageProfileKey, patch: Partial<ImageGenerationProfile>) => void;
-  onUpdateVideo: (key: VideoProfileKey, patch: Partial<VideoGenerationProfile>) => void;
-  videoContinuityPolicy: VideoContinuityPolicy;
-  onVideoContinuityPolicyChange: (next: VideoContinuityPolicy) => void;
   generationMode?: GenerationMode;
   imageResolutionOptions: readonly string[];
   videoResolutionOptions: readonly string[];
 }) {
   const { t } = useTranslation(["dashboard", "templates"]);
-  const videoProfileRows: Array<[VideoProfileKey, string]> = [
-    ["video_draft", t("dashboard:generation_profile_video_draft")],
-    ["video_final", t("dashboard:generation_profile_video_final")],
-    ...(generationMode === "reference_video"
-      ? ([
-          ["reference_video_draft", t("dashboard:generation_profile_reference_video_draft")],
-          ["reference_video_final", t("dashboard:generation_profile_reference_video_final")],
-        ] as Array<[VideoProfileKey, string]>)
-      : []),
-  ];
+  const updateStoryboardResolution = (resolution: string | null) => {
+    onReplaceProfiles({
+      ...profiles,
+      storyboard_draft: {
+        ...profiles.storyboard_draft,
+        resolution,
+      },
+      storyboard_final: {
+        ...profiles.storyboard_final,
+        resolution,
+      },
+    });
+  };
+  const updateVideoDefaults = (patch: Partial<VideoGenerationProfile>) => {
+    onReplaceProfiles({
+      ...profiles,
+      video_draft: {
+        ...profiles.video_draft,
+        ...patch,
+      },
+      video_final: {
+        ...profiles.video_final,
+        ...patch,
+      },
+    });
+  };
+  const updateReferenceVideoDefaults = (patch: Partial<VideoGenerationProfile>) => {
+    onReplaceProfiles({
+      ...profiles,
+      reference_video_draft: {
+        ...profiles.reference_video_draft,
+        ...patch,
+      },
+      reference_video_final: {
+        ...profiles.reference_video_final,
+        ...patch,
+      },
+    });
+  };
+  const storyboardResolution = profiles.storyboard_final?.resolution ?? profiles.storyboard_draft?.resolution ?? "";
+  const videoResolution = profiles.video_final?.resolution ?? profiles.video_draft?.resolution ?? "";
+  const referenceVideoResolution =
+    profiles.reference_video_final?.resolution ?? profiles.reference_video_draft?.resolution ?? "";
+  const videoAudioValue =
+    profiles.video_final?.generate_audio == null
+      ? "false"
+      : profiles.video_final.generate_audio
+        ? "true"
+        : "false";
+  const referenceVideoAudioValue =
+    profiles.reference_video_final?.generate_audio == null
+      ? "false"
+      : profiles.reference_video_final.generate_audio
+        ? "true"
+        : "false";
   return (
     <section className="rounded-[10px] border border-hairline p-4" style={CARD_STYLE}>
       <button
@@ -389,13 +438,16 @@ function GenerationProfilesEditor({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-accent-2">
-            Quality Strategy
+            Generation Defaults
           </span>
           <span className="mt-1 block text-[13.5px] font-medium text-text">
             {t("dashboard:generation_profiles_section_title")}
           </span>
           <span className="mt-1 block text-[12.5px] leading-[1.55] text-text-3">
-            {t("dashboard:generation_profiles_section_desc")}
+            {t("dashboard:generation_profiles_section_desc", {
+              defaultValue:
+                "设置项目级默认分辨率。单个分镜和单个视频后续仍可在镜头面板里单独覆盖模型、分辨率和连续性。",
+            })}
           </span>
         </span>
         <span className="mt-0.5 rounded-[7px] border border-hairline-soft px-2 py-1 text-[11px] text-text-3">
@@ -405,38 +457,12 @@ function GenerationProfilesEditor({
 
       {expanded && (
         <div id="create-project-generation-profiles-panel" className="mt-4 space-y-4 border-t border-hairline-soft pt-4">
-          <div className="grid gap-3 rounded-[10px] border border-hairline-soft bg-bg-grad-a/30 p-3 sm:grid-cols-[minmax(0,1fr)_220px]">
-            <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-text">
-                {t("dashboard:video_continuity_policy_label")}
-              </div>
-              <p className="mt-1 text-[12px] leading-[1.5] text-text-3">
-                {t(`dashboard:video_continuity_policy_${videoContinuityPolicy}_hint`)}
-              </p>
-            </div>
-            <label className="block">
-              <span className="mb-1.5 block text-[11px] text-text-3">
-                {t("dashboard:video_continuity_policy_label")}
-              </span>
-              <SelectMenu
-                value={videoContinuityPolicy}
-                options={VIDEO_CONTINUITY_POLICIES.map((policy) => ({
-                  value: policy,
-                  label: t(`dashboard:video_continuity_policy_${policy}`),
-                }))}
-                onChange={(next) => onVideoContinuityPolicyChange(normalizeVideoContinuityPolicy(next))}
-                ariaLabel={t("dashboard:video_continuity_policy_label")}
-                panelLabel={t("dashboard:video_continuity_policy_label")}
-                className={PROFILE_INPUT_CLS}
-              />
-            </label>
-          </div>
-
           {([
             ["asset", t("dashboard:generation_profile_asset")],
-            ["storyboard_draft", t("dashboard:generation_profile_storyboard_draft")],
-            ["storyboard_final", t("dashboard:generation_profile_storyboard_final")],
-            ["grid", t("dashboard:generation_profile_grid")],
+            ["storyboard", t("dashboard:storyboard_defaults_label", { defaultValue: "分镜图" })],
+            ...(generationMode === "grid"
+              ? ([["grid", t("dashboard:generation_profile_grid")]] as const)
+              : []),
           ] as const).map(([key, label]) => (
             <div
               key={key}
@@ -450,12 +476,22 @@ function GenerationProfilesEditor({
                   {t("templates:resolution_label")}
                 </span>
                 <SelectMenu
-                  value={profiles[key]?.resolution ?? ""}
+                  value={
+                    key === "storyboard"
+                      ? storyboardResolution
+                      : profiles[key]?.resolution ?? ""
+                  }
                   options={imageResolutionOptions.map((resolution) => ({
                     value: resolution,
                     label: resolution,
                   }))}
-                  onChange={(next) => onUpdateImage(key, { resolution: next || null })}
+                  onChange={(next) => {
+                    if (key === "storyboard") {
+                      updateStoryboardResolution(next || null);
+                      return;
+                    }
+                    onUpdateImage(key, { resolution: next || null });
+                  }}
                   ariaLabel={t("templates:resolution_label")}
                   panelLabel={t("templates:resolution_label")}
                   className={PROFILE_INPUT_CLS}
@@ -464,14 +500,14 @@ function GenerationProfilesEditor({
             </div>
           ))}
 
-          {videoProfileRows.map(([key, label]) => {
-            const profile = profiles[key];
-            const audioValue =
-              profile?.generate_audio == null
-                ? "project"
-                : profile.generate_audio
-                  ? "true"
-                  : "false";
+          {([
+            ["video", t("dashboard:video_defaults_label", { defaultValue: "分镜视频" })],
+            ...(generationMode === "reference_video"
+              ? ([["reference_video", t("dashboard:reference_video_defaults_label", { defaultValue: "参考视频" })]] as const)
+              : []),
+          ] as const).map(([key, label]) => {
+            const currentResolution = key === "video" ? videoResolution : referenceVideoResolution;
+            const currentAudioValue = key === "video" ? videoAudioValue : referenceVideoAudioValue;
             return (
               <div
                 key={key}
@@ -485,12 +521,19 @@ function GenerationProfilesEditor({
                     {t("templates:resolution_label")}
                   </span>
                   <SelectMenu
-                    value={profile?.resolution ?? ""}
+                    value={currentResolution}
                     options={videoResolutionOptions.map((resolution) => ({
                       value: resolution,
                       label: resolution,
                     }))}
-                    onChange={(next) => onUpdateVideo(key, { resolution: next || null })}
+                    onChange={(next) => {
+                      const patch = { resolution: next || null };
+                      if (key === "video") {
+                        updateVideoDefaults(patch);
+                        return;
+                      }
+                      updateReferenceVideoDefaults(patch);
+                    }}
                     ariaLabel={t("templates:resolution_label")}
                     panelLabel={t("templates:resolution_label")}
                     className={PROFILE_INPUT_CLS}
@@ -501,16 +544,20 @@ function GenerationProfilesEditor({
                     {t("dashboard:generate_audio_label")}
                   </span>
                   <SelectMenu
-                    value={audioValue}
+                    value={currentAudioValue}
                     options={[
-                      { value: "project", label: t("dashboard:follow_global_default") },
                       { value: "true", label: t("dashboard:enabled_label") },
                       { value: "false", label: t("dashboard:disabled_label") },
                     ]}
                     onChange={(next) => {
-                      onUpdateVideo(key, {
-                        generate_audio: next === "project" ? null : next === "true",
-                      });
+                      const patch = {
+                        generate_audio: next === "true",
+                      };
+                      if (key === "video") {
+                        updateVideoDefaults(patch);
+                        return;
+                      }
+                      updateReferenceVideoDefaults(patch);
                     }}
                     ariaLabel={t("dashboard:generate_audio_label")}
                     panelLabel={t("dashboard:generate_audio_label")}

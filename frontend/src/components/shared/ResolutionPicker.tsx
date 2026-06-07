@@ -15,6 +15,7 @@ export interface ResolutionPickerProps {
   value: string | null;
   onChange: (v: string | null) => void;
   placeholder?: string;
+  allowEmpty?: boolean;
   disabled?: boolean;
   "aria-label"?: string;
 }
@@ -25,6 +26,7 @@ export function ResolutionPicker({
   value,
   onChange,
   placeholder = "默认（不传）",
+  allowEmpty = true,
   disabled,
   "aria-label": ariaLabel,
 }: ResolutionPickerProps) {
@@ -32,7 +34,7 @@ export function ResolutionPicker({
 
   if (mode === "select") {
     const menuOptions = [
-      { value: "", label: placeholder },
+      ...(allowEmpty ? [{ value: "", label: placeholder }] : []),
       ...options.map((o) => ({ value: o, label: o })),
     ];
     return (
@@ -49,7 +51,7 @@ export function ResolutionPicker({
     );
   }
 
-  return <ComboboxInput {...{ ariaLabel, options, value, onChange, placeholder, disabled }} />;
+  return <ComboboxInput {...{ ariaLabel, options, value, onChange, placeholder, allowEmpty, disabled }} />;
 }
 
 interface ComboboxInputProps {
@@ -58,10 +60,11 @@ interface ComboboxInputProps {
   value: string | null;
   onChange: (v: string | null) => void;
   placeholder: string;
+  allowEmpty: boolean;
   disabled?: boolean;
 }
 
-function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disabled }: ComboboxInputProps) {
+function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, allowEmpty, disabled }: ComboboxInputProps) {
   // 本地编辑态允许用户自由输入（含空格/清空）——外部 value 变化时通过 render-phase
   // 判断同步（React 官方推荐的"派生 state from props"模式，非 effect）。
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -88,10 +91,10 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
 
   const choices = useMemo(
     () => [
-      { value: "", label: placeholder },
+      ...(allowEmpty ? [{ value: "", label: placeholder }] : []),
       ...filteredOptions.map((option) => ({ value: option, label: option })),
     ],
-    [filteredOptions, placeholder],
+    [allowEmpty, filteredOptions, placeholder],
   );
 
   useEffect(() => {
@@ -168,7 +171,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
           const raw = e.target.value;
           setLocal(raw);
           setShowAllOptions(false);
-          onChange(raw === "" ? null : raw);
+          onChange(raw === "" && allowEmpty ? null : raw);
           setOpen(true);
         }}
         onFocus={() => {
@@ -184,7 +187,7 @@ function ComboboxInput({ ariaLabel, options, value, onChange, placeholder, disab
           const trimmed = local.trim();
           if (trimmed !== local) {
             setLocal(trimmed);
-            onChange(trimmed === "" ? null : trimmed);
+            onChange(trimmed === "" && allowEmpty ? null : trimmed);
           }
         }}
       />

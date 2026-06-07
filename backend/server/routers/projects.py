@@ -79,7 +79,6 @@ calc = StatusCalculator(pm)
 # StatusCalculator 注入的统计字段（scenes_count / status / storyboards / videos 等）
 # 是读时计算值，禁止写回 project.json。
 EPISODE_PERSIST_FIELDS = {"title", "script_file"}
-VideoContinuityPolicy = Literal["auto", "start_only", "end_frame", "reference_assisted"]
 GenerationMode = Literal["storyboard", "grid", "reference_video"]
 
 
@@ -151,8 +150,7 @@ class CreateProjectRequest(BaseModel):
     text_backend_style: str | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
     generation_profiles: dict[str, dict[str, Any | None]] | None = None
-    shot_tier_profiles: dict[str, dict[str, Any | None]] | None = None
-    video_continuity_policy: VideoContinuityPolicy | None = None
+    video_service_tier: Literal["default", "flex"] | None = None
 
 
 class EpisodePatch(BaseModel):
@@ -193,8 +191,7 @@ class UpdateProjectRequest(BaseModel):
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
     generation_profiles: dict[str, dict[str, Any | None]] | None = None
-    shot_tier_profiles: dict[str, dict[str, Any | None]] | None = None
-    video_continuity_policy: VideoContinuityPolicy | None = None
+    video_service_tier: Literal["default", "flex"] | None = None
 
 
 class ScriptSplittingTemplateChangeRequest(BaseModel):
@@ -726,10 +723,8 @@ async def create_project(
                 extras["model_settings"] = req.model_settings
             if req.generation_profiles is not None:
                 extras["generation_profiles"] = req.generation_profiles
-            if req.shot_tier_profiles is not None:
-                extras["shot_tier_profiles"] = req.shot_tier_profiles
-            if req.video_continuity_policy is not None:
-                extras["video_continuity_policy"] = req.video_continuity_policy
+            if req.video_service_tier is not None:
+                extras["video_service_tier"] = req.video_service_tier
             if req.source_language is not None:
                 extras["source_language"] = req.source_language
             if episode_target_units is not None:
@@ -1129,17 +1124,11 @@ async def update_project(name: str, req: UpdateProjectRequest, _user: CurrentUse
                     else:
                         project["generation_profiles"] = req.generation_profiles
 
-                if "shot_tier_profiles" in req.model_fields_set:
-                    if req.shot_tier_profiles is None:
-                        project.pop("shot_tier_profiles", None)
+                if "video_service_tier" in req.model_fields_set:
+                    if req.video_service_tier is None:
+                        project.pop("video_service_tier", None)
                     else:
-                        project["shot_tier_profiles"] = req.shot_tier_profiles
-
-                if "video_continuity_policy" in req.model_fields_set:
-                    if req.video_continuity_policy is None:
-                        project.pop("video_continuity_policy", None)
-                    else:
-                        project["video_continuity_policy"] = req.video_continuity_policy
+                        project["video_service_tier"] = req.video_service_tier
 
                 if "episodes" in req.model_fields_set and req.episodes is not None:
                     # 合并 episodes：保留现有 episode 的完整数据，仅更新请求中显式提供的字段。
@@ -1262,7 +1251,8 @@ async def update_scene(name: str, scene_id: str, req: UpdateSceneRequest, _user:
                                     "characters_in_scene",
                                     "scenes",
                                     "props",
-                                    "shot_tier",
+                                    "storyboard_generation",
+                                    "video_generation",
                                     "segment_break",
                                     "note",
                                 ]:
@@ -1299,7 +1289,8 @@ class UpdateSegmentRequest(BaseModel):
     image_prompt: dict | str | None = None
     video_prompt: dict | str | None = None
     transition_to_next: str | None = None
-    shot_tier: Literal["S", "A", "B"] | None = None
+    storyboard_generation: dict[str, Any] | None = None
+    video_generation: dict[str, Any] | None = None
     note: str | None = None
     characters_in_segment: list[str] | None = None
     scenes: list[str] | None = None
@@ -1343,8 +1334,10 @@ async def update_segment(name: str, segment_id: str, req: UpdateSegmentRequest, 
                                 segment["video_prompt"] = req.video_prompt
                             if req.transition_to_next is not None:
                                 segment["transition_to_next"] = req.transition_to_next
-                            if req.shot_tier is not None:
-                                segment["shot_tier"] = req.shot_tier
+                            if "storyboard_generation" in req.model_fields_set:
+                                segment["storyboard_generation"] = req.storyboard_generation or {}
+                            if "video_generation" in req.model_fields_set:
+                                segment["video_generation"] = req.video_generation or {}
                             if "note" in req.model_fields_set:
                                 segment["note"] = req.note
                             for field in ("characters_in_segment", "scenes", "props"):

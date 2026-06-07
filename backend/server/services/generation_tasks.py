@@ -64,10 +64,7 @@ from server.services.generation_route_resolver import (
     GenerationRoute,
     coerce_video_duration_for_options,
     coerce_video_resolution_for_options,
-    default_shot_tier_for_task,
     duration_options_for_resolution,
-    merged_shot_tier_profiles,
-    normalize_shot_tier,
     resolve_generation_route,
     should_resolve_generation_route,
 )
@@ -893,24 +890,26 @@ def _version_info(versions: Any, resource_type: str, resource_id: str, version: 
     return None
 
 
-def _storyboard_source_quality(versions: Any, resource_id: str, assets: dict[str, Any] | None) -> str:
+def _storyboard_source_metadata(versions: Any, resource_id: str, assets: dict[str, Any] | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     current = _current_version_info(versions, "storyboards", resource_id)
     if current:
         quality = current.get("generation_quality")
         if quality in {"draft", "final", "custom", "grid"}:
-            return str(quality)
+            metadata["source_storyboard_generation_quality"] = str(quality)
+        route = current.get("generation_route") if isinstance(current.get("generation_route"), dict) else {}
+        if route.get("provider"):
+            metadata["source_storyboard_provider"] = route.get("provider")
+        if route.get("model"):
+            metadata["source_storyboard_model"] = route.get("model")
     if isinstance(assets, dict) and assets.get("grid_id"):
-        return "grid"
-    return "unknown"
+        metadata.setdefault("source_storyboard_generation_quality", "grid")
+    metadata.setdefault("source_storyboard_generation_quality", "unknown")
+    return metadata
 
 
-def _payload_with_shot_tier(payload: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any]:
-    if payload.get("shot_tier") in {"S", "A", "B"}:
-        return payload
-    shot_tier = item.get("shot_tier") if isinstance(item, dict) else None
-    if shot_tier not in {"S", "A", "B"}:
-        return payload
-    return {**payload, "shot_tier": shot_tier}
+def _storyboard_source_quality(versions: Any, resource_id: str, assets: dict[str, Any] | None) -> str:
+    return str(_storyboard_source_metadata(versions, resource_id, assets).get("source_storyboard_generation_quality") or "unknown")
 
 
 def _storyboard_video_continuity_policy(
@@ -921,16 +920,13 @@ def _storyboard_video_continuity_policy(
     raw = payload.get("video_continuity_policy")
     if raw is None:
         raw = payload.get("continuity_policy")
-    if raw is None:
-        route_payload = _payload_with_shot_tier(payload, item)
-        shot_tier = normalize_shot_tier(route_payload.get("shot_tier")) or default_shot_tier_for_task("storyboard")
-        strategy = merged_shot_tier_profiles(project).get(shot_tier) if shot_tier else None
-        if isinstance(strategy, dict):
-            raw = strategy.get("video_continuity_policy")
-    if raw is None:
-        raw = project.get("video_continuity_policy")
-    if raw is None:
-        raw = project.get("continuity_policy")
+    if raw is None and isinstance(item, dict):
+        video_generation = item.get("video_generation")
+        if isinstance(video_generation, dict):
+            raw = video_generation.get("video_continuity_policy")
+    if raw is None and isinstance(item, dict):
+        transition = str(item.get("transition_to_next") or "cut").strip().lower()
+        raw = "start_only" if transition in {"fade", "dissolve"} else "end_frame"
     policy = str(raw or "auto").strip().lower()
     return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
 
@@ -1069,6 +1065,7 @@ def _storyboard_source_reference(
             resource_id=resource_id,
         )
     source_quality = str((info or {}).get("generation_quality") or "unknown")
+    source_route = (info or {}).get("generation_route") if isinstance((info or {}).get("generation_route"), dict) else {}
 
     source_rel = str((info or {}).get("file") or "")
     source_path = project_path / source_rel if source_rel else None
@@ -1081,8 +1078,11 @@ def _storyboard_source_reference(
         if source_quality == "unknown":
             current = _current_version_info(versions, "storyboards", resource_id)
             current_quality = str((current or {}).get("generation_quality") or "")
+            current_route = (current or {}).get("generation_route") if isinstance((current or {}).get("generation_route"), dict) else {}
             if current_quality in _STORYBOARD_SOURCE_QUALITIES:
                 source_quality = current_quality
+                if not source_route:
+                    source_route = current_route
             elif isinstance(assets, dict) and assets.get("grid_id"):
                 source_quality = "grid"
     if not source_path.exists():
@@ -1101,6 +1101,8 @@ def _storyboard_source_reference(
         "source_storyboard_version": (info or {}).get("version"),
         "source_storyboard_file": source_rel,
         "source_storyboard_generation_quality": source_quality,
+        "source_storyboard_provider": source_route.get("provider"),
+        "source_storyboard_model": source_route.get("model"),
     }
     return reference, {key: value for key, value in metadata.items() if value is not None}
 
@@ -1357,7 +1359,7 @@ async def preview_storyboard_reference_usage(
             scenes=scenes,
             props=props,
         )
-        route_payload = _payload_with_shot_tier({"script_file": script_file, **payload_overrides}, target_item)
+        route_payload = {"script_file": script_file, **payload_overrides}
         asset_sources = _asset_reference_sources(
             project,
             project_path,
@@ -1503,14 +1505,17 @@ async def preview_storyboard_reference_usage(
     }
 
 
-def _normalize_continuity_policy(project: dict, payload: dict[str, Any]) -> str:
+def _normalize_continuity_policy(payload: dict[str, Any], current_item: dict[str, Any]) -> str:
     raw = payload.get("video_continuity_policy")
     if raw is None:
         raw = payload.get("continuity_policy")
     if raw is None:
-        raw = project.get("video_continuity_policy")
+        video_generation = current_item.get("video_generation")
+        if isinstance(video_generation, dict):
+            raw = video_generation.get("video_continuity_policy")
     if raw is None:
-        raw = project.get("continuity_policy")
+        transition = str(current_item.get("transition_to_next") or "cut").strip().lower()
+        raw = "start_only" if transition in {"fade", "dissolve"} else "end_frame"
     policy = str(raw or "auto").strip().lower()
     return policy if policy in _VIDEO_CONTINUITY_POLICIES else "auto"
 
@@ -1550,7 +1555,7 @@ def _resolve_video_end_image(
     generator: Any,
     payload: dict[str, Any],
 ) -> tuple[Path | None, list[Path] | None, dict[str, Any]]:
-    policy = _normalize_continuity_policy(project, payload)
+    policy = _normalize_continuity_policy(payload, current_item)
     (
         caps,
         supports_end_image,
@@ -1852,7 +1857,7 @@ async def execute_storyboard_task(
     project, project_path, target_item, prompt_text, reference_images, source_storyboard_meta, final_generation_mode = await asyncio.to_thread(
         _prepare
     )
-    route_payload = _payload_with_shot_tier(payload, target_item)
+    route_payload = payload
     _needs_i2i = bool(reference_images)
     route = await _maybe_resolve_generation_route(
         project_name=project_name,
@@ -1966,7 +1971,7 @@ async def execute_video_task(
         return _project, _project_path, _items, _id_field, _item, _item_index, _char_field
 
     project, project_path, items, id_field, item, item_index, char_field = await asyncio.to_thread(_load)
-    route_payload = _payload_with_shot_tier(payload, item)
+    route_payload = payload
     route = await _maybe_resolve_generation_route(
         project_name=project_name,
         project=project,
@@ -1974,11 +1979,6 @@ async def execute_video_task(
         task_kind="video",
     )
     effective_payload = route.effective_payload if route else payload
-    if route is not None and route.shot_tier_strategy.get("video_continuity_policy"):
-        effective_payload = {
-            **effective_payload,
-            "video_continuity_policy": route.shot_tier_strategy["video_continuity_policy"],
-        }
     generator = await get_media_generator(project_name, payload=effective_payload, user_id=user_id)
 
     # 优先读取 generated_assets.storyboard_image，回退默认路径。
@@ -1991,7 +1991,7 @@ async def execute_video_task(
         storyboard_file = project_path / "storyboards" / f"scene_{resource_id}.png"
     if not storyboard_file.is_file():
         raise ValueError(f"storyboard not found: {storyboard_file.name}")
-    source_storyboard_quality = _storyboard_source_quality(generator.versions, resource_id, assets)
+    source_storyboard_metadata = _storyboard_source_metadata(generator.versions, resource_id, assets)
 
     prompt_policy = await _video_prompt_policy_from_generator(generator, project_name)
     prompt_text = _normalize_video_prompt(
@@ -2087,7 +2087,7 @@ async def execute_video_task(
         version_metadata = {}
         if legacy_route_warnings:
             version_metadata["generation_route_warnings"] = legacy_route_warnings
-    version_metadata["source_storyboard_generation_quality"] = source_storyboard_quality
+    version_metadata.update(source_storyboard_metadata)
     # 能力守卫：provider 解析之后的唯一权威家（见 ADR-0001）。安全解析交给守卫，
     # 此处不预先 int() 截断，避免把非整数秒静默修正成「碰巧合法」的值。
     assert_duration_supported(duration_seconds, supported_durations)

@@ -25,7 +25,6 @@ import {
   type VideoContinuitySupport,
 } from "@/utils/provider-models";
 import { effectiveMode } from "@/utils/generation-mode";
-import { normalizeVideoContinuityPolicy } from "@/utils/video-continuity";
 import type { UploadFileInput } from "@/utils/desktop-file";
 import type {
   Scene,
@@ -34,6 +33,9 @@ import type {
   ProviderInfo,
   GenerationQuality,
   StoryboardFinalGenerationMode,
+  StoryboardGenerationSettings,
+  VideoContinuityPolicy,
+  VideoGenerationSettings,
 } from "@/types";
 import type { EpisodeScript } from "@/types/script";
 
@@ -42,10 +44,15 @@ import type { EpisodeScript } from "@/types/script";
 // ---------------------------------------------------------------------------
 
 type PromptField = "image_prompt" | "video_prompt";
-type ResolvedShotTier = "S" | "A" | "B";
-
-function normalizeShotTier(value: unknown): ResolvedShotTier {
-  return value === "S" || value === "B" ? value : "A";
+function splitBackendPair(value: string | null | undefined): { provider: string; model: string } | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const index = trimmed.indexOf("/");
+  if (index <= 0 || index >= trimmed.length - 1) return null;
+  return {
+    provider: trimmed.slice(0, index),
+    model: trimmed.slice(index + 1),
+  };
 }
 
 function resolveSegmentPrompt(
@@ -53,7 +60,13 @@ function resolveSegmentPrompt(
   segmentId: string,
   field: PromptField,
   scriptFile?: string,
-): { resolvedFile: string; prompt: unknown; duration?: number; shotTier: ResolvedShotTier } | null {
+): {
+  resolvedFile: string;
+  prompt: unknown;
+  duration?: number;
+  storyboardGeneration?: StoryboardGenerationSettings;
+  videoGeneration?: VideoGenerationSettings;
+} | null {
   const resolvedFile = scriptFile ?? Object.keys(scripts)[0];
   if (!resolvedFile) return null;
   const script = scripts[resolvedFile];
@@ -66,7 +79,8 @@ function resolveSegmentPrompt(
     resolvedFile,
     prompt: seg?.[field] ?? "",
     duration: seg?.duration_seconds,
-    shotTier: normalizeShotTier(seg?.shot_tier),
+    storyboardGeneration: seg?.storyboard_generation,
+    videoGeneration: seg?.video_generation,
   };
 }
 
@@ -147,10 +161,6 @@ export function StudioCanvasRouter() {
     }
     return lookupVideoContinuitySupport(effectiveVideoBackend, customProviders);
   }, [customProviders, effectiveVideoBackend, resolvedVideoCapabilities]);
-  const videoContinuityPolicy = normalizeVideoContinuityPolicy(
-    currentProjectData?.video_continuity_policy,
-  );
-
   // 从任务队列派生 loading 状态（替代本地 state）
   const tasks = useTasksStore((s) => s.tasks);
   const generatingCharacterNames = useMemo(() => {
@@ -248,13 +258,27 @@ export function StudioCanvasRouter() {
     const resolved = resolveSegmentPrompt(currentScripts, segmentId, "image_prompt", scriptFile);
     if (!resolved) return;
     try {
+      const storyboardSettings = resolved.storyboardGeneration ?? {};
+      const useCurrentAsReference = storyboardSettings.use_current_as_reference === true;
+      const imageBackend = splitBackendPair(storyboardSettings.image_backend);
+      const requestQuality = options?.finalGenerationMode || useCurrentAsReference ? "final" : quality;
       const generationOptions: {
         quality: GenerationQuality;
-        shot_tier: "S" | "A" | "B" | null;
         final_generation_mode?: StoryboardFinalGenerationMode;
-      } = { quality, shot_tier: resolved.shotTier };
-      if (options?.finalGenerationMode) {
-        generationOptions.final_generation_mode = options.finalGenerationMode;
+        resolution?: string | null;
+        image_provider?: string | null;
+        image_model?: string | null;
+      } = {
+        quality: requestQuality,
+        final_generation_mode:
+          options?.finalGenerationMode
+          ?? (useCurrentAsReference ? "draft_locked" : "fresh_sample"),
+        resolution: storyboardSettings.resolution ?? null,
+        image_provider: imageBackend?.provider ?? null,
+        image_model: imageBackend?.model ?? null,
+      };
+      if (generationOptions.final_generation_mode === "fresh_sample" && generationOptions.quality !== "final") {
+        generationOptions.final_generation_mode = undefined;
       }
       await API.generateStoryboard(
         currentProjectName,
@@ -273,18 +297,25 @@ export function StudioCanvasRouter() {
     segmentId: string,
     scriptFile?: string,
     quality: GenerationQuality = "draft",
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
   ) => {
     if (!currentProjectName || !currentScripts) return;
     const resolved = resolveSegmentPrompt(currentScripts, segmentId, "video_prompt", scriptFile);
     if (!resolved) return;
     try {
+      const videoSettings = resolved.videoGeneration ?? {};
       await API.generateVideo(
         currentProjectName,
         segmentId,
         resolved.prompt as string | Record<string, unknown>,
         resolved.resolvedFile,
         resolved.duration,
-        { quality, shot_tier: resolved.shotTier },
+        {
+          quality,
+          resolution: videoSettings.resolution ?? null,
+          video_backend: videoSettings.video_backend ?? null,
+          video_continuity_policy: options?.videoContinuityPolicy ?? videoSettings.video_continuity_policy ?? null,
+        },
       );
       useAppStore.getState().pushToast(tRef.current("video_task_submitted_toast", { id: segmentId }), "success");
     } catch (err) {
@@ -589,7 +620,6 @@ export function StudioCanvasRouter() {
                     scriptFile={scriptFile ?? undefined}
                     projectData={currentProjectData}
                     durationOptions={durationOptions}
-                    videoContinuityPolicy={videoContinuityPolicy}
                     videoContinuitySupport={videoContinuitySupport}
                     onUpdatePrompt={handleUpdatePrompt}
                     onGenerateStoryboard={voidPromise(handleGenerateStoryboard)}
@@ -612,7 +642,6 @@ export function StudioCanvasRouter() {
                     scriptFile={scriptFile ?? undefined}
                     projectData={currentProjectData}
                     durationOptions={durationOptions}
-                    videoContinuityPolicy={videoContinuityPolicy}
                     videoContinuitySupport={videoContinuitySupport}
                     onUpdatePrompt={handleUpdatePrompt}
                     onGenerateStoryboard={voidPromise(handleGenerateStoryboard)}

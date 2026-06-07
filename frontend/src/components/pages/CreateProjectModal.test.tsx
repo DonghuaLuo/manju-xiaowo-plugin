@@ -252,7 +252,6 @@ describe("CreateProjectModal", () => {
         content_mode: "narration",
         aspect_ratio: "9:16",
         generation_mode: "storyboard",
-        video_continuity_policy: "auto",
         style_template_id: "live_premium_drama",
         style: "画风：真人电视剧风格，精品短剧画风，大师级构图",
         video_backend: null,
@@ -272,12 +271,12 @@ describe("CreateProjectModal", () => {
       expect(screen.getByRole("button", { name: /下一步/ })).toBeEnabled()
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /生成质量策略/ }));
-    const videoFinalRow = screen.getByText("视频精修版").closest(".grid");
+    fireEvent.click(screen.getByRole("button", { name: /Generation Defaults|生成默认设置/ }));
+    const videoFinalRow = screen.getByText("分镜视频").closest(".grid");
     expect(videoFinalRow).not.toBeNull();
     fireEvent.click(within(videoFinalRow as HTMLElement).getByRole("combobox", { name: "分辨率" }));
     fireEvent.click(screen.getByRole("option", { name: "4K" }));
-    fireEvent.click(screen.getByRole("button", { name: /生成质量策略/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Generation Defaults|生成默认设置/ }));
 
     fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
     await waitFor(() =>
@@ -288,11 +287,10 @@ describe("CreateProjectModal", () => {
     await waitFor(() => expect(API.createProject).toHaveBeenCalled());
     const payload = vi.mocked(API.createProject).mock.calls[0][0];
     expect(payload.generation_profiles?.video_final?.resolution).toBe("4K");
-    expect(payload.generation_profiles?.video_draft?.resolution).toBe("720p");
-    expect(payload.generation_profiles?.storyboard_draft?.resolution).toBe("1K");
-    expect(payload.shot_tier_profiles?.S?.retry_budget).toBe(1);
-    expect(payload.shot_tier_profiles?.A?.retry_budget).toBe(1);
-    expect(payload.shot_tier_profiles?.B?.retry_budget).toBe(1);
+    expect(payload.generation_profiles?.video_draft?.resolution).toBe("4K");
+    expect(payload.generation_profiles?.storyboard_draft?.resolution).toBeUndefined();
+    expect(payload.generation_profiles?.asset?.resolution).toBeUndefined();
+    expect("shot_tier_profiles" in payload).toBe(false);
   });
 
   it("goes back from step 2 to step 1 preserving title", async () => {

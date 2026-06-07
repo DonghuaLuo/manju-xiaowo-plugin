@@ -46,7 +46,7 @@ TransitionType = Literal[
     "dissolve",
 ]
 
-ShotTier = Literal["S", "A", "B"]
+VideoContinuityPolicy = Literal["auto", "start_only", "end_frame", "reference_assisted"]
 
 
 class Dialogue(BaseModel):
@@ -105,6 +105,28 @@ class GeneratedAssets(BaseModel):
     status: Literal["pending", "storyboard_ready", "completed"] = Field(default="pending", description="生成状态")
 
 
+class StoryboardGenerationSettings(BaseModel):
+    """单分镜生成设置（人工 / UI 字段，对 LLM 隐藏）。"""
+
+    model_config = _STRICT_CONFIG
+
+    resolution: str | None = Field(default=None, description="单分镜分辨率覆盖")
+    image_backend: str | None = Field(default=None, description="单分镜图片模型覆盖（provider/model）")
+    use_current_as_reference: bool | None = Field(default=None, description="是否沿当前分镜继续生成")
+
+
+class VideoGenerationSettings(BaseModel):
+    """单视频生成设置（人工 / UI 字段，对 LLM 隐藏）。"""
+
+    model_config = _STRICT_CONFIG
+
+    resolution: str | None = Field(default=None, description="单视频分辨率覆盖")
+    video_backend: str | None = Field(default=None, description="单视频视频模型覆盖（provider/model）")
+    video_continuity_policy: VideoContinuityPolicy | None = Field(
+        default=None, description="单视频连续性策略覆盖"
+    )
+
+
 # ============ 说书模式（Narration） ============
 
 
@@ -118,7 +140,7 @@ class NarrationSegment(BaseModel):
 
     model_config = _STRICT_CONFIG
 
-    LEGACY_DROPPED_FIELDS: ClassVar[frozenset[str]] = frozenset({"clues_in_segment"})
+    LEGACY_DROPPED_FIELDS: ClassVar[frozenset[str]] = frozenset({"clues_in_segment", "shot_tier"})
 
     @model_validator(mode="before")
     @classmethod
@@ -143,7 +165,12 @@ class NarrationSegment(BaseModel):
     transition_to_next: SkipJsonSchema[TransitionType] = Field(default="cut", description="转场类型")
     # 以下字段对 LLM 隐藏（SkipJsonSchema）：note 是人工备注、generated_assets 是 post-LLM 运行时状态。
     # 仍保留在 Pydantic 模型里以便存储 / 校验，但不出现在 response_schema 中，避免 LLM 填污染数据。
-    shot_tier: SkipJsonSchema[ShotTier] = Field(default="A", description="镜头质量档位：S/A/B")
+    storyboard_generation: SkipJsonSchema[StoryboardGenerationSettings] = Field(
+        default_factory=StoryboardGenerationSettings, description="单分镜生成设置"
+    )
+    video_generation: SkipJsonSchema[VideoGenerationSettings] = Field(
+        default_factory=VideoGenerationSettings, description="单视频生成设置"
+    )
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
@@ -193,7 +220,7 @@ class DramaScene(BaseModel):
 
     model_config = _STRICT_CONFIG
 
-    LEGACY_DROPPED_FIELDS: ClassVar[frozenset[str]] = frozenset({"scene_type", "clues_in_scene"})
+    LEGACY_DROPPED_FIELDS: ClassVar[frozenset[str]] = frozenset({"scene_type", "clues_in_scene", "shot_tier"})
 
     @model_validator(mode="before")
     @classmethod
@@ -215,7 +242,12 @@ class DramaScene(BaseModel):
     # 见 NarrationSegment.transition_to_next 说明
     transition_to_next: SkipJsonSchema[TransitionType] = Field(default="cut", description="转场类型")
     # 见 NarrationSegment 同名字段说明。
-    shot_tier: SkipJsonSchema[ShotTier] = Field(default="A", description="镜头质量档位：S/A/B")
+    storyboard_generation: SkipJsonSchema[StoryboardGenerationSettings] = Field(
+        default_factory=StoryboardGenerationSettings, description="单分镜生成设置"
+    )
+    video_generation: SkipJsonSchema[VideoGenerationSettings] = Field(
+        default_factory=VideoGenerationSettings, description="单视频生成设置"
+    )
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"

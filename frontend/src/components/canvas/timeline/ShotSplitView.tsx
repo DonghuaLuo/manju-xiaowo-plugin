@@ -3,7 +3,6 @@ import type {
   NarrationSegment,
   DramaScene,
   GenerationQuality,
-  ProjectData,
   StoryboardFinalGenerationMode,
   VideoContinuityPolicy,
 } from "@/types";
@@ -20,7 +19,6 @@ interface ShotSplitViewProps {
   aspectRatio: "9:16" | "16:9";
   projectName: string;
   scriptFile?: string;
-  isGridMode?: boolean;
   onUpdatePrompt?: (
     segmentId: string,
     fieldOrPatch: string | Record<string, unknown>,
@@ -31,15 +29,17 @@ interface ShotSplitViewProps {
     quality?: GenerationQuality,
     options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) => void;
-  onGenerateVideo?: (segmentId: string, quality?: GenerationQuality) => void;
+  onGenerateVideo?: (
+    segmentId: string,
+    quality?: GenerationQuality,
+    options?: { videoContinuityPolicy?: VideoContinuityPolicy },
+  ) => void;
   onRestoreStoryboard?: () => Promise<void> | void;
   onRestoreVideo?: () => Promise<void> | void;
   generatingStoryboard?: (segmentId: string) => boolean;
   generatingVideo?: (segmentId: string) => boolean;
   durationOptions?: number[];
-  videoContinuityPolicy?: VideoContinuityPolicy;
   videoContinuitySupport?: VideoContinuitySupport | null;
-  shotTierProfiles?: ProjectData["shot_tier_profiles"];
 }
 
 function getSegmentId(seg: Segment, mode: "narration" | "drama"): string {
@@ -57,7 +57,6 @@ export function ShotSplitView({
   aspectRatio,
   projectName,
   scriptFile,
-  isGridMode,
   onUpdatePrompt,
   onGenerateStoryboard,
   onGenerateVideo,
@@ -66,9 +65,7 @@ export function ShotSplitView({
   generatingStoryboard,
   generatingVideo,
   durationOptions,
-  videoContinuityPolicy,
   videoContinuitySupport,
-  shotTierProfiles,
 }: ShotSplitViewProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(
@@ -135,7 +132,6 @@ export function ShotSplitView({
         aspectRatio={aspectRatio}
         projectName={projectName}
         scriptFile={scriptFile}
-        isGridMode={isGridMode}
         selectedIndex={safeIndex}
         totalCount={segments.length}
         onPrev={() => setSelectedIndex((i) => Math.max(0, i - 1))}
@@ -149,9 +145,7 @@ export function ShotSplitView({
         generatingVideo={generatingVideo?.(segmentId)}
         durationOptions={durationOptions}
         nextSegment={nextSegment}
-        videoContinuityPolicy={videoContinuityPolicy}
         videoContinuitySupport={videoContinuitySupport}
-        shotTierProfiles={shotTierProfiles}
       />
     </div>
   );

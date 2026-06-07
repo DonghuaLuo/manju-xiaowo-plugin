@@ -8,6 +8,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
 import { errMsg } from "@/utils/async";
+import { videoContinuityMetadataToPlan } from "@/utils/video-continuity";
 
 interface VersionTimeMachineProps {
   projectName: string;
@@ -17,6 +18,7 @@ interface VersionTimeMachineProps {
   allowDelete?: boolean;
   /** Icon-only trigger button: hides label and chevron for narrow card headers. */
   iconOnly?: boolean;
+  currentVersionLabel?: string | null;
 }
 
 function getImagePreviewHeightClass(
@@ -36,12 +38,21 @@ function qualityLabel(t: (key: string) => string, quality?: VersionInfo["generat
 
 function versionMetaBadges(t: (key: string) => string, info: VersionInfo): string[] {
   const route = info.generation_route;
+  const continuityPlan = videoContinuityMetadataToPlan(info.video_continuity);
+  const continuityLabel = continuityPlan
+    ? ({
+        start_only: "仅首帧",
+        end_frame: "首尾帧连续",
+        reference_assisted: "参考图辅助",
+      }[continuityPlan.effectivePolicy] ?? continuityPlan.effectivePolicy)
+    : null;
   return [
     qualityLabel(t, info.generation_quality),
     route?.resolution,
     route?.duration_seconds != null ? `${route.duration_seconds}s` : null,
     route?.provider && route.model ? `${route.provider}/${route.model}` : null,
     route?.generate_audio === true ? t("generate_audio_label") : null,
+    continuityLabel,
   ].filter((item): item is string => Boolean(item));
 }
 
@@ -64,6 +75,7 @@ export function VersionTimeMachine({
   onRestore,
   allowDelete = false,
   iconOnly = false,
+  currentVersionLabel,
 }: VersionTimeMachineProps) {
   const { t } = useTranslation("dashboard");
   const resourcePath =
@@ -303,10 +315,15 @@ export function VersionTimeMachine({
           aria-label={t("version_mgmt")}
           aria-haspopup="dialog"
           aria-expanded={open}
-          className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[oklch(1_0_0_/_0.05)]"
+          className="focus-ring relative inline-flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 transition-colors hover:bg-[oklch(1_0_0_/_0.05)]"
           style={{ color: "var(--color-text-3)" }}
         >
           <History className="h-3.5 w-3.5" />
+          {currentVersionLabel ? (
+            <span className="absolute -right-1 -top-1 text-[9px] font-mono leading-4 text-text-4">
+              {currentVersionLabel}
+            </span>
+          ) : null}
         </button>
       ) : (
         <button
@@ -318,7 +335,10 @@ export function VersionTimeMachine({
           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-200"
         >
           <History className="h-3 w-3" />
-          <span>{t("version_mgmt")}</span>
+          <span>
+            {t("version_mgmt")}
+            {currentVersionLabel ? ` ${currentVersionLabel}` : ""}
+          </span>
           {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         </button>
       )}

@@ -17,6 +17,7 @@ import { ReferenceVideoCard, unitPromptText } from "./ReferenceVideoCard";
 import { ReferencePanel } from "./ReferencePanel";
 import { EpisodeHeader } from "./EpisodeHeader";
 import { PreprocessingView } from "@/components/canvas/timeline/PreprocessingView";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   useReferenceVideoStore,
   referenceVideoCacheKey,
@@ -86,6 +87,8 @@ export function ReferenceVideoCanvas({
   // Drafts persist across unit switches; entry is dropped when text matches server value.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+  const [batchGenerating, setBatchGenerating] = useState(false);
 
   const relevantTasks = useTasksStore(
     useShallow((s) =>
@@ -201,6 +204,29 @@ export function ReferenceVideoCanvas({
       await handleGenerate(u.unit_id);
     }
   }, [units, statusMap, handleGenerate, t]);
+
+  const pendingBatchCount = useMemo(
+    () => units.filter((u) => statusMap[u.unit_id] === "pending").length,
+    [units, statusMap],
+  );
+
+  const handleRequestBatchGenerate = useCallback(() => {
+    if (pendingBatchCount <= 0) {
+      useAppStore.getState().pushToast(t("reference_batch_nothing_to_do"), "info");
+      return;
+    }
+    setBatchConfirmOpen(true);
+  }, [pendingBatchCount, t]);
+
+  const handleConfirmBatchGenerate = useCallback(async () => {
+    setBatchGenerating(true);
+    try {
+      await handleBatchGenerate();
+      setBatchConfirmOpen(false);
+    } finally {
+      setBatchGenerating(false);
+    }
+  }, [handleBatchGenerate]);
 
   const onAdd = useCallback(() => void handleAdd(), [handleAdd]);
   const onGenerateVoid = useCallback(
@@ -480,8 +506,8 @@ export function ReferenceVideoCanvas({
         {tab === "units" && (
           <button
             type="button"
-            onClick={() => void handleBatchGenerate()}
-            disabled={units.length === 0 || generating}
+            onClick={() => void handleRequestBatchGenerate()}
+            disabled={units.length === 0 || generating || batchGenerating}
             className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-[var(--color-hairline)] bg-[oklch(0.22_0.011_265_/_0.5)] px-2.5 py-1 text-[11.5px] text-[var(--color-text-2)] transition-colors hover:bg-[oklch(0.26_0.013_265_/_0.7)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
@@ -779,6 +805,19 @@ export function ReferenceVideoCanvas({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={batchConfirmOpen}
+        title={t("reference_batch_generate")}
+        description={t("reference_batch_generate_confirm_desc", {
+          count: pendingBatchCount,
+        })}
+        confirmLabel={t("common:confirm")}
+        loadingLabel={t("submitting")}
+        loading={batchGenerating}
+        onConfirm={() => void handleConfirmBatchGenerate()}
+        onCancel={() => setBatchConfirmOpen(false)}
+      />
     </div>
   );
 }

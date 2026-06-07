@@ -900,7 +900,17 @@ export default {
   grid_preview_batch_generate: "このグリッドを生成",
   grid_preview_empty_episode: "このエピソードにはまだ絵コンテがありません。先に「前処理」で脚本を分割してください",
   batch_generate_storyboards: "絵コンテ画像を一括生成",
+  batch_generate_storyboards_confirm_desc:
+    "You are about to queue storyboard generation for {{count}} shots. Continue?",
   batch_generate_videos: "動画を一括生成",
+  batch_generate_videos_confirm_desc:
+    "You are about to queue video generation for {{count}} shots. Continue?",
+  generate_all_grids_confirm_desc:
+    "You are about to queue grid-board generation for the whole episode. Continue?",
+  grid_preview_batch_generate_confirm_desc:
+    "You are about to queue grid-board generation for this group of {{count}} shots. Continue?",
+  reference_batch_generate_confirm_desc:
+    "You are about to queue video generation for {{count}} units. Continue?",
   shot_search_placeholder: "絵コンテを検索…",
   shots_collapsed_label: "絵コンテ · {{count}}",
   shots_section_title: "絵コンテ",
