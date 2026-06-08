@@ -30,7 +30,7 @@ skills:
 - generation_mode 字段（storyboard / grid / reference_video）
 - characters、scenes、props 已有数据
 
-使用 Glob 工具确认中间文件存在：
+使用 Glob 工具确认中间文件存在：`path` 指向项目根或已存在父目录，`pattern` 写下面的相对子路径，避免把尚未生成的 `drafts/episode_{N}/` 直接作为 `path`。
 - `generation_mode=reference_video`：`drafts/episode_{N}/step1_reference_units.md`
 - 非 reference_video 且 `content_mode=narration`：`drafts/episode_{N}/step1_segments.md`
 - 非 reference_video 且 `content_mode=drama`：`drafts/episode_{N}/step1_normalized_script.md`

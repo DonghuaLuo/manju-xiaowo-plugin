@@ -33,8 +33,9 @@
 
 agent session 的当前工作目录（cwd）已绑定到当前项目根，**所有工具参数中的路径必须遵循以下规则**：
 
-- **Read / Edit / Write / Glob / Grep**：`file_path` 使用**绝对路径**
+- **Read / Edit / Write**：`file_path` 使用**绝对路径**；**Glob / Grep**：`path` 使用**绝对路径**
 - **Grep 参数**：必须使用 SDK 字段名 `-n`、`-C`、`-A`、`-B`、`-i`，不要写成 `n` / `C`
+- **Glob 状态检查**：检查可能尚未生成的目录时，`path` 指向项目根或已存在父目录，`pattern` 写相对子路径；不要把尚未创建的 `drafts/episode_{N}/` 直接作为 `path`
 - **Bash 调用 skill 脚本**：使用**相对项目根 cwd** 的路径，例如：
   - ✅ `source/episode_1.txt`、`drafts/episode_1/step1_segments.md`、`scripts/episode_1.json`
   - ❌ `projects/{项目名}/source/episode_1.txt`（双前缀，占位符替换或拼接出错就会落到 projects 根）

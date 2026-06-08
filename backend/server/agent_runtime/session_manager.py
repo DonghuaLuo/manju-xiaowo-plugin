@@ -1197,6 +1197,11 @@ class SessionManager:
                 if normalized != tool_input:
                     tool_input = normalized
                     updated_input = True
+            if tool_name == "Glob":
+                normalized = self._normalize_glob_tool_input(tool_input, project_cwd)
+                if normalized != tool_input:
+                    tool_input = normalized
+                    updated_input = True
             path_key = self._PATH_TOOLS[tool_name]
             file_path = tool_input.get(path_key)
 
@@ -1267,6 +1272,59 @@ class SessionManager:
                 normalized[canonical] = value
             changed = True
         return normalized if changed else tool_input
+
+    @classmethod
+    def _normalize_glob_tool_input(cls, tool_input: dict[str, Any], project_cwd: Path) -> dict[str, Any]:
+        """Rewrite project-internal missing Glob directories to a scoped pattern.
+
+        Claude Code's Glob tool validates that ``path`` already exists. In this
+        workflow agents often use Glob as a read-only state check for outputs
+        that may not exist yet (for example ``drafts/episode_1``). Creating the
+        directory would mutate workflow state, so keep the filesystem unchanged
+        and ask Glob to search from the project root with the missing directory
+        moved into ``pattern``. Missing outputs then produce an empty match set
+        instead of a tool validation error.
+        """
+        path_value = tool_input.get("path")
+        if not isinstance(path_value, str) or not path_value.strip():
+            return tool_input
+
+        pattern_value = tool_input.get("pattern")
+        if pattern_value is None:
+            pattern = "**/*"
+        elif isinstance(pattern_value, str):
+            pattern = pattern_value.strip() or "**/*"
+        else:
+            return tool_input
+
+        try:
+            project_root = project_cwd.resolve(strict=False)
+            raw_path = Path(path_value.strip())
+            glob_root = raw_path if raw_path.is_absolute() else project_cwd / raw_path
+            resolved_glob_root = glob_root.resolve(strict=False)
+            if resolved_glob_root.exists():
+                return tool_input
+            missing_rel = resolved_glob_root.relative_to(project_root)
+        except (OSError, RuntimeError, ValueError):
+            return tool_input
+
+        if not missing_rel.parts:
+            return tool_input
+
+        rewritten_pattern = cls._join_glob_pattern(missing_rel.as_posix(), pattern)
+        return {**tool_input, "path": str(project_root), "pattern": rewritten_pattern}
+
+    @staticmethod
+    def _join_glob_pattern(prefix: str, pattern: str) -> str:
+        clean_prefix = prefix.replace("\\", "/").strip("/")
+        clean_pattern = pattern.replace("\\", "/").lstrip("/")
+        if not clean_prefix:
+            return clean_pattern or "**/*"
+        if not clean_pattern:
+            return clean_prefix
+        if clean_pattern == clean_prefix or clean_pattern.startswith(f"{clean_prefix}/"):
+            return clean_pattern
+        return f"{clean_prefix}/{clean_pattern}"
 
     def _is_raw_source_access_allowed(
         self,

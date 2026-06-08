@@ -58,7 +58,7 @@ mcp__arcreel__get_video_capabilities({})
 
 **Step 1**: 检查文件状态
 
-使用 Glob 工具检查 `drafts/episode_{N}/` 是否存在。
+使用 Glob 工具检查 `drafts/episode_{N}/` 是否存在：`path` 指向项目根或已存在父目录，`pattern` 写 `drafts/episode_{N}/**/*`，不要把尚未创建的目录直接作为 `path`。
 使用 Read 工具读取 `project.json` 了解角色/场景/道具列表。
 同时确认 `script_splitting_template_id`、`script_splitting.resolved_profile_hash` 和
 `script_splitting.resolved_profile` 已存在。首次生成时
