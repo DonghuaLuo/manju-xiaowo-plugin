@@ -210,7 +210,7 @@ export function PreprocessingView({
   );
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-w-0 flex-col gap-3">
       {renderToolbar ? (
         <>
           <span id={statusLabelId} className="sr-only">{statusLabel}</span>
@@ -248,7 +248,7 @@ export function PreprocessingView({
         </div>
       ) : (
         <div
-          className={`preprocessing-document-shell prose-invert max-w-none text-sm ${compact ? "markdown-compact is-compact" : ""}`}
+          className={`preprocessing-document-shell min-w-0 prose-invert max-w-none text-sm ${compact ? "markdown-compact is-compact" : ""}`}
         >
           <StreamMarkdown content={content} />
         </div>

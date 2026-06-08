@@ -350,7 +350,7 @@ export function GridImageToVideoCanvas({
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab === "preprocessing" && hasDraft ? (
-          <div className="h-full overflow-y-auto p-4">
+          <div className="h-full min-w-0 overflow-auto p-4">
             <PreprocessingView
               projectName={projectName}
               episode={episode}

@@ -329,6 +329,8 @@ body {
 
 /* === Markdown / Preprocessing document chrome === */
 .preprocessing-document-shell {
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
     border: 1px solid var(--color-hairline);
     border-radius: 8px;
@@ -382,6 +384,8 @@ body {
 }
 
 .markdown-body {
+    min-width: 0;
+    max-width: 100%;
     color: var(--color-text-2);
 }
 
@@ -418,6 +422,8 @@ body {
 
 .markdown-table-card {
     margin: 14px 0;
+    min-width: 0;
+    max-width: 100%;
     overflow: visible;
     border: 1px solid var(--color-hairline);
     border-radius: 8px;
@@ -499,13 +505,55 @@ body {
 }
 
 .markdown-table-scroll {
+    --scrollbar-opacity: 0.42;
     width: 100%;
     max-width: 100%;
-    overflow-x: auto;
+    overflow-x: scroll;
     overflow-y: hidden;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: auto;
+    scrollbar-color: oklch(0.74 0.055 285 / var(--scrollbar-opacity)) oklch(1 0 0 / 0.10);
     border-radius: 0 0 8px 8px;
     background: oklch(0.145 0.009 265 / 0.98);
+    box-shadow: inset -18px 0 20px -22px var(--color-accent-glow);
     -webkit-overflow-scrolling: touch;
+}
+
+.markdown-table-scroll:hover,
+.markdown-table-scroll:focus-within {
+    --scrollbar-opacity: 1;
+}
+
+.markdown-table-scroll::-webkit-scrollbar {
+    height: 16px;
+}
+
+.markdown-table-scroll::-webkit-scrollbar-track {
+    border-radius: 9999px;
+    background: oklch(1 0 0 / 0.10);
+}
+
+.markdown-table-scroll::-webkit-scrollbar-thumb {
+    min-width: 64px;
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background:
+        linear-gradient(
+            90deg,
+            oklch(0.70 0.070 286 / var(--scrollbar-opacity)),
+            oklch(0.78 0.052 250 / var(--scrollbar-opacity))
+        );
+    background-clip: padding-box;
+}
+
+.markdown-table-scroll::-webkit-scrollbar-thumb:hover {
+    background:
+        linear-gradient(
+            90deg,
+            oklch(0.78 0.082 286),
+            oklch(0.84 0.060 250)
+        );
+    background-clip: padding-box;
 }
 
 .markdown-table-scroll-fullscreen {
