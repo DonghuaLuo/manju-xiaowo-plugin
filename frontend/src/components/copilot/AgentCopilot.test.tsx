@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAssistantSession } from "@/hooks/useAssistantSession";
 import { useAppStore } from "@/stores/app-store";
@@ -26,6 +26,59 @@ vi.mock("./chat/ChatMessage", () => ({
 }));
 
 const mockedUseAssistantSession = vi.mocked(useAssistantSession);
+
+function installScrollMetrics(
+  element: HTMLElement,
+  {
+    clientHeight = 120,
+    scrollHeight = 480,
+    scrollTop = 0,
+  }: {
+    clientHeight?: number;
+    scrollHeight?: number;
+    scrollTop?: number;
+  } = {},
+) {
+  let currentClientHeight = clientHeight;
+  let currentScrollHeight = scrollHeight;
+  let currentScrollTop = scrollTop;
+  const scrollTo = vi.fn(({ top }: { top: number }) => {
+    currentScrollTop = top;
+  });
+
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    get: () => currentClientHeight,
+  });
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    get: () => currentScrollHeight,
+  });
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    get: () => currentScrollTop,
+    set: (value: number) => {
+      currentScrollTop = value;
+    },
+  });
+  Object.defineProperty(element, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+
+  return {
+    scrollTo,
+    setClientHeight(value: number) {
+      currentClientHeight = value;
+    },
+    setScrollHeight(value: number) {
+      currentScrollHeight = value;
+    },
+    setScrollTop(value: number) {
+      currentScrollTop = value;
+    },
+  };
+}
 
 function makePendingQuestion() {
   return {
@@ -164,5 +217,153 @@ describe("AgentCopilot", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith("你好", undefined);
+  });
+
+  it("keeps sticking to the bottom while the draft turn streams in place", () => {
+    useAssistantStore.setState({
+      turns: [
+        {
+          type: "user",
+          uuid: "turn-user-1",
+          content: [{ type: "text", text: "先来一个计划" }],
+        },
+      ],
+      draftTurn: {
+        type: "assistant",
+        uuid: "draft-assistant-1",
+        content: [{ type: "text", text: "第 1 行" }],
+      },
+    });
+
+    render(<AgentCopilot />);
+
+    const scrollContainer = screen.getByTestId("assistant-messages-scroll");
+    const metrics = installScrollMetrics(scrollContainer, {
+      clientHeight: 120,
+      scrollHeight: 520,
+      scrollTop: 400,
+    });
+
+    metrics.scrollTo.mockClear();
+
+    act(() => {
+      useAssistantStore.setState({
+        draftTurn: {
+          type: "assistant",
+          uuid: "draft-assistant-1",
+          content: [{ type: "text", text: "第 1 行\n第 2 行" }],
+        },
+      });
+    });
+
+    expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 400, behavior: "auto" });
+  });
+
+  it("pauses auto-scroll after manual scroll-up and offers a jump-to-bottom button", () => {
+    useAssistantStore.setState({
+      turns: [
+        {
+          type: "user",
+          uuid: "turn-user-1",
+          content: [{ type: "text", text: "你好" }],
+        },
+        {
+          type: "assistant",
+          uuid: "turn-assistant-1",
+          content: [{ type: "text", text: "这里是第一轮回复" }],
+        },
+      ],
+    });
+
+    render(<AgentCopilot />);
+
+    const scrollContainer = screen.getByTestId("assistant-messages-scroll");
+    const metrics = installScrollMetrics(scrollContainer, {
+      clientHeight: 120,
+      scrollHeight: 600,
+      scrollTop: 480,
+    });
+
+    act(() => {
+      metrics.setScrollTop(160);
+      fireEvent.scroll(scrollContainer);
+    });
+
+    expect(screen.getByTestId("assistant-scroll-bottom")).toBeInTheDocument();
+
+    metrics.scrollTo.mockClear();
+
+    act(() => {
+      useAssistantStore.setState({
+        turns: [
+          ...useAssistantStore.getState().turns,
+          {
+            type: "assistant",
+            uuid: "turn-assistant-2",
+            content: [{ type: "text", text: "这里是第二轮回复" }],
+          },
+        ],
+      });
+    });
+
+    expect(metrics.scrollTo).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("assistant-scroll-bottom"));
+
+    expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 480, behavior: "smooth" });
+    expect(screen.queryByTestId("assistant-scroll-bottom")).not.toBeInTheDocument();
+  });
+
+  it("resumes auto-scroll when the active assistant session changes", () => {
+    useAssistantStore.setState({
+      currentSessionId: "session-1",
+      turns: [
+        {
+          type: "user",
+          uuid: "turn-user-1",
+          content: [{ type: "text", text: "旧会话" }],
+        },
+        {
+          type: "assistant",
+          uuid: "turn-assistant-1",
+          content: [{ type: "text", text: "旧会话回复" }],
+        },
+      ],
+    });
+
+    render(<AgentCopilot />);
+
+    const scrollContainer = screen.getByTestId("assistant-messages-scroll");
+    const metrics = installScrollMetrics(scrollContainer, {
+      clientHeight: 120,
+      scrollHeight: 600,
+      scrollTop: 480,
+    });
+
+    act(() => {
+      metrics.setScrollTop(160);
+      fireEvent.scroll(scrollContainer);
+    });
+
+    expect(screen.getByTestId("assistant-scroll-bottom")).toBeInTheDocument();
+
+    metrics.scrollTo.mockClear();
+
+    act(() => {
+      useAssistantStore.setState({
+        currentSessionId: "session-2",
+        turns: [
+          {
+            type: "user",
+            uuid: "turn-user-2",
+            content: [{ type: "text", text: "新会话" }],
+          },
+        ],
+        draftTurn: null,
+      });
+    });
+
+    expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 480, behavior: "auto" });
+    expect(screen.queryByTestId("assistant-scroll-bottom")).not.toBeInTheDocument();
   });
 });

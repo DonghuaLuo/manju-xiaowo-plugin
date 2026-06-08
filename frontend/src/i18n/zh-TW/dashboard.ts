@@ -278,6 +278,7 @@ export default {
   thinking: "運行中",
   start_chat_hint: "在下方輸入訊息開始對話",
   quick_skill_hint: "輸入 / 可快速呼叫技能",
+  assistant_back_to_bottom: "回到底部",
   enlarge_image: "點擊放大圖片",
   remove_image: "移除圖片",
   assistant_input: "助手輸入",

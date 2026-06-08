@@ -278,6 +278,7 @@ export default {
   thinking: "실행 중",
   start_chat_hint: "아래에 메시지를 입력해 대화를 시작하세요.",
   quick_skill_hint: "/ 를 입력하면 스킬을 빠르게 호출할 수 있습니다.",
+  assistant_back_to_bottom: "맨 아래로 이동",
   enlarge_image: "이미지 확대",
   remove_image: "이미지 제거",
   assistant_input: "어시스턴트 입력",

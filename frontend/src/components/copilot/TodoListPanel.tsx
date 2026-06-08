@@ -5,39 +5,50 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import type { Turn, TodoItem } from "@/types";
 
 // ---------------------------------------------------------------------------
-// extractLatestTodos – scan turns (back-to-front) to find the most recent
-// TodoWrite tool_use block and return its input.todos array.
+// Todo extraction helpers – keep streaming draft updates from forcing a full
+// transcript scan on every token.
 // ---------------------------------------------------------------------------
+
+function isTodoItem(value: unknown): value is TodoItem {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "content" in value &&
+      "status" in value,
+  );
+}
+
+export function extractTodosFromTurn(turn: Turn | null): TodoItem[] | null {
+  if (!turn || !Array.isArray(turn.content)) return null;
+
+  for (let j = turn.content.length - 1; j >= 0; j--) {
+    const block = turn.content[j];
+    if (block.type !== "tool_use" || block.name !== "TodoWrite" || block.is_error === true) {
+      continue;
+    }
+
+    const input = block.input;
+    const todos = input?.todos;
+    if (Array.isArray(todos) && todos.every(isTodoItem)) {
+      return todos;
+    }
+  }
+  return null;
+}
+
+export function extractLatestTodosFromTurns(turns: Turn[]): TodoItem[] | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const todos = extractTodosFromTurn(turns[i]);
+    if (todos) return todos;
+  }
+  return null;
+}
 
 export function extractLatestTodos(
   turns: Turn[],
   draftTurn: Turn | null,
 ): TodoItem[] | null {
-  const allTurns = draftTurn ? [...turns, draftTurn] : turns;
-
-  for (let i = allTurns.length - 1; i >= 0; i--) {
-    const turn = allTurns[i];
-    if (!Array.isArray(turn.content)) continue;
-    for (let j = turn.content.length - 1; j >= 0; j--) {
-      const block = turn.content[j];
-      if (block.type !== "tool_use" || block.name !== "TodoWrite" || block.is_error === true) {
-        continue;
-      }
-
-      const input = block.input;
-      const todos = input?.todos;
-      if (
-        Array.isArray(todos) &&
-        todos.every(
-          (item: unknown) =>
-            item && typeof item === "object" && "content" in item && "status" in item,
-        )
-      ) {
-        return todos as TodoItem[];
-      }
-    }
-  }
-  return null;
+  return extractTodosFromTurn(draftTurn) ?? extractLatestTodosFromTurns(turns);
 }
 
 // ---------------------------------------------------------------------------
@@ -54,10 +65,15 @@ export function TodoListPanel({ turns, draftTurn }: TodoListPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const listId = useId();
 
-  const todos = useMemo(
-    () => extractLatestTodos(turns, draftTurn),
-    [turns, draftTurn],
+  const latestCommittedTodos = useMemo(
+    () => extractLatestTodosFromTurns(turns),
+    [turns],
   );
+  const draftTodos = useMemo(
+    () => extractTodosFromTurn(draftTurn),
+    [draftTurn],
+  );
+  const todos = draftTodos ?? latestCommittedTodos;
 
   // Hide when no todos or all completed
   if (!todos || todos.length === 0) return null;

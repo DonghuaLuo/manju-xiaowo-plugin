@@ -278,6 +278,7 @@ export default {
   thinking: "运行中",
   start_chat_hint: "在下方输入消息开始对话",
   quick_skill_hint: "输入 / 可快速调用技能",
+  assistant_back_to_bottom: "回到底部",
   enlarge_image: "点击放大图片",
   remove_image: "移除图片",
   assistant_input: "助手输入",

@@ -278,6 +278,7 @@ export default {
   thinking: "実行中",
   start_chat_hint: "下にメッセージを入力して会話を開始",
   quick_skill_hint: "/ を入力するとスキルをすばやく呼び出せます",
+  assistant_back_to_bottom: "一番下へ戻る",
   enlarge_image: "クリックして画像を拡大",
   remove_image: "画像を削除",
   assistant_input: "アシスタント入力",

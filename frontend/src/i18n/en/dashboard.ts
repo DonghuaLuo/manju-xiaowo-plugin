@@ -276,6 +276,7 @@ export default {
   thinking: "Running",
   start_chat_hint: "Type a message below to start chatting",
   quick_skill_hint: "Type / to quickly invoke skills",
+  assistant_back_to_bottom: "Back to bottom",
   enlarge_image: "Click to enlarge image",
   remove_image: "Remove image",
   assistant_input: "Assistant Input",

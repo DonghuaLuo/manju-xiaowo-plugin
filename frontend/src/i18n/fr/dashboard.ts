@@ -278,6 +278,7 @@ export default {
   thinking: "Courir",
   start_chat_hint: "Tapez un message ci-dessous pour commencer à discuter",
   quick_skill_hint: "Tapez / pour invoquer rapidement des compétences",
+  assistant_back_to_bottom: "Revenir en bas",
   enlarge_image: "Cliquez pour agrandir l'image",
   remove_image: "Supprimer l'image",
   assistant_input: "Saisie de l'assistant",

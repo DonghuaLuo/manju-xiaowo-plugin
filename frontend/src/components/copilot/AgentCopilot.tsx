@@ -1,7 +1,8 @@
-import { useState, useRef, useCallback, useEffect, useId } from "react";
+import { memo, useState, useRef, useCallback, useEffect, useId, useLayoutEffect, useMemo } from "react";
 import { PluginSDK } from "xiaowo-sdk";
 import { voidCall, voidPromise } from "@/utils/async";
-import { Bot, Send, Square, Plus, ChevronDown, Trash2, MessageSquare, ChevronsRight, Paperclip, X } from "lucide-react";
+import { Bot, Send, Square, Plus, ChevronDown, Trash2, MessageSquare, ChevronsRight, Paperclip, X, ArrowDown } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ImageLightbox } from "@/components/ui/ImageLightbox";
@@ -35,6 +36,7 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 // ---------------------------------------------------------------------------
 
 const MAX_TEXTAREA_HEIGHT_VH = 50;
+const AUTO_SCROLL_THRESHOLD_PX = 48;
 
 // ---------------------------------------------------------------------------
 // SessionSelector — 会话下拉选择器
@@ -48,7 +50,9 @@ function SessionSelector({
   onDelete: (sessionId: string) => void;
 }) {
   const { t } = useTranslation("dashboard");
-  const { sessions, currentSessionId, isDraftSession } = useAssistantStore();
+  const sessions = useAssistantStore((s) => s.sessions);
+  const currentSessionId = useAssistantStore((s) => s.currentSessionId);
+  const isDraftSession = useAssistantStore((s) => s.isDraftSession);
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
@@ -171,23 +175,233 @@ function formatTime(isoStr: string | undefined, t: TFunction): string {
   return formatShortDateTime(isoStr) ?? t("new_session");
 }
 
+function isNearScrollBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.clientHeight - element.scrollTop <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function scrollElementToBottom(element: HTMLElement, behavior: ScrollBehavior = "auto"): void {
+  const top = Math.max(0, element.scrollHeight - element.clientHeight);
+  if (typeof element.scrollTo === "function") {
+    element.scrollTo({ top, behavior });
+    return;
+  }
+  element.scrollTop = top;
+}
+
+const CopilotMessageViewport = memo(function CopilotMessageViewport() {
+  const { t } = useTranslation("dashboard");
+  const currentSessionId = useAssistantStore((s) => s.currentSessionId);
+  const isDraftSession = useAssistantStore((s) => s.isDraftSession);
+  const turns = useAssistantStore((s) => s.turns);
+  const draftTurn = useAssistantStore((s) => s.draftTurn);
+  const messagesLoading = useAssistantStore((s) => s.messagesLoading);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const programmaticScrollResetRef = useRef<number | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const [contentNode, setContentNode] = useState<HTMLDivElement | null>(null);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const autoScrollEnabledRef = useRef(true);
+  const allTurns = useMemo(() => composeAllTurns(turns, draftTurn), [turns, draftTurn]);
+  const scrollContextKey = currentSessionId ?? (isDraftSession ? "draft" : "none");
+  // eslint-disable-next-line react-hooks/incompatible-library -- useVirtualizer 与 React Compiler 不兼容（已知第三方库限制）
+  const virtualizer = useVirtualizer({
+    count: allTurns.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 160,
+    overscan: 8,
+    getItemKey: (index) => allTurns[index]?.uuid ?? `turn-${index}`,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+
+  const setAutoScrollState = useCallback((enabled: boolean) => {
+    autoScrollEnabledRef.current = enabled;
+    setAutoScrollEnabled(enabled);
+  }, []);
+
+  const clearProgrammaticScrollLock = useCallback(() => {
+    programmaticScrollRef.current = false;
+    if (programmaticScrollResetRef.current !== null) {
+      window.clearTimeout(programmaticScrollResetRef.current);
+      programmaticScrollResetRef.current = null;
+    }
+  }, []);
+
+  const holdProgrammaticScrollLock = useCallback(() => {
+    if (programmaticScrollResetRef.current !== null) {
+      window.clearTimeout(programmaticScrollResetRef.current);
+    }
+    programmaticScrollRef.current = true;
+    programmaticScrollResetRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollResetRef.current = null;
+    }, 600);
+  }, []);
+
+  const syncAutoScrollState = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    if (programmaticScrollRef.current) {
+      if (isNearScrollBottom(element)) clearProgrammaticScrollLock();
+      return;
+    }
+    setAutoScrollState(isNearScrollBottom(element));
+  }, [clearProgrammaticScrollLock, setAutoScrollState]);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const element = scrollRef.current;
+    if (!element) return;
+    if (behavior === "smooth") holdProgrammaticScrollLock();
+    scrollElementToBottom(element, behavior);
+    setAutoScrollState(true);
+  }, [holdProgrammaticScrollLock, setAutoScrollState]);
+
+  useLayoutEffect(() => {
+    clearProgrammaticScrollLock();
+    setAutoScrollState(true);
+    const element = scrollRef.current;
+    if (!element) return;
+    scrollElementToBottom(element);
+  }, [clearProgrammaticScrollLock, scrollContextKey, setAutoScrollState]);
+
+  useLayoutEffect(() => {
+    if (!autoScrollEnabledRef.current) return;
+    const element = scrollRef.current;
+    if (!element) return;
+    scrollElementToBottom(element);
+  }, [allTurns, messagesLoading, totalSize]);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const scrollNode = scrollRef.current;
+    if (!scrollNode) return;
+    const observer = new ResizeObserver(() => {
+      if (!autoScrollEnabledRef.current) return;
+      scrollElementToBottom(scrollNode);
+    });
+
+    observer.observe(scrollNode);
+    if (contentNode) observer.observe(contentNode);
+
+    return () => observer.disconnect();
+  }, [contentNode]);
+
+  useEffect(() => clearProgrammaticScrollLock, [clearProgrammaticScrollLock]);
+
+  const showJumpToBottom = !autoScrollEnabled && allTurns.length > 0;
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div
+        ref={scrollRef}
+        data-testid="assistant-messages-scroll"
+        onScroll={syncAutoScrollState}
+        className="h-full min-w-0 overflow-y-auto overflow-x-hidden px-3 py-3"
+      >
+        {allTurns.length === 0 && !messagesLoading ? (
+          <div ref={setContentNode} className="flex h-full min-h-52 flex-col items-center justify-center text-center">
+            <div
+              className="mb-3 grid h-12 w-12 place-items-center rounded-2xl"
+              style={{
+                background:
+                  "linear-gradient(135deg, var(--color-accent-dim), oklch(0.22 0.011 265 / 0.6))",
+                border: "1px solid var(--color-accent-soft)",
+                boxShadow: "0 0 24px -8px var(--color-accent-glow)",
+              }}
+            >
+              <Bot
+                className="h-5 w-5"
+                style={{ color: "var(--color-accent-2)" }}
+              />
+            </div>
+            <p
+              className="display-serif text-[14px] font-semibold"
+              style={{ color: "var(--color-text)" }}
+            >
+              {t("start_chat_hint")}
+            </p>
+            <p
+              className="mt-1 text-[11.5px]"
+              style={{ color: "var(--color-text-3)" }}
+            >
+              {t("quick_skill_hint")}
+            </p>
+          </div>
+        ) : (
+          <div
+            ref={setContentNode}
+            className="relative w-full"
+            style={{ height: totalSize > 0 ? `${totalSize}px` : undefined }}
+          >
+            {virtualItems.map((item) => {
+              const turn = allTurns[item.index];
+              if (!turn) return null;
+              return (
+                <div
+                  key={item.key}
+                  data-index={item.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full pb-3"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  <ChatMessage message={turn} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showJumpToBottom && (
+        <button
+          type="button"
+          data-testid="assistant-scroll-bottom"
+          onClick={() => scrollToBottom("smooth")}
+          className="absolute bottom-4 right-4 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] shadow-lg transition-colors focus-ring"
+          style={{
+            background: "oklch(0.23 0.013 265 / 0.92)",
+            border: "1px solid var(--color-accent-soft)",
+            color: "var(--color-accent-2)",
+            boxShadow: "0 10px 28px -18px var(--color-accent-glow)",
+          }}
+          aria-label={t("assistant_back_to_bottom", { defaultValue: "回到底部" })}
+          title={t("assistant_back_to_bottom", { defaultValue: "回到底部" })}
+        >
+          <ArrowDown className="h-3.5 w-3.5" />
+          <span>{t("assistant_back_to_bottom", { defaultValue: "回到底部" })}</span>
+        </button>
+      )}
+    </div>
+  );
+});
+
+CopilotMessageViewport.displayName = "CopilotMessageViewport";
+
+const AssistantTodoListPanel = memo(function AssistantTodoListPanel() {
+  const turns = useAssistantStore((s) => s.turns);
+  const draftTurn = useAssistantStore((s) => s.draftTurn);
+  return <TodoListPanel turns={turns} draftTurn={draftTurn} />;
+});
+
+AssistantTodoListPanel.displayName = "AssistantTodoListPanel";
+
 // ---------------------------------------------------------------------------
 // AgentCopilot — 主面板
 // ---------------------------------------------------------------------------
 
 export function AgentCopilot() {
   const { t } = useTranslation(["dashboard", "common"]);
-  const {
-    turns, draftTurn, messagesLoading,
-    sending, sessionStatus, pendingQuestion, answeringQuestion, error,
-  } = useAssistantStore();
+  const sending = useAssistantStore((s) => s.sending);
+  const sessionStatus = useAssistantStore((s) => s.sessionStatus);
+  const pendingQuestion = useAssistantStore((s) => s.pendingQuestion);
+  const answeringQuestion = useAssistantStore((s) => s.answeringQuestion);
+  const error = useAssistantStore((s) => s.error);
 
   const { currentProjectName } = useProjectsStore();
   const toggleAssistantPanel = useAppStore((s) => s.toggleAssistantPanel);
   const { sendMessage, answerQuestion, interrupt, createNewSession, switchSession, deleteSession } =
     useAssistantSession(currentProjectName);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const imageGenRef = useRef(0);
@@ -201,7 +415,6 @@ export function AgentCopilot() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const allTurns = composeAllTurns(turns, draftTurn);
   const isRunning = sessionStatus === "running";
   const inputDisabled = Boolean(pendingQuestion) || answeringQuestion || isRunning || sending;
   const attachDisabled = inputDisabled || attachedImages.length >= MAX_IMAGES;
@@ -448,12 +661,6 @@ export function AgentCopilot() {
     textareaRef.current?.focus();
   }, [inputDisabled]);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [allTurns.length]);
-
   return (
     <div
       className="relative isolate flex h-full flex-col"
@@ -520,41 +727,7 @@ export function AgentCopilot() {
       <ContextBanner />
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-3">
-        {allTurns.length === 0 && !messagesLoading && (
-          <div className="flex h-full flex-col items-center justify-center text-center">
-            <div
-              className="mb-3 grid h-12 w-12 place-items-center rounded-2xl"
-              style={{
-                background:
-                  "linear-gradient(135deg, var(--color-accent-dim), oklch(0.22 0.011 265 / 0.6))",
-                border: "1px solid var(--color-accent-soft)",
-                boxShadow: "0 0 24px -8px var(--color-accent-glow)",
-              }}
-            >
-              <Bot
-                className="h-5 w-5"
-                style={{ color: "var(--color-accent-2)" }}
-              />
-            </div>
-            <p
-              className="display-serif text-[14px] font-semibold"
-              style={{ color: "var(--color-text)" }}
-            >
-              {t("start_chat_hint")}
-            </p>
-            <p
-              className="mt-1 text-[11.5px]"
-              style={{ color: "var(--color-text-3)" }}
-            >
-              {t("quick_skill_hint")}
-            </p>
-          </div>
-        )}
-        {allTurns.map((turn, i) => (
-          <ChatMessage key={turn.uuid || `turn-${i}`} message={turn} />
-        ))}
-      </div>
+      <CopilotMessageViewport />
 
       {pendingQuestion && (
         <PendingQuestionWizard
@@ -565,7 +738,7 @@ export function AgentCopilot() {
         />
       )}
 
-      <TodoListPanel turns={turns} draftTurn={draftTurn} />
+      <AssistantTodoListPanel />
 
       {!pendingQuestion && (error || attachError) && (
         <div

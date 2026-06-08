@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ContentBlock, Turn } from "@/types";
 import { cn } from "./utils";
 import { getRoleLabel } from "./utils";
@@ -13,7 +14,7 @@ interface ChatMessageProps {
   message: Turn;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export const ChatMessage = memo(function ChatMessage({ message }: ChatMessageProps) {
   if (!message) return null;
 
   const messageType = typeof message.type === "string" ? message.type : "";
@@ -83,7 +84,9 @@ export function ChatMessage({ message }: ChatMessageProps) {
       </div>
     </article>
   );
-}
+});
+
+ChatMessage.displayName = "ChatMessage";
 
 // ---------------------------------------------------------------------------
 // Helpers

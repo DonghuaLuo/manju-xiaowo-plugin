@@ -278,6 +278,7 @@ export default {
   thinking: "Laufen",
   start_chat_hint: "Geben Sie unten eine Nachricht ein, um mit dem Chatten zu beginnen",
   quick_skill_hint: "Geben Sie / ein, um schnell Fähigkeiten aufzurufen",
+  assistant_back_to_bottom: "Zum Ende springen",
   enlarge_image: "Klicken Sie, um das Bild zu vergrößern",
   remove_image: "Bild entfernen",
   assistant_input: "Assistenteneingabe",

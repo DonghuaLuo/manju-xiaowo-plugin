@@ -278,6 +278,7 @@ export default {
   thinking: "Выполняется",
   start_chat_hint: "Введите сообщение ниже, чтобы начать диалог",
   quick_skill_hint: "Введите / для быстрого вызова навыков",
+  assistant_back_to_bottom: "Вернуться вниз",
   enlarge_image: "Нажмите, чтобы увеличить изображение",
   remove_image: "Удалить изображение",
   assistant_input: "Ввод ассистента",

@@ -278,6 +278,7 @@ export default {
   thinking: "Đang suy nghĩ",
   start_chat_hint: "Nhập tin nhắn bên dưới để bắt đầu trò chuyện",
   quick_skill_hint: "Gõ / để gọi nhanh các skill",
+  assistant_back_to_bottom: "Về cuối cuộc trò chuyện",
   enlarge_image: "Nhấn để phóng to ảnh",
   remove_image: "Bỏ ảnh",
   assistant_input: "Ô nhập trợ lý",

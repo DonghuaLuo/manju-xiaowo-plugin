@@ -278,6 +278,7 @@ export default {
   thinking: "corriendo",
   start_chat_hint: "Escribe un mensaje a continuación para comenzar a chatear",
   quick_skill_hint: "Escribe / para invocar rápidamente habilidades",
+  assistant_back_to_bottom: "Volver al final",
   enlarge_image: "Haga clic para ampliar la imagen",
   remove_image: "Quitar imagen",
   assistant_input: "Entrada del asistente",
