@@ -122,6 +122,8 @@ export default {
   no_characters_hint_clickable: "尚無角色，點此新增",
   no_scenes_hint_clickable: "尚無場景，點此新增",
   no_props_hint_clickable: "尚無道具，點此新增",
+  lorebook_search_placeholder: "搜尋標題…",
+  lorebook_no_search_results: "沒有符合的項目",
   add_character: "新增角色",
   model_selection: "模型選擇",
   model_selection_desc: "設定全域預設生成模型，專案內可單獨覆蓋。",

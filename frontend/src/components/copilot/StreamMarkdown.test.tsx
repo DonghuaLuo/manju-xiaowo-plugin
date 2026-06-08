@@ -74,4 +74,24 @@ describe("StreamMarkdown table controls", () => {
       "markdown-table-fullscreen",
     );
   });
+
+  it("keeps wide markdown tables horizontally scrollable", async () => {
+    render(
+      <StreamMarkdown
+        content={[
+          "| 集数 | 场次 | 人物 | 场景 | 道具 | 备注 |",
+          "| --- | --- | --- | --- | --- | --- |",
+          "| E01 | S001 | 角色A | 场景A | 道具A | 这是一个很长的备注 |",
+        ].join("\n")}
+      />,
+    );
+
+    const table = await screen.findByRole("table");
+    expect(table).toHaveStyle({
+      display: "table",
+      width: "max-content",
+      minWidth: "100%",
+      tableLayout: "auto",
+    });
+  });
 });

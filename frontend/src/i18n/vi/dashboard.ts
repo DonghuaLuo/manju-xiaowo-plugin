@@ -122,6 +122,8 @@ export default {
   no_characters_hint_clickable: "Chưa có nhân vật, nhấn để thêm",
   no_scenes_hint_clickable: "Chưa có cảnh, nhấn để thêm",
   no_props_hint_clickable: "Chưa có đạo cụ, nhấn để thêm",
+  lorebook_search_placeholder: "Tìm tiêu đề…",
+  lorebook_no_search_results: "Không có mục phù hợp",
   add_character: "Thêm nhân vật",
   model_selection: "Lựa chọn mô hình",
   model_selection_desc: "Đặt mô hình mặc định toàn cục để tạo nội dung, có thể ghi đè theo dự án.",

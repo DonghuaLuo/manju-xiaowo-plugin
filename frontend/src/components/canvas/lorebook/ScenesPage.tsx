@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Landmark } from "lucide-react";
 import { GalleryToolbar } from "./GalleryToolbar";
 import { SceneCard } from "./SceneCard";
+import { BulkAddToLibraryDialog } from "@/components/assets/BulkAddToLibraryDialog";
 import { AssetFormModal } from "@/components/assets/AssetFormModal";
 import { AssetPickerModal } from "@/components/assets/AssetPickerModal";
 import { API } from "@/api";
@@ -27,10 +28,26 @@ export function ScenesPage({ projectName, scenes, onUpdateScene, onGenerateScene
   const { t } = useTranslation(["dashboard", "assets"]);
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [bulkAdding, setBulkAdding] = useState(false);
+  const [search, setSearch] = useState("");
 
   useScrollTarget("scene");
 
-  const entries = Object.entries(scenes);
+  const entries = useMemo(() => Object.entries(scenes), [scenes]);
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredEntries = useMemo(() => {
+    if (!normalizedSearch) return entries;
+    return entries.filter(([name]) => name.toLocaleLowerCase().includes(normalizedSearch));
+  }, [entries, normalizedSearch]);
+  const bulkItems = useMemo(
+    () =>
+      filteredEntries.map(([name, scene]) => ({
+        name,
+        description: scene.description,
+        sheetPath: scene.scene_sheet ?? null,
+      })),
+    [filteredEntries],
+  );
 
   const handleImport = async (ids: string[]) => {
     try {
@@ -52,9 +69,14 @@ export function ScenesPage({ projectName, scenes, onUpdateScene, onGenerateScene
     <div className="flex h-full flex-col overflow-y-auto">
       <GalleryToolbar
         title={t("dashboard:scenes")}
-        count={entries.length}
+        count={filteredEntries.length}
         onAdd={() => setAdding(true)}
+        onBulkAddToLibrary={() => setBulkAdding(true)}
+        bulkAddDisabled={filteredEntries.length === 0}
         onPickFromLibrary={() => setPicking(true)}
+        searchValue={search}
+        searchPlaceholder={t("dashboard:lorebook_search_placeholder")}
+        onSearchChange={setSearch}
       />
       <div className="px-5 py-5">
         {entries.length === 0 ? (
@@ -64,9 +86,20 @@ export function ScenesPage({ projectName, scenes, onUpdateScene, onGenerateScene
             hint={t("dashboard:no_scenes_hint_clickable")}
             onClick={() => setAdding(true)}
           />
+        ) : filteredEntries.length === 0 ? (
+          <div
+            className="rounded-xl px-6 py-14 text-center text-[13px]"
+            style={{
+              color: "var(--color-text-4)",
+              background: "oklch(0.18 0.010 265 / 0.35)",
+              border: "1px solid var(--color-hairline-soft)",
+            }}
+          >
+            {t("dashboard:lorebook_no_search_results")}
+          </div>
         ) : (
           <div className="grid justify-evenly gap-4 [grid-template-columns:repeat(auto-fill,320px)]">
-            {entries.map(([name, scene]) => (
+            {filteredEntries.map(([name, scene]) => (
               <SceneCard key={name} name={name} scene={scene} projectName={projectName}
                 onUpdate={onUpdateScene}
                 onGenerate={onGenerateScene}
@@ -97,6 +130,16 @@ export function ScenesPage({ projectName, scenes, onUpdateScene, onGenerateScene
           existingNames={new Set(Object.keys(scenes))}
           onClose={() => setPicking(false)}
           onImport={(ids) => { void handleImport(ids); }}
+        />
+      )}
+
+      {bulkAdding && (
+        <BulkAddToLibraryDialog
+          pageTitle={t("dashboard:scenes")}
+          projectName={projectName}
+          resourceType="scene"
+          items={bulkItems}
+          onClose={() => setBulkAdding(false)}
         />
       )}
     </div>

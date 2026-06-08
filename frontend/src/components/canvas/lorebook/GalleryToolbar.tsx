@@ -1,21 +1,38 @@
 import { useTranslation } from "react-i18next";
-import { Plus, Package } from "lucide-react";
+import { Plus, Package, Search } from "lucide-react";
 
 interface Props {
   title: string;
   count: number;
   onAdd: () => void;
   onPickFromLibrary: () => void;
+  onBulkAddToLibrary?: () => void;
+  bulkAddDisabled?: boolean;
+  searchValue?: string;
+  searchPlaceholder?: string;
+  onSearchChange?: (value: string) => void;
 }
 
 /**
  * GalleryToolbar — v3 视觉：玻璃栏 + display-serif 标题 + accent CTA。
  */
-export function GalleryToolbar({ title, count, onAdd, onPickFromLibrary }: Props) {
+export function GalleryToolbar({
+  title,
+  count,
+  onAdd,
+  onPickFromLibrary,
+  onBulkAddToLibrary,
+  bulkAddDisabled = false,
+  searchValue,
+  searchPlaceholder,
+  onSearchChange,
+}: Props) {
   const { t } = useTranslation(["dashboard", "assets"]);
+  const showSearch = searchValue !== undefined && onSearchChange;
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t("dashboard:lorebook_search_placeholder");
   return (
     <div
-      className="sticky top-0 z-10 flex items-center gap-3 px-5 py-3"
+      className="sticky top-0 z-10 flex flex-wrap items-center gap-3 px-5 py-3"
       style={{
         background:
           "linear-gradient(180deg, oklch(0.20 0.012 265 / 0.85), oklch(0.18 0.010 265 / 0.65))",
@@ -52,6 +69,55 @@ export function GalleryToolbar({ title, count, onAdd, onPickFromLibrary }: Props
         {String(count).padStart(2, "0")}
       </span>
       <div className="flex-1" />
+      {showSearch && (
+        <div
+          className="flex min-w-[190px] max-w-[280px] flex-1 items-center gap-1.5 rounded-md px-2.5 py-1.5"
+          style={{
+            background: "oklch(0.16 0.010 265 / 0.58)",
+            border: "1px solid var(--color-hairline)",
+            boxShadow: "inset 0 1px 0 oklch(1 0 0 / 0.025)",
+          }}
+        >
+          <Search
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: "var(--color-text-4)" }}
+          />
+          <input
+            type="search"
+            value={searchValue}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder={resolvedSearchPlaceholder}
+            aria-label={resolvedSearchPlaceholder}
+            className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-[var(--color-text-4)]"
+            style={{ color: "var(--color-text)" }}
+          />
+        </div>
+      )}
+      {onBulkAddToLibrary && (
+        <button
+          type="button"
+          onClick={onBulkAddToLibrary}
+          disabled={bulkAddDisabled}
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+          style={{
+            color: "var(--color-text-2)",
+            border: "1px solid var(--color-hairline)",
+            background: "oklch(0.22 0.011 265 / 0.5)",
+          }}
+          onMouseEnter={(e) => {
+            if (e.currentTarget.disabled) return;
+            e.currentTarget.style.background = "oklch(0.26 0.013 265 / 0.7)";
+            e.currentTarget.style.color = "var(--color-text)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "oklch(0.22 0.011 265 / 0.5)";
+            e.currentTarget.style.color = "var(--color-text-2)";
+          }}
+        >
+          <Package className="h-3.5 w-3.5" />
+          {t("assets:batch_add_to_library")}
+        </button>
+      )}
       <button
         type="button"
         onClick={onPickFromLibrary}

@@ -145,6 +145,7 @@ function MarkdownTable({
   children,
   className,
   node: _node,
+  style,
   ...props
 }: TableHTMLAttributes<HTMLTableElement> & { node?: unknown }) {
   const { t } = useTranslation(["dashboard", "common"]);
@@ -228,6 +229,13 @@ function MarkdownTable({
   const tableElement = (
     <table
       className={className}
+      style={{
+        display: "table",
+        width: "max-content",
+        minWidth: "100%",
+        tableLayout: "auto",
+        ...style,
+      }}
       {...props}
       data-streamdown="table"
     >

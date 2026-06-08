@@ -148,6 +148,8 @@ export default {
   no_characters_hint_clickable: "Aucun personnage pour l'instant, cliquez pour ajouter",
   no_scenes_hint_clickable: "Aucune scène pour l'instant, cliquez pour ajouter",
   no_props_hint_clickable: "Pas encore d'accessoires, cliquez pour ajouter",
+  lorebook_search_placeholder: "Rechercher un titre…",
+  lorebook_no_search_results: "Aucun élément correspondant",
   add_character: "Ajouter un personnage",
   model_selection: "Sélection des modèles",
   model_selection_desc: "Définir les modèles globaux par défaut pour la génération, avec surcharge possible par projet.",

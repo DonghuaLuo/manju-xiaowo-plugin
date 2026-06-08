@@ -499,10 +499,13 @@ body {
 }
 
 .markdown-table-scroll {
+    width: 100%;
     max-width: 100%;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-radius: 0 0 8px 8px;
     background: oklch(0.145 0.009 265 / 0.98);
+    -webkit-overflow-scrolling: touch;
 }
 
 .markdown-table-scroll-fullscreen {
@@ -513,8 +516,11 @@ body {
 
 .markdown-table-card table,
 .markdown-table-fullscreen table {
-    width: 100%;
+    display: table;
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
+    table-layout: auto;
     color: var(--color-text-2);
 }
 

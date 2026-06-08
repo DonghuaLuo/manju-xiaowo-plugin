@@ -148,6 +148,8 @@ export default {
   no_characters_hint_clickable: "キャラクターはまだありません。クリックして追加",
   no_scenes_hint_clickable: "シーンはまだありません。クリックして追加",
   no_props_hint_clickable: "小道具はまだありません。クリックして追加",
+  lorebook_search_placeholder: "タイトルを検索…",
+  lorebook_no_search_results: "一致する項目はありません",
   add_character: "キャラクターを追加",
   model_selection: "モデル選択",
   model_selection_desc: "生成に使うグローバル既定モデルを設定します。プロジェクトごとに上書きできます。",

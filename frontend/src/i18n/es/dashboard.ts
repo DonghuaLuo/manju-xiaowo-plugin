@@ -148,6 +148,8 @@ export default {
   no_characters_hint_clickable: "Aún no hay personajes, haz clic para agregar",
   no_scenes_hint_clickable: "Aún no hay escenas, haz clic para agregar",
   no_props_hint_clickable: "Aún no hay accesorios, haz clic para agregar",
+  lorebook_search_placeholder: "Buscar título…",
+  lorebook_no_search_results: "No hay elementos coincidentes",
   add_character: "Agregar personaje",
   model_selection: "Selección de modelos",
   model_selection_desc: "Define modelos globales predeterminados para generar contenido; se pueden sobrescribir por proyecto.",

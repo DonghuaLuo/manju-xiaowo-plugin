@@ -120,6 +120,8 @@ export default {
   no_characters_hint_clickable: "No characters yet, click to add",
   no_scenes_hint_clickable: "No scenes yet, click to add",
   no_props_hint_clickable: "No props yet, click to add",
+  lorebook_search_placeholder: "Search title…",
+  lorebook_no_search_results: "No matching items",
   add_character: "Add Character",
   model_selection: "Model Selection",
   model_selection_desc: "Set global default generation models, can be overridden per project.",

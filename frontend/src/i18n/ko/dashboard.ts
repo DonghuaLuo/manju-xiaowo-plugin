@@ -148,6 +148,8 @@ export default {
   no_characters_hint_clickable: "아직 캐릭터가 없습니다. 여기를 눌러 추가하세요.",
   no_scenes_hint_clickable: "아직 장면이 없습니다. 여기를 눌러 추가하세요.",
   no_props_hint_clickable: "아직 소품이 없습니다. 여기를 눌러 추가하세요.",
+  lorebook_search_placeholder: "제목 검색…",
+  lorebook_no_search_results: "일치하는 항목이 없습니다",
   add_character: "캐릭터 추가",
   model_selection: "모델 선택",
   model_selection_desc: "콘텐츠 생성용 전역 기본 모델을 설정하며 프로젝트별로 덮어쓸 수 있습니다.",

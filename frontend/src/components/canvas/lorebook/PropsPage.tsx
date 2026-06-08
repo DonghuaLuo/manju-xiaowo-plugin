@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Package } from "lucide-react";
 import { GalleryToolbar } from "./GalleryToolbar";
 import { PropCard } from "./PropCard";
+import { BulkAddToLibraryDialog } from "@/components/assets/BulkAddToLibraryDialog";
 import { AssetFormModal } from "@/components/assets/AssetFormModal";
 import { AssetPickerModal } from "@/components/assets/AssetPickerModal";
 import { API } from "@/api";
@@ -27,10 +28,26 @@ export function PropsPage({ projectName, props, onUpdateProp, onGenerateProp, on
   const { t } = useTranslation(["dashboard", "assets"]);
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [bulkAdding, setBulkAdding] = useState(false);
+  const [search, setSearch] = useState("");
 
   useScrollTarget("prop");
 
-  const entries = Object.entries(props);
+  const entries = useMemo(() => Object.entries(props), [props]);
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredEntries = useMemo(() => {
+    if (!normalizedSearch) return entries;
+    return entries.filter(([name]) => name.toLocaleLowerCase().includes(normalizedSearch));
+  }, [entries, normalizedSearch]);
+  const bulkItems = useMemo(
+    () =>
+      filteredEntries.map(([name, prop]) => ({
+        name,
+        description: prop.description,
+        sheetPath: prop.prop_sheet ?? null,
+      })),
+    [filteredEntries],
+  );
 
   const handleImport = async (ids: string[]) => {
     try {
@@ -52,9 +69,14 @@ export function PropsPage({ projectName, props, onUpdateProp, onGenerateProp, on
     <div className="flex h-full flex-col overflow-y-auto">
       <GalleryToolbar
         title={t("dashboard:props")}
-        count={entries.length}
+        count={filteredEntries.length}
         onAdd={() => setAdding(true)}
+        onBulkAddToLibrary={() => setBulkAdding(true)}
+        bulkAddDisabled={filteredEntries.length === 0}
         onPickFromLibrary={() => setPicking(true)}
+        searchValue={search}
+        searchPlaceholder={t("dashboard:lorebook_search_placeholder")}
+        onSearchChange={setSearch}
       />
       <div className="px-5 py-5">
         {entries.length === 0 ? (
@@ -64,9 +86,20 @@ export function PropsPage({ projectName, props, onUpdateProp, onGenerateProp, on
             hint={t("dashboard:no_props_hint_clickable")}
             onClick={() => setAdding(true)}
           />
+        ) : filteredEntries.length === 0 ? (
+          <div
+            className="rounded-xl px-6 py-14 text-center text-[13px]"
+            style={{
+              color: "var(--color-text-4)",
+              background: "oklch(0.18 0.010 265 / 0.35)",
+              border: "1px solid var(--color-hairline-soft)",
+            }}
+          >
+            {t("dashboard:lorebook_no_search_results")}
+          </div>
         ) : (
           <div className="grid justify-evenly gap-4 [grid-template-columns:repeat(auto-fill,320px)]">
-            {entries.map(([name, prop]) => (
+            {filteredEntries.map(([name, prop]) => (
               <PropCard key={name} name={name} prop={prop} projectName={projectName}
                 onUpdate={onUpdateProp}
                 onGenerate={onGenerateProp}
@@ -97,6 +130,16 @@ export function PropsPage({ projectName, props, onUpdateProp, onGenerateProp, on
           existingNames={new Set(Object.keys(props))}
           onClose={() => setPicking(false)}
           onImport={(ids) => { void handleImport(ids); }}
+        />
+      )}
+
+      {bulkAdding && (
+        <BulkAddToLibraryDialog
+          pageTitle={t("dashboard:props")}
+          projectName={projectName}
+          resourceType="prop"
+          items={bulkItems}
+          onClose={() => setBulkAdding(false)}
         />
       )}
     </div>

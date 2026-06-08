@@ -122,6 +122,8 @@ export default {
   no_characters_hint_clickable: "Персонажей пока нет, нажмите, чтобы добавить",
   no_scenes_hint_clickable: "Сцен пока нет, нажмите, чтобы добавить",
   no_props_hint_clickable: "Предметов пока нет, нажмите, чтобы добавить",
+  lorebook_search_placeholder: "Поиск по заголовку…",
+  lorebook_no_search_results: "Нет совпадающих элементов",
   add_character: "Добавить персонажа",
   model_selection: "Выбор модели",
   model_selection_desc: "Настройте глобальные модели генерации по умолчанию, с возможностью переопределения в проекте.",

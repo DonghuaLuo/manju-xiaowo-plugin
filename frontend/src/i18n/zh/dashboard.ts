@@ -122,6 +122,8 @@ export default {
   no_characters_hint_clickable: "暂无角色，点此添加",
   no_scenes_hint_clickable: "暂无场景，点此添加",
   no_props_hint_clickable: "暂无道具，点此添加",
+  lorebook_search_placeholder: "搜索标题…",
+  lorebook_no_search_results: "没有匹配的条目",
   add_character: "添加角色",
   model_selection: "模型选择",
   model_selection_desc: "设置全局默认的生成模型，项目内可单独覆盖",

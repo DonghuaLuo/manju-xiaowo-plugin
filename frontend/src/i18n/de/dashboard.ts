@@ -148,6 +148,8 @@ export default {
   no_characters_hint_clickable: "Noch keine Zeichen, klicken Sie zum Hinzufügen",
   no_scenes_hint_clickable: "Noch keine Szenen, klicken Sie zum Hinzufügen",
   no_props_hint_clickable: "Noch keine Requisiten, klicken Sie zum Hinzufügen",
+  lorebook_search_placeholder: "Titel suchen…",
+  lorebook_no_search_results: "Keine passenden Einträge",
   add_character: "Figur hinzufügen",
   model_selection: "Modellauswahl",
   model_selection_desc: "Globale Standardmodelle für die Generierung festlegen; pro Projekt überschreibbar.",
