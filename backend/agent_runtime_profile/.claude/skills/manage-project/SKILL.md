@@ -1,6 +1,6 @@
 ---
 name: manage-project
-description: 项目管理工具集。使用场景：(1) 分集切分——探测切分点并执行切分，(2) 新增/修改角色/场景/道具到 project.json（经 patch_project 工具，按 table+name upsert 或写顶层 settings 字段）。提供 peek（预览）+ split（执行）的渐进式切分工作流，以及角色/场景/道具与项目级 settings 写入。
+description: 项目管理工具集。使用场景：(1) 分集切分——探测切分点并执行切分，(2) 查看 source 文本文件的安全统计信息，(3) 新增/修改角色/场景/道具到 project.json（经 patch_project 工具，按 table+name upsert 或写顶层 settings 字段）。提供 peek（预览）+ split（执行）的渐进式切分工作流、源文件统计，以及角色/场景/道具与项目级 settings 写入。
 user-invocable: false
 ---
 
@@ -14,6 +14,7 @@ user-invocable: false
 - 直接使用 `python .claude/skills/...`；运行时已由插件注入为当前 manju 后端 Python，不要使用 `uv run`、`py` 或系统 Python。
 - 不要把脚本路径或 `--source` 参数转换为项目绝对路径；`--source` 使用 `source/原文.txt` 或 `source/_remaining.txt`。
 - Bash 命令必须单行，不使用 `python -`、`python -c`、heredoc 或多行临时脚本。
+- 需要源文件行数、大小、字符数或阅读单位统计时，使用 `source_info.py`；不要用 `wc`、`cat`、`python -c` 或临时脚本直接读取原文。
 - 如果目标集 `source/episode_{N}.txt` 不存在，先执行 peek/split 生成单集文件，不要用 Read/Grep 直接读取或搜索整本原文推进后续阶段。
 
 ## 工具一览
@@ -22,6 +23,7 @@ user-invocable: false
 |------|------|--------|
 | `peek_split_point.py` | 探测目标字数附近的上下文和自然断点 | 主 agent（阶段 2） |
 | `split_episode.py` | 执行分集切分，生成 episode_N.txt + _remaining.txt | 主 agent（阶段 2） |
+| `source_info.py` | 输出 source 文本文件的行数、大小、字符数和阅读单位统计，不返回正文 | 主 agent / subagent |
 | `mcp__arcreel__patch_project` | 新增/修改 project.json 的角色/场景/道具或顶层 settings 字段 | subagent / 主 agent |
 | `mcp__arcreel__patch_episode_script` | 按分镜 id 编辑剧本字段 | subagent / 主 agent |
 | `mcp__arcreel__insert_segment` | 插入分镜 | subagent / 主 agent |
@@ -32,6 +34,16 @@ user-invocable: false
 ## 分集切分工作流
 
 分集切分采用 **peek → 用户确认 → split** 的渐进式流程，由主 agent 在 manga-workflow 阶段 2 直接执行。
+
+### 源文件统计
+
+需要查看原文行数、文件大小、字符数或阅读单位时执行：
+
+```bash
+python .claude/skills/manage-project/scripts/source_info.py --source {源文件}
+```
+
+输出 JSON 仅包含统计字段，不包含原文内容。`--source` 使用 `source/原文.txt`、`source/_remaining.txt` 或 `source/episode_{N}.txt`，不要传项目绝对路径。
 
 ### Step 1: 探测切分点
 

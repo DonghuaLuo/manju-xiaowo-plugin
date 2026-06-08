@@ -1112,6 +1112,8 @@ class SessionManager:
             return (
                 "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
                 "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
+                "如需统计 source 文件行数/大小/阅读单位，请运行 "
+                "`python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`。"
             )
 
         try:
@@ -1130,6 +1132,8 @@ class SessionManager:
                 return (
                     "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
                     "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
+                    "如需统计 source 文件行数/大小/阅读单位，请运行 "
+                    "`python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`。"
                 )
 
         if any(_POSIX_WINDOWS_DRIVE_RE.match(token) for token in tokens):
