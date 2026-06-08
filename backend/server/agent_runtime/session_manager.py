@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 import shlex
 import sys
 import tempfile
@@ -70,6 +71,13 @@ _READ_TOOL_MAX_BYTES_MAX = 4 * 1024 * 1024
 _READ_TOOL_WINDOW_LINE_LIMIT = 200
 _READ_TOOL_SCAN_CHUNK_BYTES = 64 * 1024
 _READ_TOOL_OFFSET_SCAN_MULTIPLIER = 4
+_EPISODE_SOURCE_RE = re.compile(r"^episode_\d+\.(?:txt|text|md)$", re.IGNORECASE)
+_POSIX_WINDOWS_DRIVE_RE = re.compile(r"(?<![\w.-])/[A-Za-z](?=/|$)")
+_PY_LAUNCHER_VERSION_RE = re.compile(r"^-\d+(?:\.\d+)?$")
+_PY_INLINE_SCRIPT_RE = re.compile(
+    r"(?i)(?<![\w.-])(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?"
+    r"(?:\s+-\d+(?:\.\d+)?)?\s+(?:-|-[c])(?:\s|$)"
+)
 
 
 class SessionCapacityError(Exception):
@@ -379,6 +387,14 @@ class SessionManager:
         "Glob": "path",
         "Grep": "path",
     }
+    _GREP_PARAM_ALIASES: dict[str, str] = {
+        "n": "-n",
+        "i": "-i",
+        "A": "-A",
+        "B": "-B",
+        "C": "-C",
+    }
+    _RAW_SOURCE_EXTENSIONS = {".txt", ".text", ".md"}
     _WRITE_TOOLS = {"Write", "Edit"}
     _CODE_EXTENSIONS_FORBIDDEN = {
         ".py",
@@ -685,6 +701,7 @@ class SessionManager:
         parts.append(
             "- Read/Edit/Write 等工具的 file_path 参数必须使用绝对路径，不要使用相对路径，也不要把项目标题当成目录名。"
         )
+        parts.append("- Grep 参数必须使用 SDK 字段名：`-n`、`-C`、`-A`、`-B`、`-i`，不要写成 `n` / `C`。")
         parts.append(
             "- Bash 调用 skill 脚本时必须使用相对路径（如 `python .claude/skills/.../script.py`），不要转换为绝对路径。"
         )
@@ -697,7 +714,12 @@ class SessionManager:
         parts.append(
             "- project.json 与 scripts/*.json 禁止用 Write/Edit/Bash/PowerShell 直接修改；资产与 settings 写入走 mcp__arcreel__patch_project，剧本编辑走 patch_episode_script / insert_segment / remove_segment / split_segment。"
         )
-        parts.append("- Bash 命令必须写在单行，禁止使用 `\\` 换行，JSON 参数使用紧凑格式。")
+        parts.append(
+            "- 如果 source/episode_{N}.txt 不存在，先走 manga-workflow 阶段 2：用 "
+            "`python .claude/skills/manage-project/scripts/peek_split_point.py --source source/<原文文件> "
+            "--target <目标阅读单位>` 预览，再用 split_episode.py 生成单集；不要直接 Read/Grep 整本原文推进后续阶段。"
+        )
+        parts.append("- Bash 命令必须写在单行，禁止 heredoc / `python - <<` / `python -c`，JSON 参数使用紧凑格式。")
 
         self._append_overview_section(parts, config.get("overview", {}))
 
@@ -835,7 +857,10 @@ class SessionManager:
                     HookMatcher(matcher=None, hooks=hook_callbacks),
                     HookMatcher(
                         matcher="Bash",
-                        hooks=[self._bash_env_scrub_hook],  # type: ignore[list-item]
+                        hooks=[
+                            self._build_bash_command_guard_hook(project_cwd),
+                            self._bash_env_scrub_hook,  # type: ignore[list-item]
+                        ],
                     ),
                     HookMatcher(
                         matcher="Write|Edit",
@@ -969,6 +994,75 @@ class SessionManager:
             "Invoke-Expression $__xw_cmd"
         )
 
+    def _build_bash_command_guard_hook(
+        self,
+        _project_cwd: Path,
+    ) -> Callable[..., Any]:
+        """Reject Bash forms that repeatedly push agents off the project workflow."""
+
+        async def _bash_command_guard_hook(
+            input_data: dict[str, Any],
+            _tool_use_id: str | None,
+            _context: Any,
+        ) -> dict[str, Any]:
+            tool_input = input_data.get("tool_input") or {}
+            command = tool_input.get("command")
+            if not isinstance(command, str) or not command.strip():
+                return {"continue_": True}
+
+            deny_reason = self._bash_command_deny_reason(command)
+            if deny_reason:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": deny_reason,
+                    },
+                }
+            return {"continue_": True}
+
+        return _bash_command_guard_hook
+
+    @classmethod
+    def _bash_command_deny_reason(cls, command: str) -> str | None:
+        compact = command.strip()
+        if "\n" in compact or "\r" in compact or "<<" in compact:
+            return (
+                "Bash 命令被阻止：agent session 只允许单行命令，禁止 heredoc / 多行脚本。"
+                "处理项目文本请调用 .claude/skills/ 下的既有脚本，例如 "
+                "`python .claude/skills/manage-project/scripts/peek_split_point.py ...`。"
+            )
+        if _PY_INLINE_SCRIPT_RE.search(compact):
+            return (
+                "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
+                "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
+            )
+
+        try:
+            tokens = shlex.split(compact, posix=True)
+        except ValueError:
+            tokens = compact.split()
+
+        for index, token in enumerate(tokens[:-1]):
+            executable = Path(token).name.lower()
+            if executable not in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
+                continue
+            next_index = index + 1
+            if executable in {"py", "py.exe"} and _PY_LAUNCHER_VERSION_RE.match(tokens[next_index]):
+                next_index += 1
+            if next_index < len(tokens) and tokens[next_index].lower() in {"-", "-c"}:
+                return (
+                    "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
+                    "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
+                )
+
+        if any(_POSIX_WINDOWS_DRIVE_RE.match(token) for token in tokens):
+            return (
+                "Bash 命令被阻止：检测到 `/d/...` 这类类 Unix 盘符路径。"
+                "在 Windows Python 中它会被当作不存在的 `\\d\\...`；skill 脚本请使用相对项目 cwd 的路径。"
+            )
+        return None
+
     @classmethod
     async def _bash_env_scrub_hook(
         cls,
@@ -1019,7 +1113,14 @@ class SessionManager:
             if tool_name not in self._PATH_TOOLS:
                 return {"continue_": True}
 
-            tool_input = input_data.get("tool_input", {})
+            raw_tool_input = input_data.get("tool_input", {})
+            tool_input = dict(raw_tool_input) if isinstance(raw_tool_input, dict) else {}
+            updated_input = False
+            if tool_name == "Grep":
+                normalized = self._normalize_grep_tool_input(tool_input)
+                if normalized != tool_input:
+                    tool_input = normalized
+                    updated_input = True
             path_key = self._PATH_TOOLS[tool_name]
             file_path = tool_input.get(path_key)
 
@@ -1037,6 +1138,20 @@ class SessionManager:
                             "permissionDecisionReason": deny_reason,
                         },
                     }
+                if tool_name in {"Read", "Grep"}:
+                    allowed, deny_reason = self._is_raw_source_access_allowed(
+                        str(file_path),
+                        tool_name,
+                        project_cwd,
+                    )
+                    if not allowed:
+                        return {
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": deny_reason,
+                            },
+                        }
                 if tool_name == "Read":
                     allowed, deny_reason = self._is_read_size_allowed(
                         file_path,
@@ -1052,9 +1167,106 @@ class SessionManager:
                             },
                         }
 
+            if updated_input:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "updatedInput": tool_input,
+                        "permissionDecision": "allow",
+                    },
+                }
             return {"continue_": True}
 
         return _file_access_hook
+
+    @classmethod
+    def _normalize_grep_tool_input(cls, tool_input: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(tool_input)
+        changed = False
+        for alias, canonical in cls._GREP_PARAM_ALIASES.items():
+            if alias not in normalized:
+                continue
+            value = normalized.pop(alias)
+            if canonical not in normalized:
+                normalized[canonical] = value
+            changed = True
+        return normalized if changed else tool_input
+
+    def _is_raw_source_access_allowed(
+        self,
+        file_path: str,
+        tool_name: str,
+        project_cwd: Path,
+    ) -> tuple[bool, str | None]:
+        """Redirect post-asset projects from whole-novel reads to episode splitting."""
+        try:
+            p = Path(file_path)
+            resolved = (project_cwd / p).resolve() if not p.is_absolute() else p.resolve()
+            rel = resolved.relative_to(project_cwd.resolve(strict=False))
+            size = resolved.stat().st_size if resolved.is_file() else 0
+        except (OSError, RuntimeError, ValueError):
+            return True, None
+
+        if len(rel.parts) != 2 or rel.parts[0].casefold() != "source":
+            return True, None
+        if resolved.suffix.lower() not in self._RAW_SOURCE_EXTENSIONS:
+            return True, None
+        if resolved.name == "_remaining.txt" or _EPISODE_SOURCE_RE.match(resolved.name):
+            return True, None
+        if size <= self.read_tool_max_bytes:
+            return True, None
+        if not self._project_has_asset_definitions(project_cwd):
+            return True, None
+        if self._project_has_episode_source(project_cwd):
+            return True, None
+
+        return False, self._raw_source_redirect_reason(resolved.name, tool_name, project_cwd)
+
+    @staticmethod
+    def _project_has_episode_source(project_cwd: Path) -> bool:
+        source_dir = project_cwd / "source"
+        try:
+            return any(
+                path.is_file() and _EPISODE_SOURCE_RE.match(path.name)
+                for path in source_dir.iterdir()
+            )
+        except OSError:
+            return False
+
+    def _project_has_asset_definitions(self, project_cwd: Path) -> bool:
+        try:
+            data = json.loads((project_cwd / "project.json").read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        for key in ("characters", "scenes", "props"):
+            value = data.get(key)
+            if isinstance(value, dict) and value:
+                return True
+            if isinstance(value, list) and value:
+                return True
+        return False
+
+    def _raw_source_redirect_reason(self, source_name: str, tool_name: str, project_cwd: Path) -> str:
+        target_units = self._read_episode_target_units(project_cwd) or "<目标阅读单位>"
+        return (
+            f"{tool_name} 被阻止：当前项目已有角色/场景/道具定义，但还没有 source/episode_*.txt，"
+            "继续直接读取或搜索整本原文容易把 agent 带偏并消耗大量 token。请先执行分集："
+            f"`python .claude/skills/manage-project/scripts/peek_split_point.py --source source/{source_name} "
+            f"--target {target_units}`，确认断点后再用 split_episode.py 生成 source/episode_N.txt。"
+        )
+
+    @staticmethod
+    def _read_episode_target_units(project_cwd: Path) -> int | None:
+        try:
+            data = json.loads((project_cwd / "project.json").read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.get("episode_target_units")
+        return value if isinstance(value, int) and value > 0 else None
 
     def _is_read_size_allowed(
         self,

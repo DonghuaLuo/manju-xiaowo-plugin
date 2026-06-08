@@ -26,7 +26,7 @@
 
 - **业务入队 / 文本生成 / 能力查询**：统一走 `mcp__arcreel__*` 系列 SDK in-process MCP tool（角色/场景/道具/分镜/视频/宫格/集脚本/规范化剧本/视频能力查询）。它们跑在 server 主进程，不受 sandbox 网络白名单约束，agent 直接以 tool 形式调用。
 - **编辑项目 JSON**：修改剧本（`scripts/*.json`）或角色/场景/道具（`project.json`）**一律走 `mcp__arcreel__*` 编辑工具**——剧本改字段用 `patch_episode_script`，增/删/拆分镜用 `insert_segment` / `remove_segment` / `split_segment`，角色/场景/道具与 settings 用 `patch_project`。**严禁**用 Write / Edit / Bash / PowerShell 直改这两类文件（已被 sandbox `denyWrite` 与 PreToolUse hook 双层拒绝）。**改 prompt 必重生**：用 `patch_episode_script` 改了某分镜的 `image_prompt` / `video_prompt` 后，工具不会自动作废旧图/视频，必须紧接着调对应生成工具重新生成该分镜，否则会留下「新 prompt + 旧画面」的陈旧。
-- **Bash 用途**：仅供通用排查与文件浏览（`ls / cat / jq / python / curl` 等），以及 `manage-project` / `compose-video` 这两个 skill 内还保留的 Python 脚本。
+- **Bash 用途**：仅供通用排查与文件浏览（`ls / cat / jq / curl` 等），以及 `manage-project` / `compose-video` 这两个 skill 内还保留的 Python 脚本。禁止 `python -`、`python -c`、heredoc / 多行临时脚本；处理项目文本时优先调用 `.claude/skills/` 里的既有脚本。
 - **敏感文件保护**：`.env` / `vertex_keys/` / `.system_config.json*` / `.arcreel.db*` / `.claude/settings.json` 由 sandbox profile（`filesystem.denyRead`）内核级拒绝读取，并由 PreToolUse 文件访问 hook 双重防御；代码文件（.py/.js/.ts/.tsx/.sh/.yaml/.yml/.toml）受运行时 hook 阻止写入。
 
 ### 路径规范
@@ -34,11 +34,13 @@
 agent session 的当前工作目录（cwd）已绑定到当前项目根，**所有工具参数中的路径必须遵循以下规则**：
 
 - **Read / Edit / Write / Glob / Grep**：`file_path` 使用**绝对路径**
+- **Grep 参数**：必须使用 SDK 字段名 `-n`、`-C`、`-A`、`-B`、`-i`，不要写成 `n` / `C`
 - **Bash 调用 skill 脚本**：使用**相对项目根 cwd** 的路径，例如：
   - ✅ `source/episode_1.txt`、`drafts/episode_1/step1_segments.md`、`scripts/episode_1.json`
   - ❌ `projects/{项目名}/source/episode_1.txt`（双前缀，占位符替换或拼接出错就会落到 projects 根）
 - **严禁**在工具参数中出现 `projects/{...}/` 前缀；该前缀仅用于文档说明项目目录结构，**不可直接作为参数传给任何工具**
 - skill 脚本内部已加 cwd 校验，cwd 漂离当前项目目录时会直接拒绝执行
+- **未分集时**：如果 `source/episode_{N}.txt` 不存在，必须先走 `manga-workflow` 阶段 2 的 `peek_split_point.py` / `split_episode.py` 生成单集文件；不要直接 Read/Grep 整本原文推进后续阶段
 - **关于 agent.md / SKILL.md 中的相对形式**：subagent 指引（如「读取 `project.json`」、「读取 `source/episode_{N}.txt`」）里出现的相对路径是**项目内位置说明**，并非可直接传给工具的 `file_path` 值。调用 Read/Edit/Write/Glob/Grep 时仍按本节规则用 session cwd 拼成绝对路径再传参
 
 ---
