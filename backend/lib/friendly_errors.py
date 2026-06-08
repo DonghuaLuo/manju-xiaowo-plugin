@@ -65,6 +65,11 @@ _PROVIDER_UNAVAILABLE_PATTERNS = (
     re.compile(r"服务.*(不可用|繁忙|暂时)|稍后.*重试", re.I),
 )
 
+_CONNECTION_PATTERNS = (
+    re.compile(r"\b(api\s+)?connection\s+(error|failed|failure|refused|reset|aborted)\b", re.I),
+    re.compile(r"连接.*(失败|异常|中断|拒绝)|网络.*(失败|异常|中断)", re.I),
+)
+
 _DOWNLOAD_PATTERNS = (
     re.compile(r"\b(download|connection\s+reset|connection\s+aborted|network)\b", re.I),
     re.compile(r"下载.*(失败|中断)|网络.*(失败|中断|异常)", re.I),
@@ -87,6 +92,7 @@ _FAILURE_SUGGESTIONS = {
     "quota": "检查供应商余额、模型额度或体验模式限制后再重试。",
     "timeout": "稍后重试；若频繁出现，降低并发或改用历史成功率更高的供应商。",
     "provider_unavailable": "稍后重试，或临时切换到可用供应商。",
+    "connection": "检查供应商 base_url、网络连通性或代理服务状态后重试。",
     "download_failed": "稍后重试；若 provider 任务已完成，可优先重试下载/接续。",
     "capability": "切换到支持当前分辨率、时长、参考图或音频能力的模型。",
     "validation": "检查提示词、文件、模型与参数是否符合供应商要求。",
@@ -139,6 +145,9 @@ def classify_generation_failure(error: BaseException | str) -> dict[str, Any]:
         retryable = True
     elif any(pattern.search(message) for pattern in _TIMEOUT_PATTERNS):
         category = "timeout"
+        retryable = True
+    elif any(pattern.search(message) for pattern in _CONNECTION_PATTERNS):
+        category = "connection"
         retryable = True
     elif any(pattern.search(message) for pattern in _PROVIDER_UNAVAILABLE_PATTERNS):
         category = "provider_unavailable"
@@ -237,6 +246,14 @@ def summarize_generation_error(
         parts = [
             "供应商请求频率或并发已超限，当前生成任务已失败。",
             "请稍后重试，或降低并发数量、提高供应商限流额度后再生成。",
+        ]
+        _append_details(parts, provider_id=provider_id, model=model, code=code, request_id=request_id)
+        return "".join(parts)
+
+    if any(pattern.search(message) for pattern in _CONNECTION_PATTERNS):
+        parts = [
+            "供应商连接失败，当前生成任务已停止。",
+            "请检查供应商 base_url、网络连通性或代理服务状态后重试。",
         ]
         _append_details(parts, provider_id=provider_id, model=model, code=code, request_id=request_id)
         return "".join(parts)

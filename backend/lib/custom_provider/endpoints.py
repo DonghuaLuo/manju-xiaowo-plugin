@@ -67,7 +67,7 @@ def _build_openai_chat(provider, model_id: str) -> CustomTextBackend:
         api_key=provider.api_key,
         base_url=base_url,
         model=model_id,
-        prefer_native_structured_output=False,
+        provider_name=provider.provider_id,
     )
     return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 

@@ -35,6 +35,11 @@ RETRYABLE_STATUS_PATTERNS = (
     "service unavailable",
     "bad gateway",
     "gateway timeout",
+    "connection error",
+    "api connection error",
+    "connection failed",
+    "connection refused",
+    "connection reset",
     "timed out",
     "timeout",
 )
