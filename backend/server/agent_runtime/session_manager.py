@@ -333,6 +333,7 @@ class SessionManager:
 
     DEFAULT_ALLOWED_TOOLS = [
         "Skill",
+        "Agent",
         "Task",
         # —— Bash 系列（sandbox 启用 + autoAllowBashIfSandboxed=True 协同放行）——
         "Bash",
@@ -387,6 +388,8 @@ class SessionManager:
         "Glob": "path",
         "Grep": "path",
     }
+    _SUBAGENT_TOOLS = {"Agent", "Task"}
+    _SUBAGENT_INPUT_KEYS = {"description", "prompt", "subagent_type"}
     _GREP_PARAM_ALIASES: dict[str, str] = {
         "n": "-n",
         "i": "-i",
@@ -841,6 +844,7 @@ class SessionManager:
         hooks = None
         if HookMatcher is not None:
             hook_callbacks: list[Any] = [
+                self._build_subagent_input_guard_hook(project_cwd),
                 self._build_file_access_hook(project_cwd),
             ]
             if can_use_tool is not None:
@@ -928,6 +932,78 @@ class SessionManager:
     ) -> dict[str, bool]:
         """Required keep-alive hook for Python can_use_tool callback."""
         return {"continue_": True}
+
+    def _build_subagent_input_guard_hook(
+        self,
+        _project_cwd: Path,
+    ) -> Callable[..., Any]:
+        """Normalize Agent/Task inputs for Manju's Windows project sessions.
+
+        Manju binds each agent session cwd to the concrete project directory.
+        The Agent tool only accepts description / prompt / subagent_type. If
+        Claude adds unsupported fields such as ``isolation=worktree`` or ``cwd``,
+        the SDK can enter a worktree path branch and receive a Git Bash-style
+        ``/d/...`` value, which is not a valid Windows directory for its
+        validator.
+        """
+
+        async def _subagent_input_guard_hook(
+            input_data: dict[str, Any],
+            _tool_use_id: str | None,
+            _context: Any,
+        ) -> dict[str, Any]:
+            tool_name = str(input_data.get("tool_name") or "")
+            if tool_name not in self._SUBAGENT_TOOLS:
+                return {"continue_": True}
+
+            raw_tool_input = input_data.get("tool_input", {})
+            if not isinstance(raw_tool_input, dict):
+                return {"continue_": True}
+
+            tool_input = {
+                key: value for key, value in raw_tool_input.items() if key in self._SUBAGENT_INPUT_KEYS
+            }
+            changed = tool_input != raw_tool_input
+
+            prompt = tool_input.get("prompt")
+            if isinstance(prompt, str):
+                sanitized_prompt = self._strip_subagent_project_path_lines(prompt)
+                if sanitized_prompt != prompt:
+                    changed = True
+                if "Manju Windows 运行约束" not in sanitized_prompt:
+                    sanitized_prompt = (
+                        f"{sanitized_prompt.rstrip()}\n\n"
+                        "Manju Windows 运行约束：当前 subagent 的 cwd 已绑定到项目根；"
+                        "无需传项目绝对路径；Agent/Task 工具不要传 isolation/worktree；"
+                        "Bash 只使用项目内相对路径，不要把 Windows 盘符路径改写为 `/d/...`。"
+                    )
+                    changed = True
+                tool_input["prompt"] = sanitized_prompt
+
+            if not changed:
+                return {"continue_": True}
+
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "updatedInput": tool_input,
+                    "permissionDecision": "allow",
+                },
+            }
+
+        return _subagent_input_guard_hook
+
+    @staticmethod
+    def _strip_subagent_project_path_lines(prompt: str) -> str:
+        """Drop redundant project absolute-path hints from subagent prompts."""
+
+        kept_lines = []
+        for line in prompt.splitlines():
+            normalized = line.strip().casefold()
+            if normalized.startswith(("项目路径", "项目目录", "工作目录", "cwd", "project path", "project cwd")):
+                continue
+            kept_lines.append(line)
+        return "\n".join(kept_lines)
 
     # Bash unset 时额外匹配的环境变量名模式：兜底 SDK 子进程里可能注入或宿主机
     # 继承下来的密钥类变量（如 GEMINI_CLI_IDE_AUTH_TOKEN），名单覆盖不到时靠模式拦。

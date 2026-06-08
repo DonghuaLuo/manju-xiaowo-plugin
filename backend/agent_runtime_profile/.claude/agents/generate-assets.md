@@ -8,7 +8,7 @@ description: "统一资产生成 subagent。接收任务清单（资产类型、
 ## 任务定义
 
 **输入**：主 agent 会在 dispatch prompt 中提供：
-- 项目名称和项目路径
+- 项目名称（不需要项目路径；session cwd 已是项目根）
 - 任务类型（character / scene / prop / storyboard / video）
 - 脚本命令（一条或多条，格式已匹配 settings.json allow 规则）
 - 验证方式
