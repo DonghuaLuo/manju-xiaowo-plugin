@@ -251,14 +251,22 @@ def _script_media_version_payload(
     video_prompt_policy=None,
 ) -> tuple[str, dict[str, Any]]:
     try:
-        items, id_field, char_field, _, _ = get_storyboard_items(script)
+        items, id_field, char_field, scene_field, prop_field = get_storyboard_items(script)
         resolved = find_storyboard_item(items, id_field, resource_id)
         if resolved is None:
             raise ValueError(f"未找到当前分镜/场景: {resource_id}")
         item, _ = resolved
         splitting_metadata = script_splitting_asset_metadata(project)
         if resource_type == "storyboards":
-            prompt = _normalize_storyboard_prompt(item.get("image_prompt"), project.get("style", ""))
+            prompt = _normalize_storyboard_prompt(
+                item.get("image_prompt"),
+                project.get("style", ""),
+                project=project,
+                target_item=item,
+                char_field=char_field,
+                scene_field=scene_field,
+                prop_field=prop_field,
+            )
             return prompt, {
                 "aspect_ratio": get_aspect_ratio(project, "storyboards"),
                 **splitting_metadata,

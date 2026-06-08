@@ -587,11 +587,131 @@ def get_aspect_ratio(project: dict, resource_type: str) -> str:
     return "9:16" if project.get("content_mode", "narration") == "narration" else "16:9"
 
 
-def _normalize_storyboard_prompt(prompt: str | dict, style: str) -> str:
+_STORYBOARD_ASSET_CONTEXT_MARKER = "Asset_References:"
+_STORYBOARD_ASSET_CONTEXT_MAX_ITEMS = 6
+_STORYBOARD_ASSET_DESCRIPTION_MAX_CHARS = 120
+_STORYBOARD_ASSET_CONTEXT_MAX_CHARS = 1000
+
+
+def _short_asset_text(value: object, max_chars: int = _STORYBOARD_ASSET_DESCRIPTION_MAX_CHARS) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip(" ,，;；.。") + "..."
+
+
+def _truncate_asset_context(value: str, max_chars: int = _STORYBOARD_ASSET_CONTEXT_MAX_CHARS) -> str:
+    text = value.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip(" ,，;；.。") + "..."
+
+
+def _asset_description(asset: object) -> str:
+    if not isinstance(asset, dict):
+        return ""
+    for key in ("description", "visual_description", "appearance", "prompt"):
+        value = _short_asset_text(asset.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _storyboard_asset_context(
+    project: dict | None,
+    target_item: dict | None,
+    *,
+    char_field: str | None = None,
+    scene_field: str | None = None,
+    prop_field: str | None = None,
+) -> str:
+    if not isinstance(project, dict) or not isinstance(target_item, dict):
+        return ""
+
+    rows: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    buckets = [
+        ("Character", char_field or "characters_in_segment", project.get("characters", {})),
+        ("Scene", scene_field or "scenes", project.get("scenes", {})),
+        ("Prop", prop_field or "props", project.get("props", {})),
+    ]
+    for label, field, assets in buckets:
+        if not isinstance(assets, dict):
+            continue
+        names = target_item.get(field, [])
+        if not isinstance(names, list):
+            continue
+        for raw_name in names:
+            name = str(raw_name or "").strip()
+            if not name or (label, name) in seen:
+                continue
+            asset = assets.get(name)
+            if not isinstance(asset, dict):
+                continue
+            seen.add((label, name))
+            desc = _asset_description(asset)
+            row = f"- {label}: {name}"
+            if desc:
+                row += f" — {desc}"
+            rows.append(row)
+            if len(rows) >= _STORYBOARD_ASSET_CONTEXT_MAX_ITEMS:
+                break
+        if len(rows) >= _STORYBOARD_ASSET_CONTEXT_MAX_ITEMS:
+            break
+
+    context = "\n".join(rows)
+    return _truncate_asset_context(context, _STORYBOARD_ASSET_CONTEXT_MAX_CHARS)
+
+
+def _append_storyboard_asset_context(
+    prompt_text: str,
+    project: dict | None,
+    target_item: dict | None,
+    *,
+    char_field: str | None = None,
+    scene_field: str | None = None,
+    prop_field: str | None = None,
+) -> str:
+    if _STORYBOARD_ASSET_CONTEXT_MARKER in prompt_text:
+        return prompt_text
+    context = _storyboard_asset_context(
+        project,
+        target_item,
+        char_field=char_field,
+        scene_field=scene_field,
+        prop_field=prop_field,
+    )
+    if not context:
+        return prompt_text
+    return (
+        f"{prompt_text.rstrip()}\n\n"
+        f"{_STORYBOARD_ASSET_CONTEXT_MARKER}\n"
+        "Use only these named project assets for identity, location and key prop consistency.\n"
+        f"{context}"
+    )
+
+
+def _normalize_storyboard_prompt(
+    prompt: str | dict,
+    style: str,
+    *,
+    project: dict | None = None,
+    target_item: dict | None = None,
+    char_field: str | None = None,
+    scene_field: str | None = None,
+    prop_field: str | None = None,
+) -> str:
     if isinstance(prompt, str):
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
-        return prompt
+        return _append_storyboard_asset_context(
+            prompt,
+            project,
+            target_item,
+            char_field=char_field,
+            scene_field=scene_field,
+            prop_field=prop_field,
+        )
 
     if not isinstance(prompt, dict):
         raise ValueError("prompt must be a string or object")
@@ -613,7 +733,14 @@ def _normalize_storyboard_prompt(prompt: str | dict, style: str) -> str:
             "ambiance": str(composition.get("ambiance", "") or ""),
         },
     }
-    return image_prompt_to_yaml(normalized_prompt, style)
+    return _append_storyboard_asset_context(
+        image_prompt_to_yaml(normalized_prompt, style),
+        project,
+        target_item,
+        char_field=char_field,
+        scene_field=scene_field,
+        prop_field=prop_field,
+    )
 
 
 def _normalize_video_prompt(
@@ -1840,7 +1967,15 @@ async def execute_storyboard_task(
                 assets=_assets,
                 payload=payload,
             )
-        _prompt_text = _normalize_storyboard_prompt(prompt, _project.get("style", ""))
+        _prompt_text = _normalize_storyboard_prompt(
+            prompt,
+            _project.get("style", ""),
+            project=_project,
+            target_item=_target_item,
+            char_field=_char_field,
+            scene_field=_scene_field,
+            prop_field=_prop_field,
+        )
         _ref_images = _collect_reference_images(
             _project,
             _project_path,

@@ -701,7 +701,7 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         few_shot_examples=[
             {
                 "source": "她从门口退到桌边，抓起玉佩挡在胸前。",
-                "good": "continuity_anchor=角色站位从门口到桌边；reference_assets=角色:她, 道具:玉佩, 场景:房间；first_frame_intent=她半身在画面左侧，玉佩位于胸前。",
+                "good": "continuity_anchor=角色站位从门口到桌边；reference_assets=只填项目资产表中能精确命中的角色/道具/场景名称，不确定项写入 asset_binding_requirements；first_frame_intent=她半身在画面左侧，关键道具位于胸前。",
             }
         ],
         quality_gates=[

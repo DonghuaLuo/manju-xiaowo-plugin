@@ -563,6 +563,11 @@ async def get_external_generation_package(
             storyboard_prompt = _normalize_storyboard_prompt(
                 target_item.get("image_prompt"),
                 project.get("style", ""),
+                project=project,
+                target_item=target_item,
+                char_field=char_field,
+                scene_field=scene_field,
+                prop_field=prop_field,
             )
             video_prompt = _normalize_video_prompt(
                 target_item.get("video_prompt"),

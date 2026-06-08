@@ -49,6 +49,28 @@ _QUALITY_PROBE_SCENE_MIN_LEN = 40
 _QUALITY_PROBE_ACTION_MIN_LEN = 25
 _QUALITY_PROBE_SHOT_TEXT_MIN_LEN = 15
 _NOVEL_TEXT_DRIFT_THRESHOLD = 0.10
+_ASSET_REF_LABEL_RE = re.compile(
+    r"(?P<label>角色|人物|character|characters|场景|地点|空间|scene|scenes|道具|物件|物品|prop|props)\s*[:：]",
+    re.IGNORECASE,
+)
+_ASSET_REF_SPLIT_RE = re.compile(r"[、,，/;；\n]+")
+_ASSET_REF_EMPTY_VALUES = {"", "-", "无", "暂无", "none", "null", "空"}
+_ASSET_REF_BUCKETS = {
+    "角色": "characters",
+    "人物": "characters",
+    "character": "characters",
+    "characters": "characters",
+    "场景": "scenes",
+    "地点": "scenes",
+    "空间": "scenes",
+    "scene": "scenes",
+    "scenes": "scenes",
+    "道具": "props",
+    "物件": "props",
+    "物品": "props",
+    "prop": "props",
+    "props": "props",
+}
 
 
 def _rewrite_episode_prefix(rid: object, ep: int) -> object:
@@ -62,6 +84,184 @@ def _rewrite_episode_prefix(rid: object, ep: int) -> object:
     if n and new_rid != rid:
         logger.warning("episode prefix rewritten: %s → %s", rid, new_rid)
     return new_rid
+
+
+def _strip_markdown_cell(value: object) -> str:
+    return str(value or "").strip().strip("`").strip()
+
+
+def _split_markdown_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    cells = [cell.strip() for cell in stripped.split("|")]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
+
+
+def _is_markdown_separator(cells: list[str]) -> bool:
+    if not cells:
+        return False
+    return all(bool(re.fullmatch(r":?-{3,}:?", cell.strip())) for cell in cells)
+
+
+def _normalize_step1_header(value: str) -> str:
+    return _strip_markdown_cell(value).lower().replace(" ", "")
+
+
+def _clean_reference_asset_token(value: object) -> str:
+    token = _strip_markdown_cell(value)
+    token = token.strip(" \"'“”‘’[]【】()（）")
+    return "" if token.lower() in _ASSET_REF_EMPTY_VALUES else token
+
+
+def _parse_reference_assets_cell(cell: object) -> dict[str, list[str]]:
+    text = _strip_markdown_cell(cell)
+    refs: dict[str, list[str]] = {"characters": [], "scenes": [], "props": []}
+    if not text or text.lower() in _ASSET_REF_EMPTY_VALUES:
+        return refs
+
+    matches = list(_ASSET_REF_LABEL_RE.finditer(text))
+    for index, match in enumerate(matches):
+        bucket = _ASSET_REF_BUCKETS.get(match.group("label").lower())
+        if not bucket:
+            continue
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        for raw_token in _ASSET_REF_SPLIT_RE.split(text[start:end]):
+            token = _clean_reference_asset_token(raw_token)
+            if token:
+                refs[bucket].append(token)
+    return refs
+
+
+def _parse_step1_reference_assets(markdown: str, id_field: str) -> dict[str, dict[str, list[str]]]:
+    header: list[str] | None = None
+    id_index = -1
+    ref_index = -1
+    parsed: dict[str, dict[str, list[str]]] = {}
+
+    for line in markdown.splitlines():
+        cells = _split_markdown_row(line)
+        if not cells:
+            continue
+
+        if header is None:
+            normalized = [_normalize_step1_header(cell) for cell in cells]
+            if "reference_assets" not in normalized or id_field not in normalized:
+                continue
+            header = normalized
+            id_index = header.index(id_field)
+            ref_index = header.index("reference_assets")
+            continue
+
+        if _is_markdown_separator(cells):
+            continue
+        if id_index >= len(cells) or ref_index >= len(cells):
+            continue
+
+        item_id = _strip_markdown_cell(cells[id_index])
+        if not item_id:
+            continue
+        refs = _parse_reference_assets_cell(cells[ref_index])
+        if any(refs.values()):
+            parsed[item_id] = refs
+    return parsed
+
+
+def _compact_asset_name(value: object) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def _is_ordered_subsequence(needle: str, haystack: str) -> bool:
+    if not needle:
+        return False
+    pos = 0
+    for char in haystack:
+        if pos < len(needle) and char == needle[pos]:
+            pos += 1
+    return pos == len(needle)
+
+
+def _resolve_asset_name(raw_name: object, available_names: list[str], blocked_names: list[str] | None = None) -> str | None:
+    raw = _clean_reference_asset_token(raw_name)
+    if not raw:
+        return None
+    if raw in available_names:
+        return raw
+
+    raw_compact = _compact_asset_name(raw)
+    if not raw_compact:
+        return None
+    blocked_compacts = {_compact_asset_name(name) for name in blocked_names or []}
+    if raw_compact in blocked_compacts:
+        return None
+
+    compact_matches = [name for name in available_names if _compact_asset_name(name) == raw_compact]
+    if len(compact_matches) == 1:
+        return compact_matches[0]
+
+    contains_matches: list[str] = []
+    for name in available_names:
+        compact = _compact_asset_name(name)
+        if not compact:
+            continue
+        if len(compact) >= 2 and compact in raw_compact:
+            contains_matches.append(name)
+        elif len(raw_compact) >= 2 and raw_compact in compact:
+            contains_matches.append(name)
+    if len(set(contains_matches)) == 1:
+        return contains_matches[0]
+
+    subsequence_matches = [
+        name
+        for name in available_names
+        if len(raw_compact) >= 2 and _is_ordered_subsequence(raw_compact, _compact_asset_name(name))
+    ]
+    if len(set(subsequence_matches)) == 1:
+        only_match = subsequence_matches[0]
+        if len(raw_compact) / max(len(_compact_asset_name(only_match)), 1) >= 0.35:
+            return only_match
+    return None
+
+
+def _merge_resolved_asset_refs(
+    existing: object,
+    step1_refs: list[str],
+    available_names: list[str],
+    blocked_names: list[str] | None = None,
+) -> list[str]:
+    merged: list[str] = []
+    raw_values: list[object] = []
+    if isinstance(existing, list):
+        raw_values.extend(existing)
+    raw_values.extend(step1_refs)
+
+    for raw in raw_values:
+        resolved = _resolve_asset_name(raw, available_names, blocked_names)
+        if resolved and resolved not in merged:
+            merged.append(resolved)
+    return merged
+
+
+def _project_asset_names(value: object) -> list[str]:
+    if isinstance(value, dict):
+        return [str(name) for name in value.keys() if str(name).strip()]
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("id")
+            else:
+                name = item
+            if str(name or "").strip():
+                names.append(str(name))
+        return names
+    return []
 
 
 class ScriptGenerator:
@@ -224,6 +424,70 @@ class ScriptGenerator:
         if not filename or filename in {".", ".."} or Path(filename).name != filename or "\\" in filename:
             raise ValueError(f"output_path 只能是纯文件名: {output_path!r}")
         return filename
+
+    def _apply_step1_reference_assets(
+        self,
+        items: list[dict],
+        *,
+        episode: int,
+        id_field: str,
+        character_field: str,
+    ) -> None:
+        """把 Step 1 `reference_assets` 的确定性资产引用回填到最终 JSON。"""
+        try:
+            step1_md = self._load_step1(episode)
+        except FileNotFoundError:
+            return
+
+        refs_by_id = _parse_step1_reference_assets(step1_md, id_field)
+        if not refs_by_id:
+            return
+
+        available_characters = _project_asset_names(self.project_json.get("characters"))
+        available_scenes = _project_asset_names(self.project_json.get("scenes"))
+        available_props = _project_asset_names(self.project_json.get("props"))
+        non_character_assets = available_scenes + available_props
+        non_scene_assets = available_characters + available_props
+        non_prop_assets = available_characters + available_scenes
+
+        applied_count = 0
+        for item in items:
+            item_id = _strip_markdown_cell(item.get(id_field))
+            if not item_id:
+                continue
+            step1_refs = refs_by_id.get(item_id)
+            if not step1_refs:
+                continue
+
+            before = (
+                list(item.get(character_field) or []) if isinstance(item.get(character_field), list) else [],
+                list(item.get("scenes") or []) if isinstance(item.get("scenes"), list) else [],
+                list(item.get("props") or []) if isinstance(item.get("props"), list) else [],
+            )
+            item[character_field] = _merge_resolved_asset_refs(
+                item.get(character_field),
+                step1_refs.get("characters") or [],
+                available_characters,
+                non_character_assets,
+            )
+            item["scenes"] = _merge_resolved_asset_refs(
+                item.get("scenes"),
+                step1_refs.get("scenes") or [],
+                available_scenes,
+                non_scene_assets,
+            )
+            item["props"] = _merge_resolved_asset_refs(
+                item.get("props"),
+                step1_refs.get("props") or [],
+                available_props,
+                non_prop_assets,
+            )
+            after = (item[character_field], item["scenes"], item["props"])
+            if before != after:
+                applied_count += 1
+
+        if applied_count:
+            logger.info("episode %d applied Step 1 reference_assets to %d items", episode, applied_count)
 
     async def build_prompt(self, episode: int) -> str:
         """
@@ -497,6 +761,12 @@ class ScriptGenerator:
                     s["segment_id"] = _rewrite_episode_prefix(s.get("segment_id"), ep)
             _apply_default_transitions(segments)
             _apply_default_video_generation(segments)
+            self._apply_step1_reference_assets(
+                segments,
+                episode=episode,
+                id_field="segment_id",
+                character_field="characters_in_segment",
+            )
         else:
             scenes = [s for s in script_data.get("scenes") or [] if isinstance(s, dict)]
             for s in scenes:
@@ -504,6 +774,12 @@ class ScriptGenerator:
                     s["scene_id"] = _rewrite_episode_prefix(s.get("scene_id"), ep)
             _apply_default_transitions(scenes)
             _apply_default_video_generation(scenes)
+            self._apply_step1_reference_assets(
+                scenes,
+                episode=episode,
+                id_field="scene_id",
+                character_field="characters_in_scene",
+            )
         # content_mode 严格只是"内容类型"（narration/drama）；reference_video 属于
         # "视频来源"维度，由 generation_mode 表达。
         # 参考视频集必须强制覆盖：ReferenceVideoScript.content_mode 有 Pydantic 默认值

@@ -38,7 +38,35 @@ def _format_prompt_fragment(text: str, **values) -> str:
         return text
 
 
-def _step1_drama_table(profile: dict | None, episode: int) -> str:
+def _render_step1_reference_asset_rule(profile: dict | None) -> str:
+    fields = set(_profile_output_fields(profile))
+    if "reference_assets" not in fields:
+        return ""
+    return """- reference_assets：只填写上方 `<characters>` / `<scenes>` / `<props>` 中已经存在的资产名称，名称必须逐字一致。
+  - 角色年龄、时期或视角变体要映射回已有主资产名，例如“童年/成年 + 已有角色名”只写资产表里的角色名。
+  - 短称必须映射回资产表里的完整名称；如果不能唯一确定是哪一个已有资产，就不要写进 reference_assets。
+  - 未入库的临时人物、群众、地点和物件不要写进 reference_assets；放进画面描述、题材字段或 asset_binding_requirements。
+"""
+
+
+def _reference_assets_sample(characters: dict | None, scenes: dict | None, props: dict | None) -> str:
+    parts = []
+    if characters:
+        parts.append("角色:<characters中已有名称>")
+    if scenes:
+        parts.append("场景:<scenes中已有名称>")
+    if props:
+        parts.append("道具:<props中已有名称>")
+    return "; ".join(parts) if parts else "空"
+
+
+def _step1_drama_table(
+    profile: dict | None,
+    episode: int,
+    characters: dict | None = None,
+    scenes: dict | None = None,
+    props: dict | None = None,
+) -> str:
     fields = _profile_output_fields(profile) or [
         "scene_id",
         "scene_description",
@@ -64,7 +92,7 @@ def _step1_drama_table(profile: dict | None, episode: int) -> str:
         "eyeline_match": "她看向画面右侧，下一镜承接被看对象",
         "match_action": "手触到门把手，下一镜从门内接开门动作",
         "continuity_anchor": "角色位置、道具状态、场景方位等连续性锚点",
-        "reference_assets": "角色:某人; 场景:某地; 道具:某物",
+        "reference_assets": _reference_assets_sample(characters, scenes, props),
         "asset_binding_requirements": "缺少参考资产时写需求",
         "first_frame_intent": "首帧主体位置、视线和关键道具",
         "lighting_palette": "冷顶光 + 暖色台灯；主色锚点为青灰、米白、暗红",
@@ -154,7 +182,8 @@ def _render_step1_to_json_bridge(profile: dict | None) -> str:
         return ""
     return """
 - 若 shots 表包含 start_state / visible_action / end_state：必须把状态衔接转写进 image_prompt.scene 与 video_prompt.action，不能只丢弃为备注。
-- 若 shots 表包含 continuity_anchor / reference_assets / first_frame_intent：用它们约束角色站位、关键道具、首帧构图和候选 characters/scenes/props。
+- 若 shots 表包含 reference_assets：这是资产绑定的最高优先级来源；其中能匹配候选 characters/scenes/props 的名称必须写入对应数组，不能因为 image_prompt.scene 已描述过就漏填。
+- 若 shots 表包含 continuity_anchor / first_frame_intent：用它们约束角色站位、关键道具、首帧构图和候选 characters/scenes/props。
 - 若 shots 表包含 shot_sequence / provider_hints / audio_plan：把可执行部分转写到 camera_motion、ambiance_audio、dialogue 或动作描述中；无法落入 schema 的信息要融入文字描述。
 - 若 shots 表包含 coverage_role / reaction_target / screen_direction / eyeline_match / match_action：用它们组织镜头景别、视线方向、动作承接和反应镜头，避免生成孤立画面。
 - 若 shots 表包含 sound_cue / lighting_palette / production_note：把声音、光源色彩和剪辑衔接意图转写到 ambiance_audio、composition.lighting 或 scene/action 描述中。
@@ -483,6 +512,7 @@ def build_normalize_prompt(
     prop_list = _format_names(props)
     profile_block = render_profile_prompt_section(script_splitting_profile)
     profile_section = f"{profile_block}\n" if profile_block else ""
+    reference_asset_rule = _render_step1_reference_asset_rule(script_splitting_profile)
 
     # 规范化 + 校验：空集合或 default 不在集合内都会产出自相矛盾的提示词，
     # 让生成阶段失败比让 LLM 见到"只能取 — 中的值"更便于诊断（PR #528 review）。
@@ -511,7 +541,7 @@ def build_normalize_prompt(
     table_template = (
         _legacy_step1_drama_table(script_splitting_profile, episode)
         if legacy_passthrough
-        else _step1_drama_table(script_splitting_profile, episode)
+        else _step1_drama_table(script_splitting_profile, episode, characters, scenes, props)
     )
     field_rule = (
         _legacy_step1_field_rule(script_splitting_profile)
@@ -562,6 +592,7 @@ def build_normalize_prompt(
 规则：
 - 当前正在生成第 {episode} 集；所有场景 ID 必须使用 `E{episode}S{{两位序号}}` 格式，不得使用其他集号前缀
 {field_rule}
+{reference_asset_rule}
 {duration_rules}
 - segment_break：场景切换点标记"是"，同一连续场景标"否"
 - 每个场景应为一个独立的视觉画面，可以在指定时长内完成
