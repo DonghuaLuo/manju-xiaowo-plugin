@@ -12,7 +12,7 @@ interface DefaultProfileInput {
 
 const IMAGE_CHANNEL_FALLBACK = "1K";
 const VIDEO_CHANNEL_FALLBACK = "720p";
-const ASSET_FALLBACK = "2K";
+const ASSET_FALLBACK = "1K";
 const GRID_FALLBACK = "2K";
 
 function uniqueOptions(options?: readonly string[] | null): string[] {

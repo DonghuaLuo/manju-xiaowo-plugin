@@ -11,10 +11,19 @@ describe("generation profile resolution defaults", () => {
       videoResolutionOptions: ["480p", "720p"],
     });
 
+    expect(profiles.asset?.resolution).toBe("1K");
     expect(profiles.storyboard_final?.resolution).toBe("1K");
     expect(profiles.storyboard_draft?.resolution).toBe("1K");
     expect(profiles.video_final?.resolution).toBe("720p");
     expect(profiles.video_draft?.resolution).toBe("720p");
+  });
+
+  it("defaults role, scene, and prop master assets to 1K", () => {
+    const profiles = createDefaultGenerationProfiles({
+      imageResolutionOptions: ["512px", "1K", "2K", "4K"],
+    });
+
+    expect(profiles.asset?.resolution).toBe("1K");
   });
 
   it("preserves exact supported options before falling back to nearest lower option", () => {

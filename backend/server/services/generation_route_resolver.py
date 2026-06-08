@@ -104,7 +104,7 @@ def default_generation_profiles() -> dict[str, dict[str, Any]]:
         "asset": {
             "image_provider_t2i": None,
             "image_provider_i2i": None,
-            "resolution": "2K",
+            "resolution": "1K",
         },
         "storyboard_draft": {
             "image_provider_t2i": None,
