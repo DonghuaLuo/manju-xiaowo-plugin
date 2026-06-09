@@ -43,6 +43,44 @@ def _dry_run_tool_result(title: str, prompt: str, prompt_path: Path) -> dict[str
     return tool_result_text(text, label=f"{title} prompt", source_path=prompt_path)
 
 
+def _episode_script_summary_text(result_path: Path) -> str:
+    """Build a compact top-level summary so agents do not shell out for jq."""
+    lines = [f"✅ 剧本生成完成: {result_path}"]
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - generation succeeded; summary is best-effort
+        lines.append(f"⚠️  摘要读取失败，请用 Read 工具复核: {exc}")
+        return "\n".join(lines)
+
+    if not isinstance(payload, dict):
+        lines.append(f"⚠️  摘要读取失败: 顶层 JSON 不是对象，而是 {type(payload).__name__}")
+        return "\n".join(lines)
+
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    generator = metadata.get("generator") or payload.get("generator") or payload.get("model") or metadata.get("model")
+    scenes = payload.get("scenes") if isinstance(payload.get("scenes"), list) else []
+    segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
+    video_units = payload.get("video_units") if isinstance(payload.get("video_units"), list) else []
+
+    lines.extend(
+        [
+            f"episode: {payload.get('episode')}",
+            f"content_mode: {payload.get('content_mode')}",
+            f"generation_mode: {payload.get('generation_mode')}",
+            f"script_splitting_template_id: {payload.get('script_splitting_template_id')}",
+            f"script_splitting_hash: {payload.get('script_splitting_hash')}",
+            f"duration_seconds: {payload.get('duration_seconds')}",
+            f"scenes_count: {len(scenes)}",
+            f"segments_count: {len(segments)}",
+            f"video_units_count: {len(video_units)}",
+            f"model: {generator or 'unknown'}",
+            "提示: 顶层校验字段已在工具返回中提取，无需再调用 shell JSON 工具。",
+        ]
+    )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # get_video_capabilities
 # ---------------------------------------------------------------------------
@@ -224,7 +262,7 @@ def generate_episode_script_tool(ctx: ToolContext):
 
             generator = await ScriptGenerator.create(project_path)
             result_path = await generator.generate(episode=episode)
-            return {"content": [{"type": "text", "text": f"✅ 剧本生成完成: {result_path}"}]}
+            return {"content": [{"type": "text", "text": _episode_script_summary_text(result_path)}]}
         except FileNotFoundError as exc:
             return {"content": [{"type": "text", "text": f"❌ 文件错误: {exc}"}], "is_error": True}
         except Exception as exc:  # noqa: BLE001

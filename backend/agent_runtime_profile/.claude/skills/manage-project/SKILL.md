@@ -14,6 +14,7 @@ user-invocable: false
 - 直接使用 `python .claude/skills/...`；运行时已由插件注入为当前 manju 后端 Python，不要使用 `uv run`、`py` 或系统 Python。
 - 不要把脚本路径或 `--source` 参数转换为项目绝对路径；`--source` 使用 `source/原文.txt` 或 `source/_remaining.txt`。
 - Bash 命令必须单行，不使用 `python -`、`python -c`、heredoc 或多行临时脚本。
+- Bash 只用于运行本 skill 的内置 Python 脚本，不要用 `ls`、`cat`、`curl`、`jq`、`wc`、`sed`、`awk`、shell `grep` 等外部 CLI 做文件浏览、JSON 摘要或网络请求。
 - 需要源文件行数、大小、字符数或阅读单位统计时，使用 `source_info.py`；不要用 `wc`、`cat`、`python -c` 或临时脚本直接读取原文。
 - 如果目标集 `source/episode_{N}.txt` 不存在，先执行 peek/split 生成单集文件，不要用 Read/Grep 直接读取或搜索整本原文推进后续阶段。
 

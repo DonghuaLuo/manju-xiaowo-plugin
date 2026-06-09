@@ -45,11 +45,19 @@ skills:
 mcp__arcreel__generate_episode_script({"episode": {N}})
 ```
 
-等待返回。返回 `is_error: true` 时查看错误信息并尝试修复或报告问题。
+等待返回。工具返回值会包含 `episode`、`content_mode`、`generation_mode`、
+`script_splitting_template_id`、`script_splitting_hash`、片段/场景/unit 数、
+总时长和模型摘要；优先使用这份摘要填写最终报告，不要再调用 Bash / `jq`
+额外解析 JSON。返回 `is_error: true` 时查看错误信息并尝试修复或报告问题。
 
 ### Step 3: 验证生成结果
 
-使用 Read 工具读取生成的 `scripts/episode_{N}.json`，
+`mcp__arcreel__generate_episode_script` 返回值已包含 episode、content_mode、
+generation_mode、拆分模板字段、片段/场景/unit 数、总时长和模型摘要；优先使用该
+摘要完成验证和返回表填写。若摘要显示缺字段，或你需要抽查具体内容，再使用 Read
+工具读取生成的 `scripts/episode_{N}.json`。不要调用 Bash、jq 或其他外部 JSON CLI
+做字段提取。
+
 确认：
 - 文件存在且为有效 JSON
 - 包含 episode、content_mode、generation_mode 字段

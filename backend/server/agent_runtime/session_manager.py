@@ -78,6 +78,36 @@ _PY_INLINE_SCRIPT_RE = re.compile(
     r"(?i)(?<![\w.-])(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?"
     r"(?:\s+-\d+(?:\.\d+)?)?\s+(?:-|-[c])(?:\s|$)"
 )
+_BASH_UNBUNDLED_COMMANDS = {
+    "awk",
+    "awk.exe",
+    "cat",
+    "cat.exe",
+    "curl",
+    "curl.exe",
+    "find",
+    "find.exe",
+    "grep",
+    "grep.exe",
+    "head",
+    "head.exe",
+    "jq",
+    "jq.exe",
+    "ls",
+    "ls.exe",
+    "pwd",
+    "pwd.exe",
+    "sed",
+    "sed.exe",
+    "tail",
+    "tail.exe",
+    "true",
+    "true.exe",
+    "wc",
+    "wc.exe",
+    "xargs",
+    "xargs.exe",
+}
 
 
 class SessionCapacityError(Exception):
@@ -723,6 +753,9 @@ class SessionManager:
             "- 调用 `.claude/skills/` 脚本必须使用相对路径（如 `python .claude/skills/manage-project/scripts/peek_split_point.py ...`），不要使用项目绝对路径。"
         )
         parts.append(
+            "- Bash 只用于运行 `.claude/skills/` 内置 Python 脚本或 compose-video 需要的 ffmpeg/ffprobe；不要用 ls/cat/curl/jq/wc/sed/awk/grep/head/tail/find/xargs/pwd/true 等外部 CLI 做文件浏览、JSON 摘要或网络请求。"
+        )
+        parts.append(
             "- project.json 与 scripts/*.json 禁止用 Write/Edit/Bash/PowerShell 直接修改；资产与 settings 写入走 mcp__arcreel__patch_project，剧本编辑走 patch_episode_script / insert_segment / remove_segment / split_segment。"
         )
         parts.append(
@@ -1116,6 +1149,11 @@ class SessionManager:
                 "处理项目文本请调用 .claude/skills/ 下的既有脚本，例如 "
                 "`python .claude/skills/manage-project/scripts/peek_split_point.py ...`。"
             )
+        if "`" in compact or "$(" in compact:
+            return (
+                "Bash 命令被阻止：不要使用 shell 命令替换语法。"
+                "请改为单个 `python .claude/skills/...` 脚本调用，或使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
+            )
         if _PY_INLINE_SCRIPT_RE.search(compact):
             return (
                 "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
@@ -1125,9 +1163,34 @@ class SessionManager:
             )
 
         try:
-            tokens = shlex.split(compact, posix=True)
-        except ValueError:
-            tokens = compact.split()
+            tokens = cls._parse_windows_bash_command(compact)
+        except ValueError as exc:
+            return f"Bash 命令被阻止：命令解析失败: {exc}"
+
+        if any(token in cls._WINDOWS_BASH_CONTROL_TOKENS for token in tokens):
+            return (
+                "Bash 命令被阻止：不要使用 shell 链接、管道或重定向操作符。"
+                "请改为单个 `python .claude/skills/...` 脚本调用，或使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
+            )
+
+        for token in tokens:
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                continue
+
+            command_name = Path(token).name.lower()
+            if command_name in _BASH_UNBUNDLED_COMMANDS:
+                if command_name in {"jq", "jq.exe"}:
+                    return (
+                        "Bash 命令被阻止：jq 未随 Manju 插件打包，不能作为 JSON 校验依赖。"
+                        "请使用 Read 工具读取文件，或优先使用 mcp__arcreel__generate_episode_script 返回的顶层摘要。"
+                    )
+                return (
+                    f"Bash 命令被阻止：`{command_name}` 未作为 Manju 跨平台依赖打包，"
+                    "在 Windows 下不可作为稳定流程依赖。文件定位/读取请用 Read、Glob、Grep 工具；"
+                    "源文件统计请用 `python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`；"
+                    "网络、JSON 生成和项目写入请用 mcp__arcreel__* 工具。"
+                )
+            break
 
         for index, token in enumerate(tokens[:-1]):
             executable = Path(token).name.lower()
