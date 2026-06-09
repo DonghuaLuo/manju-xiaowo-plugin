@@ -1,9 +1,10 @@
 export interface GridLayout {
-  gridSize: "grid_4" | "grid_6" | "grid_9" | null;
+  gridSize: "grid_2" | "grid_3" | "grid_4" | null;
   rows: number;
   cols: number;
   cellCount: number;
   batchCount: number;
+  chunkSizes: number[];
 }
 
 interface GridMatchRecord {
@@ -14,7 +15,7 @@ interface GridMatchRecord {
 }
 
 /**
- * 后端会把超过 layout.cell_count(最多 9)的 group 拆成多个 chunk。
+ * 后端会把连续组拆成最多 4 个镜头的多个 chunk。
  * 每条 grid 记录的 scene_ids 是 group 的子集；匹配时按子集判断，
  * 再按 created_at 降序贪心覆盖，过滤掉被新生成覆盖的旧 chunk。
  */
@@ -64,34 +65,58 @@ export function groupBySegmentBreak<S extends { segment_break?: boolean }>(
   return groups;
 }
 
+export function planGridChunkSizes(count: number): number[] {
+  if (count <= 1) return [];
+  const terminal: Record<number, number[]> = {
+    2: [2],
+    3: [3],
+    4: [4],
+    5: [3, 2],
+    6: [3, 3],
+    7: [4, 3],
+    8: [4, 4],
+  };
+  if (terminal[count]) return terminal[count];
+
+  const chunks: number[] = [];
+  let remaining = count;
+  while (remaining > 8) {
+    chunks.push(4);
+    remaining -= 4;
+  }
+  chunks.push(...terminal[remaining]);
+  return chunks;
+}
+
 export function computeGridSize(count: number, aspectRatio: string = "9:16"): GridLayout {
-  if (count < 1) return { gridSize: null, rows: 0, cols: 0, cellCount: 0, batchCount: 0 };
+  const empty: GridLayout = {
+    gridSize: null,
+    rows: 0,
+    cols: 0,
+    cellCount: count,
+    batchCount: 0,
+    chunkSizes: [],
+  };
+  if (count < 1) return empty;
+  const chunkSizes = planGridChunkSizes(count);
+  if (chunkSizes.length === 0) return empty;
   const [w, h] = aspectRatio.split(":").map(Number);
   const isHorizontal = w > h;
-  const effective = Math.min(count, 9);
+  const firstChunk = chunkSizes[0];
 
-  let gridSize: "grid_4" | "grid_6" | "grid_9";
-  let cellCount: number;
+  let gridSize: "grid_2" | "grid_3" | "grid_4";
   let rows: number;
   let cols: number;
 
-  if (effective <= 4) {
+  if (firstChunk === 4) {
     gridSize = "grid_4";
-    cellCount = 4;
     rows = 2;
     cols = 2;
-  } else if (effective <= 6) {
-    gridSize = "grid_6";
-    cellCount = 6;
-    rows = isHorizontal ? 3 : 2;
-    cols = isHorizontal ? 2 : 3;
   } else {
-    gridSize = "grid_9";
-    cellCount = 9;
-    rows = 3;
-    cols = 3;
+    gridSize = firstChunk === 2 ? "grid_2" : "grid_3";
+    rows = isHorizontal ? firstChunk : 1;
+    cols = isHorizontal ? 1 : firstChunk;
   }
 
-  const batchCount = count > cellCount ? Math.ceil(count / cellCount) : 1;
-  return { gridSize, rows, cols, cellCount, batchCount };
+  return { gridSize, rows, cols, cellCount: count, batchCount: chunkSizes.length, chunkSizes };
 }

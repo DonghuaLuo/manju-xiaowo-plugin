@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchGridsForGroup } from "./grid-layout";
+import { computeGridSize, groupBySegmentBreak, matchGridsForGroup, planGridChunkSizes } from "./grid-layout";
 
 interface FakeGrid {
   id: string;
@@ -80,5 +80,59 @@ describe("matchGridsForGroup", () => {
     ];
     const result = matchGridsForGroup(grids, ["s1", "s2", "s3", "s4", "s5"], 1);
     expect(result.map((g) => g.id)).toEqual(["new_chunk_1", "new_chunk_2"]);
+  });
+});
+
+describe("planGridChunkSizes", () => {
+  it("keeps grid batches within 2-4 cells and avoids singletons", () => {
+    expect(planGridChunkSizes(1)).toEqual([]);
+    expect(planGridChunkSizes(5)).toEqual([3, 2]);
+    expect(planGridChunkSizes(9)).toEqual([4, 3, 2]);
+    expect(planGridChunkSizes(12)).toEqual([4, 4, 4]);
+  });
+});
+
+describe("computeGridSize", () => {
+  it("treats a single scene as non-grid", () => {
+    expect(computeGridSize(1, "9:16")).toMatchObject({
+      gridSize: null,
+      rows: 0,
+      cols: 0,
+      batchCount: 0,
+    });
+  });
+
+  it("stacks horizontal 3-cell grids vertically to avoid over-wide source images", () => {
+    expect(computeGridSize(3, "16:9")).toMatchObject({
+      gridSize: "grid_3",
+      rows: 3,
+      cols: 1,
+      batchCount: 1,
+    });
+  });
+
+  it("places vertical 3-cell grids in one row", () => {
+    expect(computeGridSize(3, "9:16")).toMatchObject({
+      gridSize: "grid_3",
+      rows: 1,
+      cols: 3,
+      batchCount: 1,
+    });
+  });
+});
+
+describe("groupBySegmentBreak", () => {
+  it("starts a new group at the current segment_break item", () => {
+    const groups = groupBySegmentBreak([
+      { id: "s1", segment_break: false },
+      { id: "s2", segment_break: false },
+      { id: "s3", segment_break: true },
+      { id: "s4", segment_break: false },
+    ]);
+
+    expect(groups.map((group) => group.map((item) => item.id))).toEqual([
+      ["s1", "s2"],
+      ["s3", "s4"],
+    ]);
   });
 });

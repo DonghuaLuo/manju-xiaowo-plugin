@@ -7,7 +7,12 @@ import { useAppStore } from "@/stores/app-store";
 import { groupBySegmentBreak, computeGridSize, matchGridsForGroup } from "@/utils/grid-layout";
 import { GridPreviewPanel } from "@/components/canvas/timeline/GridPreviewPanel";
 import type { GridGeneration } from "@/types/grid";
-import type { NarrationSegment, DramaScene } from "@/types";
+import type {
+  DramaScene,
+  GenerationQuality,
+  NarrationSegment,
+  StoryboardFinalGenerationMode,
+} from "@/types";
 
 type Segment = NarrationSegment | DramaScene;
 
@@ -22,6 +27,11 @@ interface GridPreviewViewProps {
     episode: number,
     scriptFile: string,
     sceneIds?: string[],
+  ) => Promise<void> | void;
+  onGenerateStoryboard?: (
+    segmentId: string,
+    quality?: GenerationQuality,
+    options?: { finalGenerationMode?: StoryboardFinalGenerationMode },
   ) => Promise<void> | void;
 }
 
@@ -39,6 +49,7 @@ export function GridPreviewView({
   contentMode,
   aspectRatio,
   onGenerateGrid,
+  onGenerateStoryboard,
 }: GridPreviewViewProps) {
   const { t } = useTranslation("dashboard");
   const gridsRevision = useAppStore((s) => s.gridsRevision);
@@ -78,11 +89,15 @@ export function GridPreviewView({
   const handleGenerateGroup = useCallback(
     // group key 用 sceneIds 排序后 join，分组重排时 spinner 不会挂错卡片
     async (groupKey: string, group: Segment[]) => {
-      if (!onGenerateGrid || !scriptFile) return;
+      if (!scriptFile) return;
       const sceneIds = group.map((s) => getSegmentId(s, contentMode));
       setGeneratingGroups((prev) => new Set(prev).add(groupKey));
       try {
-        await onGenerateGrid(episode, scriptFile, sceneIds);
+        if (sceneIds.length === 1) {
+          await onGenerateStoryboard?.(sceneIds[0]);
+        } else {
+          await onGenerateGrid?.(episode, scriptFile, sceneIds);
+        }
       } finally {
         setGeneratingGroups((prev) => {
           const next = new Set(prev);
@@ -92,26 +107,28 @@ export function GridPreviewView({
         refreshGrids();
       }
     },
-    [onGenerateGrid, scriptFile, contentMode, episode, refreshGrids],
+    [onGenerateGrid, onGenerateStoryboard, scriptFile, contentMode, episode, refreshGrids],
   );
 
   const stats = useMemo(() => {
-    const batches = groups.length;
+    const batches = groups.reduce((sum, group) => {
+      if (group.length === 1) return sum + 1;
+      return sum + computeGridSize(group.length, aspectRatio).batchCount;
+    }, 0);
     const cells = segments.length;
-    const readyBatches = groups.filter((group) => {
+    const readyBatches = groups.reduce((sum, group) => {
+      if (group.length === 1) {
+        return sum + (group[0]?.generated_assets?.storyboard_image ? 1 : 0);
+      }
+      const expectedBatches = computeGridSize(group.length, aspectRatio).batchCount;
       const sceneIds = group.map((s) => getSegmentId(s, contentMode));
       const groupGrids = matchGridsForGroup(grids, sceneIds, episode);
-      if (groupGrids.length === 0) return false;
-      const covered = new Set<string>();
-      for (const g of groupGrids) {
-        if (g.status !== "completed") return false;
-        for (const id of g.scene_ids) covered.add(id);
-      }
-      return sceneIds.every((id) => covered.has(id));
-    }).length;
+      const completedBatches = groupGrids.filter((g) => g.status === "completed").length;
+      return sum + Math.min(completedBatches, expectedBatches);
+    }, 0);
     const percent = batches > 0 ? Math.round((readyBatches / batches) * 100) : 0;
     return { batches, cells, percent };
-  }, [groups, segments, grids, episode, contentMode]);
+  }, [groups, segments, grids, episode, contentMode, aspectRatio]);
 
   if (segments.length === 0) {
     return (
@@ -124,7 +141,8 @@ export function GridPreviewView({
     );
   }
 
-  const canGenerate = Boolean(onGenerateGrid && scriptFile);
+  const canGenerate = Boolean((onGenerateGrid || onGenerateStoryboard) && scriptFile);
+  const pendingUsesStoryboard = pendingGroup?.segments.length === 1;
 
   return (
     <>
@@ -148,6 +166,22 @@ export function GridPreviewView({
           {groups.map((group, idx) => {
             const layout = computeGridSize(group.length, aspectRatio);
             const ids = getGridIdsForGroup(group);
+            const usesStoryboard = group.length === 1;
+            const title = usesStoryboard
+              ? t("grid_preview_single_card_title", { index: idx + 1 })
+              : layout.batchCount > 1
+                ? t("grid_preview_batch_card_title_split", {
+                    index: idx + 1,
+                    shotCount: group.length,
+                    batchCount: layout.batchCount,
+                    chunks: layout.chunkSizes.join("+"),
+                  })
+                : t("grid_preview_batch_card_title", {
+                    index: idx + 1,
+                    cellCount: group.length,
+                    rows: layout.rows,
+                    cols: layout.cols,
+                  });
             const groupKey = group
               .map((s) => getSegmentId(s, contentMode))
               .sort()
@@ -183,19 +217,14 @@ export function GridPreviewView({
                       letterSpacing: "0.6px",
                     }}
                   >
-                    {t("grid_preview_batch_card_title", {
-                      index: idx + 1,
-                      cellCount: group.length,
-                      rows: layout.rows,
-                      cols: layout.cols,
-                    })}
+                    {title}
                   </span>
                   <span className="flex-1" />
                   {canGenerate && (
                     <button
                       type="button"
                       onClick={() => setPendingGroup({ key: groupKey, segments: group })}
-                      disabled={generating}
+                      disabled={generating || (usesStoryboard ? !onGenerateStoryboard : !onGenerateGrid)}
                       className="sv-navbtn inline-flex items-center gap-1.5"
                     >
                       {generating ? (
@@ -206,6 +235,8 @@ export function GridPreviewView({
                       <span>
                         {generating
                           ? t("submitting")
+                          : usesStoryboard
+                            ? t("media_generate_storyboard", { defaultValue: "生成分镜" })
                           : ids.length > 0
                             ? t("grid_regenerate_btn")
                             : t("grid_preview_batch_generate")}
@@ -213,13 +244,21 @@ export function GridPreviewView({
                     </button>
                   )}
                 </div>
-                <GridPreviewPanel
-                  projectName={projectName}
-                  gridIds={ids}
-                  onRegenerated={refreshGrids}
-                  refreshKey={refreshKey}
-                  defaultExpanded
-                />
+                {usesStoryboard ? (
+                  <div className="px-4 py-3 text-xs" style={{ color: "var(--color-text-4)" }}>
+                    {group[0]?.generated_assets?.storyboard_image
+                      ? t("grid_single_storyboard_ready", { defaultValue: "单镜头已使用普通分镜生成，不创建宫格。" })
+                      : t("grid_single_storyboard_hint", { defaultValue: "单镜头使用普通分镜生成，不创建宫格。" })}
+                  </div>
+                ) : (
+                  <GridPreviewPanel
+                    projectName={projectName}
+                    gridIds={ids}
+                    onRegenerated={refreshGrids}
+                    refreshKey={refreshKey}
+                    defaultExpanded
+                  />
+                )}
               </div>
             );
           })}
@@ -228,10 +267,20 @@ export function GridPreviewView({
 
       <ConfirmDialog
         open={pendingGroup !== null}
-        title={t("grid_preview_batch_generate")}
-        description={t("grid_preview_batch_generate_confirm_desc", {
-          count: pendingGroup?.segments.length ?? 0,
-        })}
+        title={
+          pendingUsesStoryboard
+            ? t("media_generate_storyboard", { defaultValue: "生成分镜" })
+            : t("grid_preview_batch_generate")
+        }
+        description={
+          pendingUsesStoryboard
+            ? t("grid_single_storyboard_generate_confirm_desc", {
+                defaultValue: "即将为这一个镜头提交普通分镜生成任务，不创建宫格，确定继续吗？",
+              })
+            : t("grid_preview_batch_generate_confirm_desc", {
+                count: pendingGroup?.segments.length ?? 0,
+              })
+        }
         confirmLabel={t("common:confirm")}
         loadingLabel={t("submitting")}
         loading={pendingGroup ? generatingGroups.has(pendingGroup.key) : false}

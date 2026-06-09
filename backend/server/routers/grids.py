@@ -16,8 +16,13 @@ from pydantic import BaseModel
 
 from lib.app_data_dir import app_data_dir
 from lib.generation_queue import get_generation_queue
-from lib.grid.layout import calculate_grid_layout
-from lib.grid.models import GridGeneration
+from lib.generation_queue_client import TaskSpec, TaskSpecValidationError
+from lib.grid.layout import (
+    calculate_grid_layout,
+    plan_grid_chunk_sizes,
+    resolve_storyboard_aspect_ratio,
+)
+from lib.grid.models import GridGeneration, build_frame_chain
 from lib.grid.prompt_builder import build_grid_prompt
 from lib.grid_manager import GridManager
 from lib.i18n import Translator
@@ -65,6 +70,17 @@ def _build_grid_task_payload(
     }
 
 
+def _build_storyboard_task_payload(*, item: dict, id_field: str, script_file: str) -> TaskSpec:
+    return TaskSpec.from_request(
+        task_type="storyboard",
+        media_type="image",
+        resource_id=str(item[id_field]),
+        prompt=item.get("image_prompt", ""),
+        script_file=script_file,
+        extra_payload={"quality": "draft"},
+    )
+
+
 # ==================== 请求/响应模型 ====================
 
 
@@ -92,7 +108,8 @@ async def generate_grid(
     _t: Translator,
 ):
     """
-    提交宫格图生成任务到队列，按分段分组，每组 N>=4 个场景生成一个宫格图。
+    提交宫格图生成任务到队列，按 segment_break 分组。
+    单镜头组走普通分镜；多镜头组在连续段内拆成 2-4 格宫格。
 
     立即返回 grid_ids 和 task_ids。生成由 GenerationWorker 异步执行。
     """
@@ -102,7 +119,7 @@ async def generate_grid(
         project_path = get_project_manager().get_project_path(project_name)
 
         items, id_field, _, _, _ = get_storyboard_items(script)
-        aspect_ratio = project.get("aspect_ratio", "9:16")
+        aspect_ratio = resolve_storyboard_aspect_ratio(project)
         style = project.get("style", "")
 
         groups = group_scenes_by_segment_break(items, id_field)
@@ -114,6 +131,7 @@ async def generate_grid(
 
         grid_ids: list[str] = []
         task_ids: list[str] = []
+        storyboard_task_count = 0
         queue = get_generation_queue()
         gm = GridManager(project_path)
 
@@ -123,9 +141,6 @@ async def generate_grid(
         for group in groups:
             all_scene_ids = [item[id_field] for item in group]
             n = len(all_scene_ids)
-            layout = calculate_grid_layout(n, aspect_ratio)
-            if layout is None:
-                continue
 
             # 清理该组旧的 grid 记录（限定同脚本同集，scene_ids 是当前组子集的旧 grid）
             # 跳过 pending/generating 状态的记录，避免 worker 执行时找不到资源
@@ -140,14 +155,31 @@ async def generate_grid(
                 ):
                     gm.delete(old_grid.id)
 
-            # 将大分组拆分为多个宫格批次（余下不足4个的场景也用 grid_4 + 占位符）
+            if n == 1:
+                try:
+                    spec = _build_storyboard_task_payload(item=group[0], id_field=id_field, script_file=req.script_file)
+                except TaskSpecValidationError as e:
+                    raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
+                task = await queue.enqueue_task(
+                    project_name=project_name,
+                    task_type=spec.task_type,
+                    media_type=spec.media_type,
+                    resource_id=spec.resource_id,
+                    payload=spec.payload,
+                    script_file=spec.script_file,
+                    source="webui",
+                    user_id=_user.id,
+                )
+                task_ids.append(task["task_id"])
+                storyboard_task_count += 1
+                continue
+
+            # 只在 segment_break 划出的连续组内拆批；每批 2-4 个真实镜头，不跨组拼接。
             chunks: list[list] = []
-            if n > layout.cell_count:
-                for i in range(0, n, layout.cell_count):
-                    chunk = group[i : i + layout.cell_count]
-                    chunks.append(chunk)
-            else:
-                chunks.append(group)
+            offset = 0
+            for size in plan_grid_chunk_sizes(n):
+                chunks.append(group[offset : offset + size])
+                offset += size
 
             for chunk in chunks:
                 chunk_ids = [item[id_field] for item in chunk]
@@ -207,7 +239,7 @@ async def generate_grid(
             success=True,
             grid_ids=grid_ids,
             task_ids=task_ids,
-            message=f"已提交 {len(grid_ids)} 个宫格生成任务",
+            message=f"已提交 {len(grid_ids)} 个宫格生成任务，{storyboard_task_count} 个普通分镜任务",
         )
 
     except FileNotFoundError as e:
@@ -273,17 +305,39 @@ async def regenerate_grid(project_name: str, grid_id: str, _user: CurrentUser):
         if grid is None:
             raise HTTPException(status_code=404, detail=f"Grid {grid_id} 不存在")
 
+        project = get_project_manager().load_project(project_name)
+        aspect_ratio = resolve_storyboard_aspect_ratio(project)
+        layout = calculate_grid_layout(len(grid.scene_ids), aspect_ratio)
+        if layout is None:
+            raise HTTPException(status_code=400, detail="该记录不是 2-4 镜头宫格，请使用普通分镜或重新按分组生成")
+
+        script = get_project_manager().load_script(project_name, grid.script_file)
+        items, id_field, _, _, _ = get_storyboard_items(script)
+        items_by_id = {str(item.get(id_field)): item for item in items}
+        scenes = [items_by_id.get(str(scene_id)) for scene_id in grid.scene_ids]
+        if any(scene is None for scene in scenes):
+            raise HTTPException(status_code=400, detail="宫格记录中的分镜已不存在，请重新按分组生成")
+
         grid.status = "pending"
         grid.error_message = None
         # 清空旧 metadata，由 execute_grid_task 按 needs_i2i 重新回填
         grid.provider = ""
         grid.model = ""
+        grid.rows = layout.rows
+        grid.cols = layout.cols
+        grid.cell_count = layout.cell_count
+        grid.grid_size = layout.grid_size
+        grid.frame_chain = build_frame_chain(grid.scene_ids, layout.rows, layout.cols)
+        grid.prompt = build_grid_prompt(
+            scenes=[scene for scene in scenes if scene is not None],
+            id_field=id_field,
+            rows=layout.rows,
+            cols=layout.cols,
+            style=project.get("style", ""),
+            aspect_ratio=aspect_ratio,
+            grid_aspect_ratio=layout.grid_aspect_ratio,
+        )
         gm.save(grid)
-
-        project = get_project_manager().load_project(project_name)
-        aspect_ratio = project.get("aspect_ratio", "9:16")
-        layout = calculate_grid_layout(len(grid.scene_ids), aspect_ratio)
-        grid_aspect_ratio = layout.grid_aspect_ratio if layout else aspect_ratio
 
         queue = get_generation_queue()
         task = await queue.enqueue_task(
@@ -298,7 +352,7 @@ async def regenerate_grid(project_name: str, grid_id: str, _user: CurrentUser):
                 grid_size=grid.grid_size,
                 rows=grid.rows,
                 cols=grid.cols,
-                grid_aspect_ratio=grid_aspect_ratio,
+                grid_aspect_ratio=layout.grid_aspect_ratio,
                 video_aspect_ratio=aspect_ratio,
             ),
             script_file=grid.script_file,

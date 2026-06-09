@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 
 from lib.config.resolver import ConfigResolver
 from lib.cost_calculator import cost_calculator
-from lib.grid.layout import calculate_grid_layout
+from lib.grid.layout import plan_grid_chunk_sizes
 from lib.script_editor import ScriptEditError
 from lib.storyboard_sequence import get_storyboard_items, group_scenes_by_segment_break
 from lib.usage_tracker import UsageTracker
@@ -97,15 +96,6 @@ class CostEstimationService:
         actual_by_segment = await self._tracker.get_actual_costs_by_segment(project_name)
 
         generation_mode = project_data.get("generation_mode", "single")
-        # 规范化 aspect_ratio：可能是 str 或 dict，复用生成任务的解析逻辑
-        raw_ar = project_data.get("aspect_ratio")
-        if isinstance(raw_ar, str):
-            aspect_ratio = raw_ar
-        elif isinstance(raw_ar, dict):
-            aspect_ratio = raw_ar.get("storyboards", "9:16")
-        else:
-            aspect_ratio = "9:16" if project_data.get("content_mode", "narration") == "narration" else "16:9"
-
         # 预计算图片单价
         image_unit_cost: tuple[float, str] | None = None
         grid_image_unit_cost: tuple[float, str] | None = None
@@ -152,10 +142,10 @@ class CostEstimationService:
                 groups = group_scenes_by_segment_break(raw_segments, id_key)
                 for group in groups:
                     n = len(group)
-                    layout = calculate_grid_layout(n, aspect_ratio)
-                    if layout is None:
+                    chunk_sizes = plan_grid_chunk_sizes(n)
+                    if not chunk_sizes:
                         continue
-                    grid_count = math.ceil(n / layout.cell_count) if n > layout.cell_count else 1
+                    grid_count = len(chunk_sizes)
                     per_scene_cost = round(grid_image_unit_cost[0] * grid_count / n, 6)
                     for seg in group:
                         grid_cost_per_segment[seg.get(id_key, "")] = (per_scene_cost, grid_image_unit_cost[1])

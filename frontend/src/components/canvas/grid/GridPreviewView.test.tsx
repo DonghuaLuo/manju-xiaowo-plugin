@@ -9,9 +9,9 @@ vi.mock("@/components/canvas/timeline/GridPreviewPanel", () => ({
   GridPreviewPanel: () => <div data-testid="grid-preview-panel" />,
 }));
 
-function makeSegment(): NarrationSegment {
+function makeSegment(id = "SEG-1", patch: Partial<NarrationSegment> = {}): NarrationSegment {
   return {
-    segment_id: "SEG-1",
+    segment_id: id,
     episode: 1,
     duration_seconds: 4,
     segment_break: false,
@@ -22,6 +22,7 @@ function makeSegment(): NarrationSegment {
     image_prompt: "image-1",
     video_prompt: "video-1",
     transition_to_next: "cut",
+    ...patch,
   } as NarrationSegment;
 }
 
@@ -31,8 +32,9 @@ describe("GridPreviewView", () => {
     vi.spyOn(API, "listGrids").mockResolvedValue([]);
   });
 
-  it("asks for confirmation before generating a grid group", async () => {
+  it("asks for confirmation before generating a single scene through the storyboard flow", async () => {
     const onGenerateGrid = vi.fn().mockResolvedValue(undefined);
+    const onGenerateStoryboard = vi.fn().mockResolvedValue(undefined);
 
     render(
       <GridPreviewView
@@ -43,22 +45,41 @@ describe("GridPreviewView", () => {
         contentMode="narration"
         aspectRatio="9:16"
         onGenerateGrid={onGenerateGrid}
+        onGenerateStoryboard={onGenerateStoryboard}
       />,
     );
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: /生成宫格镜头板|Generate grid board/i,
+        name: /生成分镜|Generate storyboard/i,
       }),
     );
 
-    const dialog = await screen.findByRole("dialog", {
-      name: /生成宫格镜头板|Generate grid board/i,
-    });
+    const dialog = await screen.findByRole("dialog", { name: /生成分镜|Generate storyboard/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /确认|Confirm/i }));
 
     await waitFor(() => {
-      expect(onGenerateGrid).toHaveBeenCalledWith(1, "episode_1.json", ["SEG-1"]);
+      expect(onGenerateStoryboard).toHaveBeenCalledWith("SEG-1");
     });
+    expect(onGenerateGrid).not.toHaveBeenCalled();
+  });
+
+  it("shows real chunk sizes when a continuous group is split into multiple grids", async () => {
+    render(
+      <GridPreviewView
+        projectName="demo"
+        episode={1}
+        scriptFile="episode_1.json"
+        segments={Array.from({ length: 5 }, (_, index) => makeSegment(`SEG-${index + 1}`))}
+        contentMode="narration"
+        aspectRatio="9:16"
+        onGenerateGrid={vi.fn()}
+        onGenerateStoryboard={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/3\+2/)).toBeInTheDocument();
+    expect(screen.getAllByText(/2 批|2 batches/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/5 格 .*0×0/)).not.toBeInTheDocument();
   });
 });

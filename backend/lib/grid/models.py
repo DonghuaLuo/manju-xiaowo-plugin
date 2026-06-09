@@ -65,13 +65,15 @@ class FrameCell:
 
 
 def build_frame_chain(scene_ids: list[str], rows: int, cols: int) -> list[FrameCell]:
-    """Build a frame chain from scene IDs to fill a rows×cols grid.
+    """Build a frame chain from scene IDs for an exact rows×cols grid.
 
     - Cell 0: frame_type="first", next_scene_id=scene_ids[0]
     - Cell 1..N-1: frame_type="transition", prev/next scene IDs
-    - Remaining cells: frame_type="placeholder"
     """
     total = rows * cols
+    if len(scene_ids) != total:
+        raise ValueError(f"grid frame chain requires scene_ids to match cells: scenes={len(scene_ids)}, cells={total}")
+
     chain: list[FrameCell] = []
 
     for idx in range(total):
@@ -100,16 +102,6 @@ def build_frame_chain(scene_ids: list[str], rows: int, cols: int) -> list[FrameC
                     next_scene_id=scene_ids[idx],
                 )
             )
-        else:
-            chain.append(
-                FrameCell(
-                    index=idx,
-                    row=row,
-                    col=col,
-                    frame_type="placeholder",
-                )
-            )
-
     return chain
 
 

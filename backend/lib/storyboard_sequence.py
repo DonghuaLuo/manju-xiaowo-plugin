@@ -101,6 +101,10 @@ def build_previous_storyboard_reference(path: Path) -> dict:
 def group_scenes_by_segment_break(items: list[dict], id_field: str) -> list[list[dict]]:
     """Groups consecutive scene dicts, breaking at segment_break=True.
 
+    ``segment_break=True`` belongs to the current item and means it starts a
+    new continuity run. The previous group is closed before this item is added,
+    so grid batches never cross a declared continuity boundary.
+
     Args:
         items: List of scene/segment dicts.
         id_field: Key in each dict for the item ID (unused but kept for API consistency).
