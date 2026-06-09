@@ -198,6 +198,8 @@ const CopilotMessageViewport = memo(function CopilotMessageViewport() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const programmaticScrollResetRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
+  const scheduledScrollFrameRef = useRef<number | null>(null);
+  const scheduledScrollTimersRef = useRef<number[]>([]);
   const [contentNode, setContentNode] = useState<HTMLDivElement | null>(null);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const autoScrollEnabledRef = useRef(true);
@@ -238,6 +240,36 @@ const CopilotMessageViewport = memo(function CopilotMessageViewport() {
     }, 600);
   }, []);
 
+  const cancelScheduledBottomScroll = useCallback(() => {
+    if (scheduledScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scheduledScrollFrameRef.current);
+      scheduledScrollFrameRef.current = null;
+    }
+    for (const timerId of scheduledScrollTimersRef.current) {
+      window.clearTimeout(timerId);
+    }
+    scheduledScrollTimersRef.current = [];
+  }, []);
+
+  const runBottomScrollPass = useCallback(() => {
+    if (!autoScrollEnabledRef.current) return;
+    const element = scrollRef.current;
+    if (!element) return;
+    scrollElementToBottom(element);
+  }, []);
+
+  const scheduleBottomScrollPasses = useCallback(() => {
+    cancelScheduledBottomScroll();
+    scheduledScrollFrameRef.current = window.requestAnimationFrame(() => {
+      scheduledScrollFrameRef.current = null;
+      runBottomScrollPass();
+      scheduledScrollTimersRef.current = [
+        window.setTimeout(runBottomScrollPass, 80),
+        window.setTimeout(runBottomScrollPass, 180),
+      ];
+    });
+  }, [cancelScheduledBottomScroll, runBottomScrollPass]);
+
   const syncAutoScrollState = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
@@ -254,22 +286,20 @@ const CopilotMessageViewport = memo(function CopilotMessageViewport() {
     if (behavior === "smooth") holdProgrammaticScrollLock();
     scrollElementToBottom(element, behavior);
     setAutoScrollState(true);
-  }, [holdProgrammaticScrollLock, setAutoScrollState]);
+    scheduleBottomScrollPasses();
+  }, [holdProgrammaticScrollLock, scheduleBottomScrollPasses, setAutoScrollState]);
 
   useLayoutEffect(() => {
     clearProgrammaticScrollLock();
+    cancelScheduledBottomScroll();
     setAutoScrollState(true);
-    const element = scrollRef.current;
-    if (!element) return;
-    scrollElementToBottom(element);
-  }, [clearProgrammaticScrollLock, scrollContextKey, setAutoScrollState]);
+    scrollToBottom();
+  }, [cancelScheduledBottomScroll, clearProgrammaticScrollLock, scrollContextKey, scrollToBottom, setAutoScrollState]);
 
   useLayoutEffect(() => {
     if (!autoScrollEnabledRef.current) return;
-    const element = scrollRef.current;
-    if (!element) return;
-    scrollElementToBottom(element);
-  }, [allTurns, messagesLoading, totalSize]);
+    scrollToBottom();
+  }, [allTurns, messagesLoading, scrollToBottom, totalSize]);
 
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return;
@@ -278,15 +308,21 @@ const CopilotMessageViewport = memo(function CopilotMessageViewport() {
     const observer = new ResizeObserver(() => {
       if (!autoScrollEnabledRef.current) return;
       scrollElementToBottom(scrollNode);
+      scheduleBottomScrollPasses();
     });
 
     observer.observe(scrollNode);
     if (contentNode) observer.observe(contentNode);
 
     return () => observer.disconnect();
-  }, [contentNode]);
+  }, [contentNode, scheduleBottomScrollPasses]);
 
-  useEffect(() => clearProgrammaticScrollLock, [clearProgrammaticScrollLock]);
+  useEffect(() => {
+    return () => {
+      clearProgrammaticScrollLock();
+      cancelScheduledBottomScroll();
+    };
+  }, [cancelScheduledBottomScroll, clearProgrammaticScrollLock]);
 
   const showJumpToBottom = !autoScrollEnabled && allTurns.length > 0;
 

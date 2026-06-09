@@ -259,6 +259,65 @@ describe("AgentCopilot", () => {
     expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 400, behavior: "auto" });
   });
 
+  it("retries auto-scroll when streamed content height updates after render", () => {
+    vi.useFakeTimers();
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => (
+      window.setTimeout(() => callback(performance.now()), 16)
+    ));
+    const cancelRafSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      window.clearTimeout(id);
+    });
+
+    useAssistantStore.setState({
+      turns: [
+        {
+          type: "user",
+          uuid: "turn-user-1",
+          content: [{ type: "text", text: "写一个方案" }],
+        },
+      ],
+      draftTurn: {
+        type: "assistant",
+        uuid: "draft-assistant-1",
+        content: [{ type: "text", text: "第一段" }],
+      },
+    });
+
+    render(<AgentCopilot />);
+
+    const scrollContainer = screen.getByTestId("assistant-messages-scroll");
+    const metrics = installScrollMetrics(scrollContainer, {
+      clientHeight: 120,
+      scrollHeight: 520,
+      scrollTop: 400,
+    });
+
+    metrics.scrollTo.mockClear();
+
+    act(() => {
+      useAssistantStore.setState({
+        draftTurn: {
+          type: "assistant",
+          uuid: "draft-assistant-1",
+          content: [{ type: "text", text: "第一段\n第二段" }],
+        },
+      });
+    });
+
+    expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 400, behavior: "auto" });
+
+    metrics.setScrollHeight(720);
+
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(metrics.scrollTo).toHaveBeenCalledWith({ top: 600, behavior: "auto" });
+
+    rafSpy.mockRestore();
+    cancelRafSpy.mockRestore();
+  });
+
   it("pauses auto-scroll after manual scroll-up and offers a jump-to-bottom button", () => {
     useAssistantStore.setState({
       turns: [
