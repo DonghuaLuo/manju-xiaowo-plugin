@@ -17,6 +17,7 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server
 
 from server.agent_runtime.sdk_tools._context import ToolContext
+from server.agent_runtime.sdk_tools.compose_video import compose_video_tool
 from server.agent_runtime.sdk_tools.enqueue_assets import (
     generate_assets_tool,
     list_pending_assets_tool,
@@ -35,6 +36,13 @@ from server.agent_runtime.sdk_tools.patch_script import (
     patch_episode_script_tool,
     remove_segment_tool,
     split_segment_tool,
+)
+from server.agent_runtime.sdk_tools.project_sources import (
+    list_source_files_tool,
+    peek_split_point_tool,
+    reset_episode_artifacts_tool,
+    source_info_tool,
+    split_episode_tool,
 )
 from server.agent_runtime.sdk_tools.text_generation import (
     generate_episode_script_tool,
@@ -63,6 +71,12 @@ ARCREEL_MCP_TOOL_IDS: tuple[str, ...] = (
     "generate_episode_script",
     "normalize_drama_script",
     "get_video_capabilities",
+    "list_source_files",
+    "source_info",
+    "peek_split_point",
+    "split_episode",
+    "reset_episode_artifacts",
+    "compose_video",
     "patch_episode_script",
     "insert_segment",
     "remove_segment",
@@ -89,6 +103,12 @@ def build_arcreel_mcp_server(*, project_name: str, projects_root: Path) -> Any:
             generate_episode_script_tool(ctx),
             normalize_drama_script_tool(ctx),
             get_video_capabilities_tool(ctx),
+            list_source_files_tool(ctx),
+            source_info_tool(ctx),
+            peek_split_point_tool(ctx),
+            split_episode_tool(ctx),
+            reset_episode_artifacts_tool(ctx),
+            compose_video_tool(ctx),
             patch_episode_script_tool(ctx),
             insert_segment_tool(ctx),
             remove_segment_tool(ctx),

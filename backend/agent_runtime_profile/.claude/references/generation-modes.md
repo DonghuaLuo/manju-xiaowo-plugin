@@ -27,7 +27,7 @@ Step 4 JSON 剧本
   → dispatch create-episode-script（内部按 generation_mode 选 schema）
 
 Step 5 资产（characters / scenes / props 三类）
-  三种模式共用 `generate-assets` skill（--characters/--scenes/--props）
+  三种模式共用 `generate-assets` skill（type=character/scene/prop）
 
 Step 6 分镜图
   storyboard         → dispatch generate-assets (storyboard)
@@ -47,7 +47,7 @@ Step 7 视频
 - **母资产与宫格图**：角色 / 场景 / 道具母资产、宫格图默认高质量生成；宫格图切出的分镜按快速版镜头使用
 - **单片段时长**（storyboard / grid）：项目 `default_duration`（项目创建时按 content_mode 写入 project.json）
 - **单 unit 时长**（reference_video）：所有 shot 总和；**目标贴近当前视频模型的 `max_duration`**，单 shot 取值必须在模型 `supported_durations` 列表中。具体数值由 subagent 在执行时通过 `mcp__arcreel__get_video_capabilities` 工具查得，**不在本文档固化**
-- **拼接**：合并成片只使用已生成视频片段；`compose-video` 按当前脚本结构读取 `scenes[]` / `segments[]` / `video_units[]` 的 `generated_assets.video_clip`。缺视频必须提示并停止，不得自动补生成或自动精修。Veo extend 仅用于**单片段延长**，不串联不同镜头
+- **拼接**：合并成片只使用已生成视频片段；`compose-video` 调 `mcp__arcreel__compose_video` 按当前脚本结构读取 `scenes[]` / `segments[]` / `video_units[]` 的 `generated_assets.video_clip`。缺视频必须提示并停止，不得自动补生成或自动精修。Veo extend 仅用于**单片段延长**，不串联不同镜头
 - **BGM**：视频 prompt 末尾统一追加"禁止出现：BGM、文字字幕、水印"
 
 ## Prompt 语言

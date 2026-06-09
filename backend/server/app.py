@@ -212,8 +212,8 @@ def check_sandbox_available() -> bool:
             )
         return True
     logger.warning(
-        "SANDBOX_UNSUPPORTED on %s — server 启动 sandbox=disabled，Bash 工具回退到代码白名单"
-        "（python .claude/skills/.../scripts/*.py / ffmpeg / ffprobe）。"
+        "SANDBOX_UNSUPPORTED on %s — server 启动 sandbox=disabled，shell 工具仍不作为创作 workflow 入口；"
+        "项目文件、文本处理、生成与合成动作应走 in-process MCP tools。"
         "生产部署推荐 macOS / Linux / Docker；Windows 用户建议使用 WSL2。",
         system,
     )

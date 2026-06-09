@@ -19,7 +19,7 @@ from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -365,10 +365,6 @@ class SessionManager:
         "Skill",
         "Agent",
         "Task",
-        # —— Bash 系列（sandbox 启用 + autoAllowBashIfSandboxed=True 协同放行）——
-        "Bash",
-        "BashOutput",
-        "KillBash",
         # —— SDK 内置工具（仍走 PreToolUse hook 文件围栏 + settings.json deny）——
         "Read",
         "Write",
@@ -382,14 +378,9 @@ class SessionManager:
 
     _BASH_TOOLS: tuple[str, ...] = ("Bash", "BashOutput", "KillBash")
 
-    # Windows 回退（_sandbox_enabled=False）的 shell 命令白名单：等价于 PR 沙箱化前
-    # main 分支 settings.json permissions.allow 段。也是 _can_use_tool deny hint
-    # 文案的单一真相源（_format_bash_whitelist_deny_message 从此派生）。
-    _WINDOWS_BASH_PREFIX_WHITELIST: tuple[str, ...] = (
-        "python .claude/skills/",
-        "ffmpeg",
-        "ffprobe",
-    )
+    # Windows 回退（_sandbox_enabled=False）也不再开放 shell 命令入口。
+    # 创作、生成、合成均走 in-process MCP tools。
+    _WINDOWS_BASH_PREFIX_WHITELIST: tuple[str, ...] = ()
     _WINDOWS_BASH_CONTROL_TOKENS: frozenset[str] = frozenset(
         {
             ";",
@@ -408,9 +399,8 @@ class SessionManager:
     )
     _WINDOWS_BASH_SUBSTITUTION_MARKERS: tuple[str, ...] = ("\n", "\r", "`", "$(")
 
-    # Sandbox 启用后 Bash 进入 allowed_tools；具体命令由 SDK Sandbox 自动放行
-    # (autoAllowBashIfSandboxed=True)。文件访问控制走 settings.json deny rules
-    # + PreToolUse hook 双重防线。
+    # Shell 不再作为 Manju 创作 workflow 的默认工具。项目文件操作与生成动作
+    # 收敛到 in-process MCP tools，避免 Windows/POSIX 命令差异。
     _PATH_TOOLS: dict[str, str] = {
         "Read": "file_path",
         "Write": "file_path",
@@ -506,7 +496,7 @@ class SessionManager:
         # SandboxSettings.enableWeakerNestedSandbox 标志，由 AssistantService
         # 从 app.state.in_docker 透传。
         self._in_docker = in_docker
-        # False 表示 SDK 不支持当前平台（目前仅 Windows） — Bash 工具走代码白名单回退。
+        # False 表示 SDK 不支持当前平台（目前仅 Windows） — shell 工具入口仍保持关闭。
         self._sandbox_enabled = sandbox_enabled
         # 实例不变量缓存：避免每次 _build_options / hook 都重做 path resolve。
         self._project_root_resolved = self.project_root.resolve()
@@ -744,26 +734,20 @@ class SessionManager:
         )
         parts.append("- Grep 参数必须使用 SDK 字段名：`-n`、`-C`、`-A`、`-B`、`-i`，不要写成 `n` / `C`。")
         parts.append(
-            "- Bash 调用 skill 脚本时必须使用相对路径（如 `python .claude/skills/.../script.py`），不要转换为绝对路径。"
+            "- 项目源文件枚举、统计、分集切分和重跑清理一律走 mcp__arcreel__list_source_files / source_info / peek_split_point / split_episode / reset_episode_artifacts。"
         )
         parts.append(
-            "- Bash 中的 `python` 已由插件注入为当前 manju 后端运行时；运行 `.claude/skills/` 脚本时直接使用 `python ...`，不要使用 `uv run`、`py` 或系统 Python。"
-        )
-        parts.append(
-            "- 调用 `.claude/skills/` 脚本必须使用相对路径（如 `python .claude/skills/manage-project/scripts/peek_split_point.py ...`），不要使用项目绝对路径。"
-        )
-        parts.append(
-            "- Bash 只用于运行 `.claude/skills/` 内置 Python 脚本或 compose-video 需要的 ffmpeg/ffprobe；不要用 ls/cat/curl/jq/wc/sed/awk/grep/head/tail/find/xargs/pwd/true 等外部 CLI 做文件浏览、JSON 摘要或网络请求。"
+            "- 项目文本、JSON 剧本和固定中间产物只通过 MCP 工具处理。"
         )
         parts.append(
             "- project.json 与 scripts/*.json 禁止用 Write/Edit/Bash/PowerShell 直接修改；资产与 settings 写入走 mcp__arcreel__patch_project，剧本编辑走 patch_episode_script / insert_segment / remove_segment / split_segment。"
         )
         parts.append(
-            "- 如果 source/episode_{N}.txt 不存在，先走 manga-workflow 阶段 2：用 "
-            "`python .claude/skills/manage-project/scripts/peek_split_point.py --source source/<原文文件> "
-            "--target <目标阅读单位>` 预览，再用 split_episode.py 生成单集；不要直接 Read/Grep 整本原文推进后续阶段。"
+            "- 如果需要重跑某集 JSON/分镜，不要删除任意路径，也不要默认删除 source/episode_{N}.txt；调用 mcp__arcreel__reset_episode_artifacts({\"episode\": N}) 清理 scripts/episode_N.json 与 drafts/episode_N。只有确需重新切分原文时才显式传 include_source=true。"
         )
-        parts.append("- Bash 命令必须写在单行，禁止 heredoc / `python - <<` / `python -c`，JSON 参数使用紧凑格式。")
+        parts.append(
+            "- 如果 source/episode_{N}.txt 不存在，先走 manga-workflow 阶段 2：list_source_files 选择源文件，source_info 读取统计，peek_split_point 预览断点，split_episode 生成单集；不要直接 Read/Grep 整本原文推进后续阶段。"
+        )
 
         self._append_overview_section(parts, config.get("overview", {}))
 
@@ -928,9 +912,8 @@ class SessionManager:
         sandbox_typed = self._build_sandbox_settings(project_cwd)
 
         # Windows 回退：sandbox 关闭时把 Bash 系列从 allowed_tools 剥离，
-        # 让 _can_use_tool 接管 prefix 白名单匹配（_WINDOWS_BASH_PREFIX_WHITELIST）。
         # 新版 Claude Code SDK 在 Windows 也可能发出 PowerShell 工具调用；
-        # PowerShell 不放入 allowed_tools，而是在 can_use_tool 里走同一套白名单。
+        # PowerShell 不放入 allowed_tools，can_use_tool 里统一拒绝 shell 入口。
         allowed_tools = list(self.DEFAULT_ALLOWED_TOOLS)
         if not self._sandbox_enabled:
             bash_tools = set(self._BASH_TOOLS)
@@ -1146,20 +1129,17 @@ class SessionManager:
         if "\n" in compact or "\r" in compact or "<<" in compact:
             return (
                 "Bash 命令被阻止：agent session 只允许单行命令，禁止 heredoc / 多行脚本。"
-                "处理项目文本请调用 .claude/skills/ 下的既有脚本，例如 "
-                "`python .claude/skills/manage-project/scripts/peek_split_point.py ...`。"
+                "处理项目文本请调用 mcp__arcreel__source_info / peek_split_point / split_episode 等工具。"
             )
         if "`" in compact or "$(" in compact:
             return (
                 "Bash 命令被阻止：不要使用 shell 命令替换语法。"
-                "请改为单个 `python .claude/skills/...` 脚本调用，或使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
+                "请使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
             )
         if _PY_INLINE_SCRIPT_RE.search(compact):
             return (
                 "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
-                "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
-                "如需统计 source 文件行数/大小/阅读单位，请运行 "
-                "`python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`。"
+                "请改用 mcp__arcreel__source_info / peek_split_point / split_episode / reset_episode_artifacts 等 MCP 工具。"
             )
 
         try:
@@ -1170,7 +1150,19 @@ class SessionManager:
         if any(token in cls._WINDOWS_BASH_CONTROL_TOKENS for token in tokens):
             return (
                 "Bash 命令被阻止：不要使用 shell 链接、管道或重定向操作符。"
-                "请改为单个 `python .claude/skills/...` 脚本调用，或使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
+                "请使用 Read / Glob / Grep / mcp__arcreel__* 工具；重跑 JSON/分镜清理用 mcp__arcreel__reset_episode_artifacts（默认保留 source/episode_N.txt）。"
+            )
+
+        normalized_tokens = [token.replace("\\", "/").lower() for token in tokens]
+        if any(".claude/skills/manage-project/" in token for token in normalized_tokens):
+            return (
+                "Bash 命令被阻止：manage-project 已迁移为 MCP 工具。"
+                "请使用 mcp__arcreel__list_source_files / source_info / peek_split_point / split_episode / reset_episode_artifacts。"
+            )
+        if any(".claude/skills/compose-video/" in token for token in normalized_tokens):
+            return (
+                "Bash 命令被阻止：compose-video 已迁移为 MCP 工具。"
+                "请使用 mcp__arcreel__compose_video。"
             )
 
         for token in tokens:
@@ -1187,8 +1179,8 @@ class SessionManager:
                 return (
                     f"Bash 命令被阻止：`{command_name}` 未作为 Manju 跨平台依赖打包，"
                     "在 Windows 下不可作为稳定流程依赖。文件定位/读取请用 Read、Glob、Grep 工具；"
-                    "源文件统计请用 `python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`；"
-                    "网络、JSON 生成和项目写入请用 mcp__arcreel__* 工具。"
+                    "源文件统计/分集切分请用 mcp__arcreel__source_info / peek_split_point / split_episode；"
+                    "重跑 JSON/分镜清理请用 reset_episode_artifacts（默认保留 source/episode_N.txt）。"
                 )
             break
 
@@ -1202,9 +1194,7 @@ class SessionManager:
             if next_index < len(tokens) and tokens[next_index].lower() in {"-", "-c"}:
                 return (
                     "Bash 命令被阻止：不要用 `python -` / `python -c` / heredoc 写临时脚本。"
-                    "请改用项目内 .claude/skills/ 的脚本或 MCP 工具，避免路径转换和大文本读取失控。"
-                    "如需统计 source 文件行数/大小/阅读单位，请运行 "
-                    "`python .claude/skills/manage-project/scripts/source_info.py --source source/<文件名>`。"
+                    "请改用 mcp__arcreel__source_info / peek_split_point / split_episode / reset_episode_artifacts 等 MCP 工具。"
                 )
 
         if any(_POSIX_WINDOWS_DRIVE_RE.match(token) for token in tokens):
@@ -1462,8 +1452,9 @@ class SessionManager:
         return (
             f"{tool_name} 被阻止：当前项目已有角色/场景/道具定义，但还没有 source/episode_*.txt，"
             "继续直接读取或搜索整本原文容易把 agent 带偏并消耗大量 token。请先执行分集："
-            f"`python .claude/skills/manage-project/scripts/peek_split_point.py --source source/{source_name} "
-            f"--target {target_units}`，确认断点后再用 split_episode.py 生成 source/episode_N.txt。"
+            "调用 mcp__arcreel__source_info 获取统计，调用 "
+            f"mcp__arcreel__peek_split_point({{\"source\": \"source/{source_name}\", \"target\": {target_units}}}) "
+            "预览断点，确认后调用 mcp__arcreel__split_episode 生成 source/episode_N.txt。"
         )
 
     @staticmethod
@@ -2851,7 +2842,7 @@ class SessionManager:
         filesystem 子结构，但 CLI 运行时透传 JSON 接受）。
 
         - ``_sandbox_enabled=False``（Windows 回退）：仅返回 ``{"enabled": False}``，
-          Bash/PowerShell 工具改走 ``_WINDOWS_BASH_PREFIX_WHITELIST`` 代码白名单。
+          Bash/PowerShell 仍不作为创作 workflow 入口。
         - ``filesystem.denyRead``：内核级文件读拒绝（macOS Seatbelt / Linux
           bwrap profile），对 sandbox 内所有子进程生效。
         - ``filesystem.denyWrite``：内核级文件写拒绝，覆盖 ``scripts/`` 目录与
@@ -2865,7 +2856,7 @@ class SessionManager:
             project_cwd = self.projects_root
         return {
             "enabled": True,
-            "autoAllowBashIfSandboxed": True,
+            "autoAllowBashIfSandboxed": False,
             "allowUnsandboxedCommands": False,
             "network": {"allowedDomains": list(self._DEFAULT_SANDBOX_ALLOWED_DOMAINS)},
             "enableWeakerNestedSandbox": bool(self._in_docker),
@@ -3149,9 +3140,8 @@ class SessionManager:
     def _is_windows_bash_command_allowed(cls, command: str) -> tuple[bool, str | None]:
         """Return whether an unsandboxed Windows Bash command is permitted.
 
-        This is stricter than a raw prefix check: the command must be a single
-        command invocation, not a shell pipeline/chained script, and Python
-        entrypoints must point at project-local Manju skill scripts.
+        Shell commands are not workflow entrypoints. This parser remains as a
+        defensive fallback so Windows sessions fail closed with clear messages.
         """
         if any(marker in command for marker in cls._WINDOWS_BASH_SUBSTITUTION_MARKERS):
             return False, "命令包含换行或命令替换语法"
@@ -3169,20 +3159,9 @@ class SessionManager:
 
         executable = Path(tokens[0]).name.lower()
         if executable in {"python", "python3", "py"}:
-            if len(tokens) < 2:
-                return False, "python 命令缺少脚本路径"
-            script = tokens[1].replace("\\", "/")
-            script_path = PurePosixPath(script)
-            if script_path.is_absolute() or ".." in script_path.parts:
-                return False, "脚本路径必须是 .claude/skills 下的相对路径"
-            if script.startswith(".claude/skills/") and script.endswith(".py"):
-                return True, None
-            return False, "python 仅允许执行 .claude/skills 下的 .py 脚本"
+            return False, "Python 脚本入口已迁移为 MCP 工具"
 
-        if executable in {"ffmpeg", "ffprobe"}:
-            return True, None
-
-        return False, f"命令不在 Windows shell 白名单内: {tokens[0]}"
+        return False, f"Windows shell 入口已关闭: {tokens[0]}"
 
     async def _build_can_use_tool_callback(
         self,
@@ -3229,7 +3208,7 @@ class SessionManager:
                 )
 
             # Windows 回退：sandbox 关闭时 Bash/PowerShell 不在 allowed_tools，
-            # 落到这里走 _WINDOWS_BASH_PREFIX_WHITELIST 代码白名单。
+            # 落到这里统一拒绝 shell 入口。
             if not self._sandbox_enabled and tool_name in ("Bash", "PowerShell"):
                 cmd = str((input_data or {}).get("command") or "").strip()
                 allowed, deny_reason = self._is_windows_bash_command_allowed(cmd)
@@ -3249,7 +3228,7 @@ class SessionManager:
             if not self._sandbox_enabled and tool_name in ("BashOutput", "KillBash"):
                 return PermissionResultAllow(updated_input=input_data)
 
-            # Whitelist fallback: deny any tool that was not pre-approved
+            # Fallback: deny any tool that was not pre-approved
             # by allowed_tools or settings.json allow rules.
             if PermissionResultDeny is not None:
                 reason = getattr(_context, "decision_reason", None)  # SDK 0.1.74+
@@ -3273,16 +3252,12 @@ class SessionManager:
         command: str,
         reason: str | None = None,
     ) -> str:
-        """Windows 回退 shell 白名单拒绝文案。从 _WINDOWS_BASH_PREFIX_WHITELIST
-        派生 allowed 列表，避免常量与文案双份漂移。"""
-        allowed_lines = "\n".join(f"  - {prefix}" for prefix in cls._WINDOWS_BASH_PREFIX_WHITELIST)
+        """Windows 回退 shell 拒绝文案。"""
         reason_line = f"拒绝原因: {reason}\n" if reason else ""
         return (
             f"未授权的 {tool_name} 命令: {command[:200]}\n"
             f"{reason_line}"
-            "当前 Windows shell 白名单仅允许以下前缀:\n"
-            f"{allowed_lines}\n"
-            "并且必须是单条命令，禁止 shell 链接、管道、重定向或命令替换。"
+            "请使用 Read / Glob / Grep / mcp__arcreel__* 工具。"
         )
 
     def _message_to_dict(self, message: Any) -> dict[str, Any]:
