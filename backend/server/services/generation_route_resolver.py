@@ -25,6 +25,8 @@ ROUTE_TRIGGER_KEYS = frozenset(
         "source_version",
         "generate_audio",
         "service_tier",
+        "image_output_format",
+        "output_format",
         "video_backend",
     }
 )
@@ -89,6 +91,7 @@ class GenerationRoute:
     generate_audio: bool | None = None
     service_tier: str = "default"
     seed: int | None = None
+    image_output_format: str | None = None
     supported_resolutions: list[str] = field(default_factory=list)
     supported_durations: list[int] = field(default_factory=list)
     duration_resolution_constraints: dict[str, list[int]] = field(default_factory=dict)
@@ -409,6 +412,20 @@ def _payload_resolution(payload: dict[str, Any] | None, profile: dict[str, Any])
     return None
 
 
+def _payload_image_output_format(payload: dict[str, Any] | None, profile: dict[str, Any]) -> str | None:
+    for source in (payload or {}, profile):
+        value = source.get("image_output_format")
+        if value is None:
+            value = source.get("output_format")
+        if isinstance(value, str) and value.strip():
+            fmt = value.strip().lower()
+            if fmt == "jpeg":
+                fmt = "jpg"
+            if fmt in {"auto", "png", "jpg", "webp"}:
+                return fmt
+    return None
+
+
 def _to_int_or_none(raw: object) -> int | None:
     if raw is None or raw == "":
         return None
@@ -597,6 +614,7 @@ async def _resolve_image_route(
     resolution = _payload_resolution(payload, profile)
     if resolution is None:
         resolution = await resolve_resolution(project or {}, resolved.provider_id, resolved.model_id)
+    image_output_format = _payload_image_output_format(payload, profile)
     metadata = _build_metadata(
         task_kind=task_kind,
         media_type="image",
@@ -604,6 +622,7 @@ async def _resolve_image_route(
         profile_key=profile_key,
         resolved=resolved,
         resolution=resolution,
+        image_output_format=image_output_format,
         source_version=payload.get("source_version") if payload else None,
     )
     return GenerationRoute(
@@ -614,6 +633,7 @@ async def _resolve_image_route(
         provider_id=resolved.provider_id,
         model_id=resolved.model_id,
         resolution=resolution,
+        image_output_format=image_output_format,
         effective_payload=effective_payload,
         metadata=metadata,
     )
@@ -835,6 +855,7 @@ def _build_metadata(
     generate_audio: bool | None = None,
     service_tier: str | None = None,
     seed: int | None = None,
+    image_output_format: str | None = None,
     supported_resolutions: list[str] | None = None,
     supported_durations: list[int] | None = None,
     duration_resolution_constraints: dict[str, list[int]] | None = None,
@@ -849,6 +870,7 @@ def _build_metadata(
             "provider": resolved.provider_id,
             "model": resolved.model_id,
             "resolution": resolution,
+            "image_output_format": image_output_format,
             "duration_seconds": duration_seconds,
             "generate_audio": generate_audio,
             "service_tier": service_tier,
@@ -865,6 +887,7 @@ def _build_metadata(
             "generation_quality": quality,
             "generation_profile_key": profile_key,
             "generation_route": route,
+            "image_output_format": image_output_format,
             "generation_route_warnings": warnings or None,
             "source_version": source_version,
             "provider_capability_hash": provider_capability_hash,

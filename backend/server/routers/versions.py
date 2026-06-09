@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_SPECS
 from lib.i18n import Translator
-from lib.image_utils import convert_image_bytes_to_png, save_image_file_as_png
+from lib.image_utils import save_image_file_as_png, save_project_image
 from lib.project_change_hints import emit_project_change_batch, project_change_source
 from lib.project_manager import ProjectManager
 from lib.resource_paths import resource_relative_path
@@ -518,14 +518,16 @@ async def restore_version(
         def _sync():
             vm = get_version_manager(project_name)
             project_path = get_project_manager().get_project_path(project_name)
-            current_file, file_path = _resolve_resource_path(resource_type, resource_id, project_path, _t)
+            default_current_file, default_file_path = _resolve_resource_path(resource_type, resource_id, project_path, _t)
 
             result = vm.restore_version(
                 resource_type=resource_type,
                 resource_id=resource_id,
                 version=version,
-                current_file=current_file,
+                current_file=default_current_file,
             )
+            file_path = result.get("restored_file") if isinstance(result.get("restored_file"), str) else default_file_path
+            current_file = _safe_project_file(project_path, file_path)
 
             _sync_metadata(resource_type, project_name, resource_id, file_path, project_path)
 
@@ -533,6 +535,8 @@ async def restore_version(
             asset_fingerprints: dict[str, int] = {}
             if current_file.exists():
                 asset_fingerprints[file_path] = current_file.stat().st_mtime_ns
+            if file_path != default_file_path:
+                asset_fingerprints.setdefault(default_file_path, 0)
 
             if resource_type == "videos":
                 thumbnail_path = project_path / "thumbnails" / f"scene_{resource_id}.jpg"
@@ -628,7 +632,7 @@ async def upload_external_media_version(
                         content = read_upload_bytes(file)
                         if not content:
                             raise HTTPException(status_code=400, detail="上传文件为空")
-                        current_file.write_bytes(convert_image_bytes_to_png(content))
+                        save_project_image(content, current_file)
                 except ValueError:
                     raise HTTPException(status_code=400, detail="无效的图片文件")
                 with project_change_source("webui"):

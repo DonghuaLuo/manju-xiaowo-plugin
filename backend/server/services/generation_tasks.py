@@ -22,6 +22,7 @@ from lib.gemini_shared import get_shared_rate_limiter
 from lib.i18n import DEFAULT_LOCALE
 from lib.i18n import _ as i18n_translate
 from lib.image_backends.base import ImageCapabilityError
+from lib.image_utils import save_project_image
 from lib.media_generator import MediaGenerator
 from lib.project_change_hints import emit_project_change_batch, project_change_source
 from lib.project_manager import ProjectManager
@@ -2761,7 +2762,7 @@ async def execute_grid_task(
 
                 cell_rel = f"storyboards/scene_{frame.next_scene_id}.png"
                 cell_path = storyboards_dir / f"scene_{frame.next_scene_id}.png"
-                cell.save(cell_path, format="PNG")
+                save_project_image(cell, cell_path)
                 cell_metadata = {
                     **version_metadata,
                     **script_splitting_asset_metadata(project),

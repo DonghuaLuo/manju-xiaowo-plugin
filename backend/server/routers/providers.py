@@ -70,6 +70,7 @@ class ModelInfoResponse(BaseModel):
     media_type: str
     capabilities: list[str]
     default: bool
+    image_output_formats: list[str] = []
     supported_durations: list[int] = []
     duration_resolution_constraints: dict[str, list[int]] = {}
     resolutions: list[str] = []

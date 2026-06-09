@@ -3,6 +3,7 @@ Assistant service orchestration using ClaudeSDKClient.
 """
 
 import asyncio
+import base64
 import copy
 import logging
 import os
@@ -33,6 +34,7 @@ from fastapi.sse import ServerSentEvent
 
 from lib.agent_profile import agent_profile_dir
 from lib.app_data_dir import app_data_dir
+from lib.image_utils import prepare_provider_image_bytes
 from lib.profile_manifest import VALID_CONTENT_MODES
 from lib.project_manager import ProjectManager
 from server.agent_runtime.message_utils import extract_plain_user_content
@@ -229,7 +231,7 @@ class AssistantService:
 
         if images:
             sdk_prompt = self._build_multimodal_prompt(text, images)
-            echo_blocks: list[dict[str, Any]] = [self._image_block(img) for img in images]
+            echo_blocks: list[dict[str, Any]] = [self._history_image_block(img) for img in images]
             if text:
                 echo_blocks.append({"type": "text", "text": text})
             return text, sdk_prompt, echo_blocks
@@ -280,6 +282,24 @@ class AssistantService:
     @staticmethod
     def _image_block(img: "ImageAttachment") -> dict[str, Any]:
         """Build a single image content block dict."""
+        raw_data = img.data.split(",", 1)[1] if img.data.startswith("data:") and "," in img.data else img.data
+        try:
+            image_bytes = base64.b64decode(raw_data, validate=True)
+            prepared = prepare_provider_image_bytes(image_bytes, purpose="agent-chat-image")
+        except Exception as exc:
+            raise ValueError("Invalid image") from exc
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": prepared.prepared_mime,
+                "data": base64.b64encode(prepared.data).decode("ascii"),
+            },
+        }
+
+    @staticmethod
+    def _history_image_block(img: "ImageAttachment") -> dict[str, Any]:
+        """Build an echo/history image block without mutating the original attachment."""
         return {
             "type": "image",
             "source": {

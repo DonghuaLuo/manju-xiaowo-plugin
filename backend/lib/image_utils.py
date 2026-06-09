@@ -1,11 +1,13 @@
 """
 Image utility helpers.
 
-Used by WebUI upload endpoints to validate, compress, and normalize uploaded images.
+Project assets are stored as real PNG files. Provider inputs are prepared as
+temporary JPG/PNG payloads without mutating those assets.
 """
 
 from __future__ import annotations
 
+import base64
 import shutil
 import tempfile
 import time
@@ -37,6 +39,7 @@ _MIME_TO_SUFFIX: dict[str, str] = {
 _COMPRESS_THRESHOLD = 2 * 1024 * 1024  # 2 MB
 _MAX_LONG_EDGE = 2048
 _JPEG_QUALITY = 85
+_PROVIDER_JPEG_QUALITY = 92
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,50 @@ class PreparedProviderImage:
         }
 
 
+@dataclass(frozen=True)
+class PreparedProviderImageBytes:
+    """A provider-safe in-memory image payload plus audit metadata."""
+
+    original_path: Path | None
+    data: bytes
+    original_mime: str
+    prepared_mime: str
+    original_bytes: int
+    prepared_bytes: int
+    original_width: int
+    original_height: int
+    prepared_width: int
+    prepared_height: int
+    resized: bool
+    transcoded: bool
+    purpose: str
+    max_long_edge: int
+    jpeg_quality: int | None
+
+    @property
+    def estimated_base64_bytes(self) -> int:
+        return estimate_base64_size(self.prepared_bytes)
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "purpose": self.purpose,
+            "source_path": str(self.original_path) if self.original_path is not None else None,
+            "input_storage": "memory",
+            "source_mime": self.original_mime,
+            "input_mime": self.prepared_mime,
+            "source_bytes": self.original_bytes,
+            "input_bytes": self.prepared_bytes,
+            "source_size": {"width": self.original_width, "height": self.original_height},
+            "input_size": {"width": self.prepared_width, "height": self.prepared_height},
+            "estimated_base64_bytes": self.estimated_base64_bytes,
+            "resized": self.resized,
+            "transcoded": self.transcoded,
+            "copied": False,
+            "max_long_edge": self.max_long_edge,
+            "jpeg_quality": self.jpeg_quality,
+        }
+
+
 def estimate_base64_size(byte_count: int) -> int:
     """Return the exact base64 character count for a byte payload size."""
     if byte_count <= 0:
@@ -109,6 +156,40 @@ def _has_alpha(img: Image.Image) -> bool:
     if img.mode == "P" and "transparency" in img.info:
         return True
     return False
+
+
+def _png_safe_image(img: Image.Image) -> Image.Image:
+    img = ImageOps.exif_transpose(img)
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA" if _has_alpha(img) else "RGB")
+    return img
+
+
+def _save_png_image(img: Image.Image, output_path: Path) -> Path:
+    final_path = Path(output_path).with_suffix(".png")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    img = _png_safe_image(img)
+    img.save(final_path, format="PNG")
+    return final_path
+
+
+def save_project_image(source: Path | bytes | Image.Image, output_path: Path) -> Path:
+    """Save a project asset image as a real PNG and return the final path."""
+    try:
+        if isinstance(source, Image.Image):
+            return _save_png_image(source, output_path)
+        if isinstance(source, bytes):
+            with Image.open(BytesIO(source)) as img:
+                return _save_png_image(img, output_path)
+        with Image.open(Path(source)) as img:
+            return _save_png_image(img, output_path)
+    except Exception as e:
+        raise ValueError("Invalid image") from e
+
+
+def save_provider_output_image(source: Path | bytes | Image.Image, output_path: Path) -> Path:
+    """Decode provider output bytes/file and store the final project PNG."""
+    return save_project_image(source, output_path)
 
 
 def _fit_long_edge(width: int, height: int, max_long_edge: int) -> tuple[int, int]:
@@ -154,7 +235,7 @@ def prepare_provider_image_input(
     purpose: str = "video",
     temp_dir: Path | None = None,
     max_long_edge: int = _MAX_LONG_EDGE,
-    jpeg_quality: int = 90,
+    jpeg_quality: int = _PROVIDER_JPEG_QUALITY,
     preserve_alpha: bool = True,
 ) -> PreparedProviderImage:
     """Prepare a temporary image for provider upload without mutating the source.
@@ -251,6 +332,131 @@ def prepare_provider_image_input(
         raise ValueError("Invalid image") from e
 
 
+def prepare_provider_image(
+    source_path: Path,
+    *,
+    purpose: str = "provider",
+    temp_dir: Path | None = None,
+    max_long_edge: int = _MAX_LONG_EDGE,
+    jpeg_quality: int = _PROVIDER_JPEG_QUALITY,
+    preserve_alpha: bool = True,
+) -> PreparedProviderImage:
+    """Policy-named provider input entrypoint."""
+    return prepare_provider_image_input(
+        source_path,
+        purpose=purpose,
+        temp_dir=temp_dir,
+        max_long_edge=max_long_edge,
+        jpeg_quality=jpeg_quality,
+        preserve_alpha=preserve_alpha,
+    )
+
+
+def prepare_provider_image_bytes(
+    source: Path | str | bytes | Image.Image,
+    *,
+    purpose: str = "provider",
+    max_long_edge: int = _MAX_LONG_EDGE,
+    jpeg_quality: int = _PROVIDER_JPEG_QUALITY,
+    preserve_alpha: bool = True,
+) -> PreparedProviderImageBytes:
+    """Prepare provider input as in-memory JPG/PNG bytes without mutating source."""
+
+    source_path: Path | None = None if isinstance(source, (bytes, Image.Image)) else Path(source)
+    original_bytes = (
+        len(source)
+        if isinstance(source, bytes)
+        else source_path.stat().st_size
+        if source_path
+        else 0
+    )
+
+    def _prepare(img: Image.Image) -> PreparedProviderImageBytes:
+        original_mime = _FORMAT_TO_MIME.get(str(img.format or "").upper(), "application/octet-stream")
+        img = ImageOps.exif_transpose(img)
+        original_width, original_height = img.size
+        target_width, target_height = _fit_long_edge(original_width, original_height, max_long_edge)
+        resized = (target_width, target_height) != (original_width, original_height)
+        has_alpha = _has_alpha(img)
+
+        if resized:
+            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+        if preserve_alpha and has_alpha:
+            prepared_mime = "image/png"
+            output_format = "PNG"
+            if img.mode not in ("RGBA", "LA"):
+                img = img.convert("RGBA")
+        else:
+            prepared_mime = "image/jpeg"
+            output_format = "JPEG"
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+        out = BytesIO()
+        if output_format == "JPEG":
+            img.save(out, format=output_format, quality=jpeg_quality, optimize=True)
+        else:
+            img.save(out, format=output_format, optimize=True)
+        data = out.getvalue()
+        return PreparedProviderImageBytes(
+            original_path=source_path,
+            data=data,
+            original_mime=original_mime,
+            prepared_mime=prepared_mime,
+            original_bytes=original_bytes,
+            prepared_bytes=len(data),
+            original_width=original_width,
+            original_height=original_height,
+            prepared_width=img.size[0],
+            prepared_height=img.size[1],
+            resized=resized,
+            transcoded=True,
+            purpose=purpose,
+            max_long_edge=max_long_edge,
+            jpeg_quality=jpeg_quality if prepared_mime == "image/jpeg" else None,
+        )
+
+    try:
+        if isinstance(source, Image.Image):
+            copied = source.copy()
+            try:
+                return _prepare(copied)
+            finally:
+                copied.close()
+
+        image_source = BytesIO(source) if isinstance(source, bytes) else source_path
+        if image_source is None:
+            raise ValueError("Invalid image")
+        with Image.open(image_source) as img:
+            return _prepare(img)
+    except Exception as e:
+        if isinstance(e, FileNotFoundError):
+            raise
+        raise ValueError("Invalid image") from e
+
+
+def prepare_provider_image_data_uri(
+    source: Path | str | bytes,
+    *,
+    purpose: str = "provider-data-uri",
+    max_long_edge: int = _MAX_LONG_EDGE,
+    jpeg_quality: int = _PROVIDER_JPEG_QUALITY,
+    preserve_alpha: bool = True,
+) -> str:
+    """Prepare provider input in memory and return a base64 data URI."""
+
+    prepared = prepare_provider_image_bytes(
+        source,
+        purpose=purpose,
+        max_long_edge=max_long_edge,
+        jpeg_quality=jpeg_quality,
+        preserve_alpha=preserve_alpha,
+    )
+    b64 = base64.b64encode(prepared.data).decode("ascii")
+    return f"data:{prepared.prepared_mime};base64,{b64}"
+
+
 def cleanup_stale_provider_inputs(*, max_age_hours: float = 48, temp_root: Path | None = None) -> dict[str, int]:
     """Delete stale provider input temp files retained for failed-task diagnostics."""
 
@@ -286,9 +492,7 @@ def convert_image_bytes_to_png(content: bytes) -> bytes:
     """
     try:
         with Image.open(BytesIO(content)) as img:
-            img = ImageOps.exif_transpose(img)
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGBA")
+            img = _png_safe_image(img)
             out = BytesIO()
             img.save(out, format="PNG")
             return out.getvalue()
@@ -298,15 +502,7 @@ def convert_image_bytes_to_png(content: bytes) -> bytes:
 
 def save_image_file_as_png(source_path: Path, output_path: Path) -> None:
     """Convert an image file to PNG and write it to output_path."""
-    try:
-        with Image.open(source_path) as img:
-            img = ImageOps.exif_transpose(img)
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGBA")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            img.save(output_path, format="PNG")
-    except Exception as e:
-        raise ValueError("Invalid image") from e
+    save_project_image(Path(source_path), Path(output_path))
 
 
 def validate_image_bytes(content: bytes) -> None:

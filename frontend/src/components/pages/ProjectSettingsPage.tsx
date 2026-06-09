@@ -42,6 +42,7 @@ import type {
   CustomProviderInfo,
   GenerationProfiles,
   ImageGenerationProfile,
+  ModelSettingEntry,
   ProviderInfo,
   VideoGenerationProfile,
 } from "@/types";
@@ -196,6 +197,7 @@ interface InitialProjectSettingsSnapshot {
   sourceLanguage: SourceLanguage;
   videoResolution: string | null;
   imageResolution: string | null;
+  imageOutputFormat: string | null;
   generationProfiles: string;
 }
 
@@ -367,6 +369,7 @@ export function ProjectSettingsPage() {
     videoServiceTier: string;
     imageT2I: string;
     imageI2I: string;
+    imageOutputFormat: string;
     textScript: string;
     textOverview: string;
     textStyle: string;
@@ -375,6 +378,7 @@ export function ProjectSettingsPage() {
     videoServiceTier: "default",
     imageT2I: "",
     imageI2I: "",
+    imageOutputFormat: "auto",
     textScript: "",
     textOverview: "",
     textStyle: "",
@@ -403,7 +407,8 @@ export function ProjectSettingsPage() {
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("zh");
   const [videoResolution, setVideoResolution] = useState<string | null>(null);
   const [imageResolution, setImageResolution] = useState<string | null>(null);
-  const [modelSettings, setModelSettings] = useState<Record<string, { resolution: string | null }>>({});
+  const [imageOutputFormat, setImageOutputFormat] = useState<string | null>(null);
+  const [modelSettings, setModelSettings] = useState<Record<string, ModelSettingEntry>>({});
   const [generationProfiles, setGenerationProfiles] = useState<GenerationProfiles>(
     () => createDefaultGenerationProfiles(),
   );
@@ -473,6 +478,7 @@ export function ProjectSettingsPage() {
     sourceLanguage: "zh",
     videoResolution: null,
     imageResolution: null,
+    imageOutputFormat: null,
     generationProfiles: generationProfilesSignature(),
   });
   // 风格区独立保存，但"未保存就离开"也需被 isDirty 拦截。
@@ -524,6 +530,7 @@ export function ProjectSettingsPage() {
           configRes.settings?.default_image_backend_i2i ??
           configRes.settings?.default_image_backend ??
           "",
+        imageOutputFormat: configRes.settings?.default_image_output_format ?? "auto",
         textScript: configRes.settings?.text_backend_script ?? "",
         textOverview: configRes.settings?.text_backend_overview ?? "",
         textStyle: configRes.settings?.text_backend_style ?? "",
@@ -610,7 +617,7 @@ export function ProjectSettingsPage() {
       setEpisodeTargetUnits(targetUnitsInput);
       setSourceLanguage(lang);
       setProjectTitle(typeof project.title === "string" ? project.title : "");
-      const ms = (project.model_settings ?? {}) as Record<string, { resolution: string | null }>;
+      const ms = (project.model_settings ?? {}) as Record<string, ModelSettingEntry>;
       const legacyVideo = (project.video_model_settings ?? {}) as Record<string, { resolution?: string | null }>;
       const vModelId = effectiveVb && effectiveVb.includes("/") ? effectiveVb.split("/")[1] : effectiveVb;
       const rawVideoResolution: string | null =
@@ -618,6 +625,7 @@ export function ProjectSettingsPage() {
         (vModelId ? (legacyVideo[vModelId]?.resolution ?? null) : null) ||
         null;
       const rawImageResolution = effectiveIb ? (ms[effectiveIb]?.resolution ?? null) : null;
+      const rawImageOutputFormat = effectiveIb ? (ms[effectiveIb]?.output_format ?? null) : null;
       const initialImageResolutionOptions = (() => {
         if (!effectiveIb) return [...IMAGE_PROFILE_RESOLUTIONS];
         const res = lookupResolutions(providerList, effectiveIb, customProviderList);
@@ -646,6 +654,7 @@ export function ProjectSettingsPage() {
       });
       setVideoResolution(vRes);
       setImageResolution(iRes);
+      setImageOutputFormat(rawImageOutputFormat);
       setModelSettings(ms);
       const normalizedProfiles = normalizeGenerationProfiles(
         project.generation_profiles as GenerationProfiles | undefined,
@@ -669,7 +678,7 @@ export function ProjectSettingsPage() {
         textScript: ts, textOverview: to, textStyle: tst,
         aspectRatio: ar, generationMode: gm, defaultDuration: dd,
         episodeTargetUnits: targetUnitsInput, sourceLanguage: lang,
-        videoResolution: vRes, imageResolution: iRes,
+        videoResolution: vRes, imageResolution: iRes, imageOutputFormat: rawImageOutputFormat,
         generationProfiles: generationProfilesSignature(normalizedProfiles),
       };
     }));
@@ -747,6 +756,37 @@ export function ProjectSettingsPage() {
     () => getVideoServiceTiers(effectiveVideoBackendForContinuity),
     [effectiveVideoBackendForContinuity, getVideoServiceTiers],
   );
+  const routePreviewModelSettings = useMemo<Record<string, ModelSettingEntry>>(() => {
+    const next: Record<string, ModelSettingEntry> = { ...modelSettings };
+    const setEntry = (backend: string, patch: ModelSettingEntry) => {
+      if (!backend) return;
+      next[backend] = { ...(next[backend] ?? {}), ...patch };
+    };
+    const effectiveVideo = videoBackend || globalDefaults.video || "";
+    const effectiveImageT2I = imageBackendT2I || globalDefaults.imageT2I || "";
+    const effectiveImageI2I = imageBackendI2I || globalDefaults.imageI2I || "";
+
+    setEntry(effectiveVideo, { resolution: videoResolution });
+    setEntry(effectiveImageT2I, {
+      resolution: imageResolution,
+      output_format: imageOutputFormat || null,
+    });
+    if (effectiveImageI2I && effectiveImageI2I !== effectiveImageT2I) {
+      setEntry(effectiveImageI2I, { output_format: imageOutputFormat || null });
+    }
+    return next;
+  }, [
+    globalDefaults.imageI2I,
+    globalDefaults.imageT2I,
+    globalDefaults.video,
+    imageBackendI2I,
+    imageBackendT2I,
+    imageOutputFormat,
+    imageResolution,
+    modelSettings,
+    videoBackend,
+    videoResolution,
+  ]);
   const scriptSplittingTemplateDirty =
     Boolean(scriptSplittingTemplateId)
     && scriptSplittingTemplateId !== initialScriptSplittingTemplateId;
@@ -776,7 +816,7 @@ export function ProjectSettingsPage() {
         image_provider_i2i: imageBackendI2I || null,
         video_generate_audio: audioOverride,
         default_duration: defaultDuration,
-        model_settings: modelSettings,
+        model_settings: routePreviewModelSettings,
       },
       routes,
     };
@@ -786,8 +826,8 @@ export function ProjectSettingsPage() {
     generationMode,
     imageBackendI2I,
     imageBackendT2I,
-    modelSettings,
     normalizedGenerationProfiles,
+    routePreviewModelSettings,
     t,
     videoBackend,
     videoServiceTier,
@@ -808,6 +848,7 @@ export function ProjectSettingsPage() {
     sourceLanguage !== initialRef.current.sourceLanguage ||
     videoResolution !== initialRef.current.videoResolution ||
     imageResolution !== initialRef.current.imageResolution ||
+    imageOutputFormat !== initialRef.current.imageOutputFormat ||
     normalizedGenerationProfilesSignature !== initialRef.current.generationProfiles ||
     scriptSplittingTemplateDirty ||
     styleIsDirty;
@@ -1320,17 +1361,9 @@ export function ProjectSettingsPage() {
         setScriptSplittingPreview(null);
       }
 
-      // resolution 的 key 用 effective backend（override ‖ global default），
-      // 否则"跟随全局默认"路径下用户选的分辨率不会被写入。
-      const effectiveVideo = videoBackend || globalDefaults.video || "";
-      const effectiveImageT2I = imageBackendT2I || globalDefaults.imageT2I || "";
-      const newModelSettings: Record<string, { resolution: string | null }> = { ...modelSettings };
-      if (effectiveVideo) {
-        newModelSettings[effectiveVideo] = { resolution: videoResolution };
-      }
-      if (effectiveImageT2I) {
-        newModelSettings[effectiveImageT2I] = { resolution: imageResolution };
-      }
+      // model_settings 的 key 用 effective backend（override ‖ global default），
+      // 否则"跟随全局默认"路径下用户选的偏好不会被写入。
+      const newModelSettings = routePreviewModelSettings;
 
       const normalizedEpisodeTargetUnits = normalizeEpisodeTargetUnits(episodeTargetUnits);
       const savedGenerationProfiles = normalizeGenerationProfiles(
@@ -1368,7 +1401,7 @@ export function ProjectSettingsPage() {
         textScript, textOverview, textStyle,
         aspectRatio, generationMode, defaultDuration,
         episodeTargetUnits: savedEpisodeTargetUnits, sourceLanguage,
-        videoResolution, imageResolution,
+        videoResolution, imageResolution, imageOutputFormat,
         generationProfiles: generationProfilesSignature(savedGenerationProfiles),
       };
       useAppStore.getState().pushToast(t("saved"), "success");
@@ -1377,7 +1410,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, videoServiceTier, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, generationProfiles, projectName, t, globalDefaults.video, globalDefaults.imageT2I, defaultGenerationProfiles]);
+  }, [routePreviewModelSettings, initialScriptSplittingTemplateId, scriptSplittingTemplateDirty, scriptSplittingTemplateId, videoBackend, videoServiceTier, imageBackendT2I, imageBackendI2I, audioOverride, textScript, textOverview, textStyle, aspectRatio, generationMode, defaultDuration, episodeTargetUnits, sourceLanguage, videoResolution, imageResolution, imageOutputFormat, generationProfiles, projectName, t, defaultGenerationProfiles]);
 
   return (
     <div
@@ -1609,6 +1642,7 @@ export function ProjectSettingsPage() {
                     defaultDuration,
                     videoResolution,
                     imageResolution,
+                    imageOutputFormat,
                   }}
                   onChange={(next) => {
                     setVideoBackend(next.videoBackend);
@@ -1620,6 +1654,7 @@ export function ProjectSettingsPage() {
                     setDefaultDuration(next.defaultDuration);
                     setVideoResolution(next.videoResolution);
                     setImageResolution(next.imageResolution);
+                    setImageOutputFormat(next.imageOutputFormat ?? null);
                   }}
                   providers={providers}
                   customProviders={customProviders}
@@ -1634,6 +1669,7 @@ export function ProjectSettingsPage() {
                     videoServiceTier: globalDefaults.videoServiceTier,
                     imageT2I: globalDefaults.imageT2I ?? "",
                     imageI2I: globalDefaults.imageI2I ?? "",
+                    imageOutputFormat: globalDefaults.imageOutputFormat ?? "auto",
                     textScript: globalDefaults.textScript ?? "",
                     textOverview: globalDefaults.textOverview ?? "",
                     textStyle: globalDefaults.textStyle ?? "",

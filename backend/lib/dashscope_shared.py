@@ -15,13 +15,13 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 import httpx
 
+from lib.image_utils import prepare_provider_image_data_uri
 from lib.retry import BASE_RETRYABLE_ERRORS
 
 logger = logging.getLogger(__name__)
@@ -60,14 +60,6 @@ _TERMINAL_STATES = frozenset(
     }
 )
 _FAILURE_STATES = frozenset({DASHSCOPE_STATUS_FAILED, DASHSCOPE_STATUS_CANCELED})
-
-_IMAGE_MIME_TYPES: dict[str, str] = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-}
 
 # 百炼建议轮询间隔 15 秒；task_id / video_url 均 24h 过期。
 DASHSCOPE_POLL_INTERVAL_SECONDS = 15.0
@@ -114,11 +106,19 @@ def dashscope_headers(api_key: str, *, async_mode: bool = False) -> dict[str, st
     return headers
 
 
-def image_to_data_uri(image_path: Path) -> str:
-    """本地图片 → base64 data URI（百炼 media/image 接受 URL 或 data URI）。"""
-    mime = _IMAGE_MIME_TYPES.get(image_path.suffix.lower(), "image/png")
-    b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+def image_to_data_uri(
+    image_path: Path,
+    *,
+    max_long_edge: int = 2048,
+    jpeg_quality: int = 92,
+) -> str:
+    """本地图片 → provider-safe base64 data URI（百炼 media/image 接受 URL 或 data URI）。"""
+    return prepare_provider_image_data_uri(
+        Path(image_path),
+        purpose="dashscope-data-uri",
+        max_long_edge=max_long_edge,
+        jpeg_quality=jpeg_quality,
+    )
 
 
 # ── 视频异步任务状态工具 ──────────────────────────────────────────────────────

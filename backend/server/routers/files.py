@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_TYPES
 from lib.i18n import Translator
-from lib.image_utils import normalize_uploaded_image, save_normalized_uploaded_image_file
+from lib.image_utils import normalize_uploaded_image, save_normalized_uploaded_image_file, save_project_image
 from lib.project_change_hints import emit_project_change_batch, project_change_source
 from lib.project_manager import ProjectManager, effective_mode
 from lib.source_loader import (
@@ -214,22 +214,15 @@ async def upload_file(
 
             target_path = target_dir / filename
 
-            # 保存文件（大于 2MB 时压缩为 JPEG，否则校验后原样保存）
+            # 项目资产图片统一保存为真实 PNG；供应商传输另走临时转换入口。
             if upload_type in ("character", "character_ref", "scene", "prop", "storyboard"):
                 try:
                     source_path = local_upload_path(file)
                     if source_path is not None:
-                        target_path, ext = save_normalized_uploaded_image_file(
-                            source_path,
-                            target_path,
-                            Path(original_filename).suffix.lower(),
-                        )
+                        target_path = save_project_image(source_path, target_path)
                     else:
                         content = read_upload_bytes(file)
-                        content, ext = normalize_uploaded_image(content, Path(original_filename).suffix.lower())
-                        target_path = target_path.with_suffix(ext)
-                        with open(target_path, "wb") as f:
-                            f.write(content)
+                        target_path = save_project_image(content, target_path)
                 except ValueError:
                     raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
                 filename = target_path.name
@@ -991,24 +984,16 @@ async def upload_style_image(
     try:
         def _sync_prepare():
             project_dir = get_project_manager().get_project_path(project_name)
-            original_suffix = Path(original_filename).suffix.lower()
             source_path = local_upload_path(file)
+            target_path = project_dir / "style_reference.png"
             if source_path is not None:
-                output_path, new_ext = save_normalized_uploaded_image_file(
-                    source_path,
-                    project_dir / f"style_reference{original_suffix or '.png'}",
-                    original_suffix,
-                )
+                output_path = save_project_image(source_path, target_path)
                 style_filename = output_path.name
                 return output_path, style_filename
 
             content = read_upload_bytes(file)
-            content_norm, new_ext = _normalize_style_image(content, original_filename, _t)
-            style_filename = f"style_reference{new_ext}"
-
-            output_path = project_dir / style_filename
-            with open(output_path, "wb") as f:
-                f.write(content_norm)
+            output_path = save_project_image(content, target_path)
+            style_filename = output_path.name
 
             return output_path, style_filename
 

@@ -4,6 +4,7 @@ export interface SystemConfigSettings {
   default_image_backend: string;
   default_image_backend_t2i?: string;
   default_image_backend_i2i?: string;
+  default_image_output_format?: string;
   default_text_backend: string;
   text_backend_script: string;
   text_backend_overview: string;
@@ -38,6 +39,7 @@ export interface SystemConfigPatch {
   default_image_backend?: string;
   default_image_backend_t2i?: string;
   default_image_backend_i2i?: string;
+  default_image_output_format?: string;
   default_text_backend?: string;
   text_backend_script?: string;
   text_backend_overview?: string;

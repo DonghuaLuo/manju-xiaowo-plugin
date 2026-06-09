@@ -164,11 +164,11 @@ class ViduImageBackend:
             final_credits = final.get("credits")
             actual_credits = final_credits if final_credits is not None else credits
 
-        await download_image_to_path(url, request.output_path)
-        logger.info("Vidu 图片下载完成: %s", request.output_path)
+        image_path = await download_image_to_path(url, request.output_path)
+        logger.info("Vidu 图片下载完成: %s", image_path)
 
         return ImageGenerationResult(
-            image_path=request.output_path,
+            image_path=image_path,
             provider=PROVIDER_VIDU,
             model=self._model,
             seed=request.seed,

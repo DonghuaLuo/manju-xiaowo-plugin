@@ -7,12 +7,12 @@ import logging
 from pathlib import Path
 
 from lib.aspect_size import VIDEO_TIER_SHORT_EDGE, parse_aspect_ratio, resolution_to_short_edge
+from lib.image_utils import prepare_provider_image_bytes
 from lib.logging_utils import format_kwargs_for_log
 from lib.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
 from lib.providers import PROVIDER_OPENAI
 from lib.retry import DOWNLOAD_BACKOFF_SECONDS, DOWNLOAD_MAX_ATTEMPTS, with_retry_async
 from lib.video_backends.base import (
-    IMAGE_MIME_TYPES,
     ResumeExpiredError,
     VideoCapabilities,
     VideoCapability,
@@ -199,9 +199,20 @@ class OpenAIVideoBackend:
         return await self._client.videos.download_content(video_id)
 
 
-def _encode_start_image(image_path: Path) -> tuple[str, bytes, str]:
-    mime = IMAGE_MIME_TYPES.get(image_path.suffix.lower(), "image/png")
-    return (image_path.name, image_path.read_bytes(), mime)
+def _encode_start_image(
+    image_path: Path,
+    *,
+    max_long_edge: int = 2048,
+    jpeg_quality: int = 92,
+) -> tuple[str, bytes, str]:
+    prepared = prepare_provider_image_bytes(
+        image_path,
+        purpose="openai-video-input",
+        max_long_edge=max_long_edge,
+        jpeg_quality=jpeg_quality,
+    )
+    suffix = ".png" if prepared.prepared_mime == "image/png" else ".jpg"
+    return (image_path.with_suffix(suffix).name, prepared.data, prepared.prepared_mime)
 
 
 def _resolve_input_reference(request: VideoGenerationRequest) -> tuple[str, bytes, str] | None:
@@ -209,7 +220,11 @@ def _resolve_input_reference(request: VideoGenerationRequest) -> tuple[str, byte
     if request.start_image and Path(request.start_image).exists():
         if request.reference_images:
             logger.info("OpenAI video: ignoring reference_images because input_reference is already start_image")
-        return _encode_start_image(Path(request.start_image))
+        return _encode_start_image(
+            Path(request.start_image),
+            max_long_edge=request.provider_input_max_long_edge,
+            jpeg_quality=request.provider_input_jpeg_quality,
+        )
 
     if not request.reference_images:
         return None
@@ -226,7 +241,11 @@ def _resolve_input_reference(request: VideoGenerationRequest) -> tuple[str, byte
             "OpenAI video: ignoring %d extra reference_images; Sora accepts one input_reference",
             len(existing_refs) - 1,
         )
-    return _encode_start_image(existing_refs[0])
+    return _encode_start_image(
+        existing_refs[0],
+        max_long_edge=request.provider_input_max_long_edge,
+        jpeg_quality=request.provider_input_jpeg_quality,
+    )
 
 
 def _is_openai_not_found(exc: BaseException) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as json_module
 import logging
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -22,6 +23,7 @@ from lib.image_backends.base import (
     ImageGenerationResult,
     ReferenceImage,
 )
+from lib.image_utils import prepare_provider_image_bytes, save_provider_output_image
 from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_GEMINI
 from lib.system_config import resolve_vertex_credentials_path
@@ -137,18 +139,19 @@ class GeminiImageBackend:
         )
 
         # 5. 解析响应并保存
-        self._process_image_response(response, request.output_path)
+        image_path = self._process_image_response(response, request.output_path)
 
         return ImageGenerationResult(
-            image_path=request.output_path,
+            image_path=image_path,
             provider=PROVIDER_GEMINI,
             model=self._image_model,
         )
 
     @staticmethod
     def _load_image_detached(image_path: str | Path) -> Image.Image:
-        """从路径加载图片并与底层文件句柄解绑。"""
-        with Image.open(image_path) as img:
+        """按供应商输入策略从路径加载图片并与底层文件句柄解绑。"""
+        prepared = prepare_provider_image_bytes(Path(image_path), purpose="gemini-image-reference")
+        with Image.open(BytesIO(prepared.data)) as img:
             return img.copy()
 
     @staticmethod
@@ -196,12 +199,10 @@ class GeminiImageBackend:
         return contents
 
     @staticmethod
-    def _process_image_response(response, output_path: Path) -> Image.Image:
+    def _process_image_response(response, output_path: Path) -> Path:
         """解析图片生成响应并保存到文件。"""
         for part in response.parts:
             if part.inline_data is not None:
                 image = part.as_image()
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                image.save(output_path)
-                return image
+                return save_provider_output_image(image, output_path)
         raise RuntimeError("API 未返回图片")

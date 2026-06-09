@@ -110,6 +110,33 @@ export function lookupSupportedDurations(
 export const IMAGE_STANDARD_RESOLUTIONS = ["512px", "1K", "2K", "4K"];
 export const VIDEO_STANDARD_RESOLUTIONS = ["480p", "720p", "1080p", "4K"];
 
+export type ImageOutputFormat = "png" | "jpg" | "webp";
+
+const IMAGE_OUTPUT_FORMATS = ["png", "jpg", "webp"] as const satisfies readonly ImageOutputFormat[];
+
+function normalizeImageOutputFormat(value: unknown): ImageOutputFormat | null {
+  const raw = String(value ?? "").trim().toLowerCase();
+  const normalized = raw === "jpeg" ? "jpg" : raw;
+  return IMAGE_OUTPUT_FORMATS.includes(normalized as ImageOutputFormat)
+    ? (normalized as ImageOutputFormat)
+    : null;
+}
+
+function imageOutputFormatsForModel(
+  providers: ProviderInfo[],
+  providerId: string,
+  modelId: string,
+): ImageOutputFormat[] {
+  const provider = providers.find((p) => p.id === providerId);
+  const model = provider?.models?.[modelId];
+  const set = new Set<ImageOutputFormat>();
+  for (const item of model?.image_output_formats ?? []) {
+    const normalized = normalizeImageOutputFormat(item);
+    if (normalized) set.add(normalized);
+  }
+  return IMAGE_OUTPUT_FORMATS.filter((format) => set.has(format));
+}
+
 /** 返回该 (provider, model) 下的分辨率候选 + 是否自定义供应商（决定 picker 模式）。
  *  自定义 provider 路径需要从 endpoint 推 media_type 选标准分辨率集；该 map 由调用方
  *  从 endpoint-catalog-store 读出注入（保持本文件无 store 副作用）。 */
@@ -142,6 +169,47 @@ export function lookupResolutions(
   const provider = providers.find((p) => p.id === providerId);
   const model = provider?.models?.[modelId];
   return { options: model?.resolutions ?? [], isCustom: false };
+}
+
+export function lookupImageOutputFormats(
+  providers: ProviderInfo[],
+  backend: string,
+  customProviders?: CustomProviderInfo[],
+): ImageOutputFormat[] {
+  const slashIdx = backend.indexOf("/");
+  if (slashIdx === -1) return [];
+  const providerId = backend.slice(0, slashIdx);
+  const modelId = backend.slice(slashIdx + 1);
+
+  if (providerId.startsWith(CUSTOM_PREFIX) && customProviders) {
+    const dbId = parseInt(providerId.slice(CUSTOM_PREFIX.length), 10);
+    const cp = customProviders.find((p) => p.id === dbId);
+    const model = cp?.models?.find((m) => m.model_id === modelId);
+    if (model?.endpoint.startsWith("openai-images")) {
+      return imageOutputFormatsForModel(providers, "openai", modelId);
+    }
+    return [];
+  }
+
+  return imageOutputFormatsForModel(providers, providerId, modelId);
+}
+
+export function lookupSharedImageOutputFormats(
+  providers: ProviderInfo[],
+  backends: readonly string[],
+  customProviders?: CustomProviderInfo[],
+): ImageOutputFormat[] {
+  const uniqueBackends = Array.from(new Set(backends.map((backend) => backend.trim()).filter(Boolean)));
+  if (uniqueBackends.length === 0) return [];
+
+  const supportedByBackend = uniqueBackends.map((backend) =>
+    new Set(lookupImageOutputFormats(providers, backend, customProviders)),
+  );
+  if (supportedByBackend.some((formats) => formats.size === 0)) return [];
+
+  return IMAGE_OUTPUT_FORMATS.filter((format) =>
+    supportedByBackend.every((formats) => formats.has(format)),
+  );
 }
 
 export type VideoServiceTier = "default" | "flex";

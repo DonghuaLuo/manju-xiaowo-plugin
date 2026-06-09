@@ -160,9 +160,14 @@ class VersionManager:
             )
             new_version = max_version + 1
 
-            # 生成版本文件名和路径
+            # 生成版本文件名和路径。新流程通常是 PNG；既有非 PNG 当前文件进入版本历史时保留扩展名。
             timestamp = self._generate_timestamp()
-            ext = self.EXTENSIONS.get(resource_type, ".png")
+            source_path = Path(source_file) if source_file else None
+            ext = (
+                source_path.suffix.lower()
+                if source_path and source_path.suffix
+                else self.EXTENSIONS.get(resource_type, ".png")
+            )
             version_filename = f"{resource_id}_v{new_version}_{timestamp}{ext}"
             version_rel_path = f"versions/{resource_type}/{version_filename}"
             version_abs_path = self.project_path / version_rel_path
@@ -253,7 +258,7 @@ class VersionManager:
         """
         切换到指定版本
 
-        将指定版本复制到当前路径，并将 current_version 指向该版本。
+        将指定版本按其实际文件格式复制到当前资源路径，并将 current_version 指向该版本。
 
         Args:
             resource_type: 资源类型
@@ -285,21 +290,28 @@ class VersionManager:
             if not target_version:
                 raise ValueError(f"版本不存在: {version}")
 
-            target_file = self.project_path / target_version["file"]
+            target_file = self._version_file_path(target_version["file"])
             if not target_file.exists():
                 raise FileNotFoundError(f"版本文件不存在: {target_file}")
 
-            current_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target_file, current_file)
+            restored_file = current_file.with_suffix(target_file.suffix) if target_file.suffix else current_file
+            restored_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target_file, restored_file)
 
             resource_data["current_version"] = version
             self._save_versions(data)
 
         restored_prompt = target_version.get("prompt", "")
+        try:
+            restored_rel_path = restored_file.resolve().relative_to(self.project_path.resolve()).as_posix()
+        except ValueError:
+            restored_rel_path = str(restored_file)
         return {
             "restored_version": version,
             "current_version": version,
             "prompt": restored_prompt,
+            "restored_file": restored_rel_path,
+            "version_file": target_version.get("file"),
         }
 
     def get_version_file_url(self, resource_type: str, resource_id: str, version: int) -> str | None:

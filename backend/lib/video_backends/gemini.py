@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ from PIL import Image
 
 from lib.config.url_utils import normalize_base_url
 from lib.gemini_shared import VERTEX_SCOPES, RateLimiter, get_shared_rate_limiter, resolve_gemini_api_key
+from lib.image_utils import prepare_provider_image_bytes
 from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_GEMINI
 from lib.retry import DOWNLOAD_BACKOFF_SECONDS, DOWNLOAD_MAX_ATTEMPTS, with_retry_async
@@ -173,12 +173,25 @@ class GeminiVideoBackend:
 
         # end_image → last_frame（帧插值）
         if request.end_image is not None:
-            config_params["last_frame"] = await asyncio.to_thread(self._prepare_image_param, request.end_image)
+            config_params["last_frame"] = await asyncio.to_thread(
+                self._prepare_image_param,
+                request.end_image,
+                request.provider_input_max_long_edge,
+                request.provider_input_jpeg_quality,
+            )
 
         # reference_images → reference_images（参考图列表，type=ASSET）
         if request.reference_images:
             prepared_refs = await asyncio.gather(
-                *[asyncio.to_thread(self._prepare_image_param, img) for img in request.reference_images]
+                *[
+                    asyncio.to_thread(
+                        self._prepare_image_param,
+                        img,
+                        request.provider_input_max_long_edge,
+                        request.provider_input_jpeg_quality,
+                    )
+                    for img in request.reference_images
+                ]
             )
             config_params["reference_images"] = [
                 self._types.VideoGenerationReferenceImage(
@@ -192,7 +205,14 @@ class GeminiVideoBackend:
 
         # 4. 准备 source（prompt + 可选起始帧）
         image_param = (
-            await asyncio.to_thread(self._prepare_image_param, request.start_image) if request.start_image else None
+            await asyncio.to_thread(
+                self._prepare_image_param,
+                request.start_image,
+                request.provider_input_max_long_edge,
+                request.provider_input_jpeg_quality,
+            )
+            if request.start_image
+            else None
         )
         source = self._types.GenerateVideosSource(prompt=request.prompt, image=image_param)
 
@@ -271,31 +291,32 @@ class GeminiVideoBackend:
     # 内部辅助方法（从 GeminiClient 提取）
     # ------------------------------------------------------------------
 
-    def _prepare_image_param(self, image: str | Path | Image.Image | None):
+    def _prepare_image_param(
+        self,
+        image: str | Path | Image.Image | None,
+        max_long_edge: int = 2048,
+        jpeg_quality: int = 92,
+    ):
         """准备图片参数用于 API 调用 — 提取自 GeminiClient。"""
         if image is None:
             return None
 
-        mime_type_png = "image/png"
-
         if isinstance(image, (str, Path)):
-            with open(image, "rb") as f:
-                image_bytes = f.read()
-            suffix = Path(image).suffix.lower()
-            mime_types = {
-                ".png": mime_type_png,
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-            }
-            mime_type = mime_types.get(suffix, mime_type_png)
-            return self._types.Image(image_bytes=image_bytes, mime_type=mime_type)
+            prepared = prepare_provider_image_bytes(
+                Path(image),
+                purpose="gemini-video-input",
+                max_long_edge=max_long_edge,
+                jpeg_quality=jpeg_quality,
+            )
+            return self._types.Image(image_bytes=prepared.data, mime_type=prepared.prepared_mime)
         elif isinstance(image, Image.Image):
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            image_bytes = buffer.getvalue()
-            return self._types.Image(image_bytes=image_bytes, mime_type=mime_type_png)
+            prepared = prepare_provider_image_bytes(
+                image,
+                purpose="gemini-video-input",
+                max_long_edge=max_long_edge,
+                jpeg_quality=jpeg_quality,
+            )
+            return self._types.Image(image_bytes=prepared.data, mime_type=prepared.prepared_mime)
         else:
             return image
 

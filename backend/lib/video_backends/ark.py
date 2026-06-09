@@ -139,7 +139,11 @@ class ArkVideoBackend:
         if request.start_image:
             from lib.image_backends.base import image_to_base64_data_uri
 
-            data_uri = image_to_base64_data_uri(request.start_image)
+            data_uri = image_to_base64_data_uri(
+                request.start_image,
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
             content.append(
                 {
                     "type": "image_url",
@@ -151,7 +155,11 @@ class ArkVideoBackend:
         if request.end_image and Path(request.end_image).exists():
             from lib.image_backends.base import image_to_base64_data_uri
 
-            data_uri = image_to_base64_data_uri(request.end_image)
+            data_uri = image_to_base64_data_uri(
+                request.end_image,
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
             content.append(
                 {
                     "type": "image_url",
@@ -166,7 +174,11 @@ class ArkVideoBackend:
             for ref_path in request.reference_images:
                 p = Path(ref_path) if not isinstance(ref_path, Path) else ref_path
                 if p.exists():
-                    data_uri = image_to_base64_data_uri(p)
+                    data_uri = image_to_base64_data_uri(
+                        p,
+                        max_long_edge=request.provider_input_max_long_edge,
+                        jpeg_quality=request.provider_input_jpeg_quality,
+                    )
                     content.append(
                         {
                             "type": "image_url",

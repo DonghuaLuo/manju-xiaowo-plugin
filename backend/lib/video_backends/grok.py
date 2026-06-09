@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 from datetime import timedelta
 from pathlib import Path
 
+from lib.image_utils import prepare_provider_image_data_uri
 from lib.grok_shared import create_grok_client, grok_should_retry
 from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_GROK
 from lib.retry import with_retry_async
 from lib.video_backends.base import (
-    IMAGE_MIME_TYPES,
     VideoCapabilities,
     VideoCapability,
     VideoGenerationRequest,
@@ -100,10 +99,12 @@ class GrokVideoBackend:
             generate_kwargs["resolution"] = request.resolution
 
         def _encode_to_data_uri(path: Path) -> str:
-            suffix = path.suffix.lower()
-            mime_type = IMAGE_MIME_TYPES.get(suffix, "image/png")
-            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-            return f"data:{mime_type};base64,{b64}"
+            return prepare_provider_image_data_uri(
+                path,
+                purpose="grok-video-input",
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
 
         if request.start_image and Path(request.start_image).exists():
             image_path = Path(request.start_image)

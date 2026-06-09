@@ -105,12 +105,12 @@ class GrokImageBackend:
             raise RuntimeError("Grok 图片生成被内容审核拒绝")
 
         # 下载图片到本地
-        await download_image_to_path(response.url, request.output_path)
+        image_path = await download_image_to_path(response.url, request.output_path)
 
-        logger.info("Grok 图片下载完成: %s", request.output_path)
+        logger.info("Grok 图片下载完成: %s", image_path)
 
         return ImageGenerationResult(
-            image_path=request.output_path,
+            image_path=image_path,
             provider=PROVIDER_GROK,
             model=self._model,
             image_uri=response.url,

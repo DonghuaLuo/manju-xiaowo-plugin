@@ -318,16 +318,37 @@ class ViduVideoBackend:
             if len(refs) > _MAX_REFERENCE_IMAGES:
                 logger.warning("Vidu 参考图数量 %d 超过上限 %d，截断", len(refs), _MAX_REFERENCE_IMAGES)
                 refs = refs[:_MAX_REFERENCE_IMAGES]
-            body["images"] = [image_to_data_uri(p) for p in refs]
+            body["images"] = [
+                image_to_data_uri(
+                    p,
+                    max_long_edge=request.provider_input_max_long_edge,
+                    jpeg_quality=request.provider_input_jpeg_quality,
+                )
+                for p in refs
+            ]
         elif endpoint == "/start-end2video":
             assert request.start_image is not None and request.end_image is not None
             body["images"] = [
-                image_to_data_uri(Path(request.start_image)),
-                image_to_data_uri(Path(request.end_image)),
+                image_to_data_uri(
+                    Path(request.start_image),
+                    max_long_edge=request.provider_input_max_long_edge,
+                    jpeg_quality=request.provider_input_jpeg_quality,
+                ),
+                image_to_data_uri(
+                    Path(request.end_image),
+                    max_long_edge=request.provider_input_max_long_edge,
+                    jpeg_quality=request.provider_input_jpeg_quality,
+                ),
             ]
         elif endpoint == "/img2video":
             assert request.start_image is not None
-            body["images"] = [image_to_data_uri(Path(request.start_image))]
+            body["images"] = [
+                image_to_data_uri(
+                    Path(request.start_image),
+                    max_long_edge=request.provider_input_max_long_edge,
+                    jpeg_quality=request.provider_input_jpeg_quality,
+                )
+            ]
         # /text2video 不带 images
 
         return endpoint, body

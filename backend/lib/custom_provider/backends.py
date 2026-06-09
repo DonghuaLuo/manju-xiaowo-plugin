@@ -57,6 +57,10 @@ class CustomImageBackend:
         return self._model
 
     @property
+    def delegate_name(self) -> str:
+        return self._delegate.name
+
+    @property
     def capabilities(self) -> set[ImageCapability]:
         return self._delegate.capabilities
 

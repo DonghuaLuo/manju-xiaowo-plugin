@@ -93,6 +93,7 @@ class SystemConfigPatchRequest(BaseModel):
     default_image_backend: str | None = None
     default_image_backend_t2i: str | None = None
     default_image_backend_i2i: str | None = None
+    default_image_output_format: str | None = None
     default_text_backend: str | None = None
     video_generate_audio: bool | None = None
     anthropic_api_key: str | None = None
@@ -163,6 +164,7 @@ async def get_system_config(
         "default_image_backend": all_s.get("default_image_backend", ""),
         "default_image_backend_t2i": all_s.get("default_image_backend_t2i", ""),
         "default_image_backend_i2i": all_s.get("default_image_backend_i2i", ""),
+        "default_image_output_format": all_s.get("default_image_output_format", "auto") or "auto",
         "default_text_backend": all_s.get("default_text_backend", ""),
         "video_generate_audio": video_generate_audio,
         "anthropic_api_key": {
@@ -223,6 +225,14 @@ async def patch_system_config(
         if value not in {"default", "flex"}:
             raise HTTPException(status_code=422, detail="default_video_service_tier 只能是 default 或 flex")
         await svc.set_setting("default_video_service_tier", value)
+
+    if "default_image_output_format" in patch:
+        value = str(patch["default_image_output_format"] or "auto").strip().lower()
+        if value == "jpeg":
+            value = "jpg"
+        if value not in {"auto", "png", "jpg", "webp"}:
+            raise HTTPException(status_code=422, detail="default_image_output_format 只能是 auto/png/jpg/webp")
+        await svc.set_setting("default_image_output_format", value)
 
     # Boolean settings
     if "video_generate_audio" in patch and patch["video_generate_audio"] is not None:

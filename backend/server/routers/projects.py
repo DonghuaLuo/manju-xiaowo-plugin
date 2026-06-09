@@ -31,6 +31,7 @@ from lib.app_data_dir import app_data_dir
 from lib.asset_fingerprints import compute_asset_fingerprints
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
+from lib.image_utils import save_project_image
 from lib.i18n import Translator
 from lib.profile_manifest import ContentMode
 from lib.project_change_hints import project_change_source
@@ -110,10 +111,12 @@ def _materialize_favorite_style_for_project(
     if not source_path.is_file():
         raise HTTPException(status_code=404, detail=_t("file_not_found", path=thumbnail_file))
 
-    suffix = source_path.suffix.lower() or ".png"
-    style_filename = f"style_reference{suffix}"
+    style_filename = "style_reference.png"
     target_path = manager.get_project_path(project_name) / style_filename
-    shutil.copyfile(source_path, target_path)
+    try:
+        save_project_image(source_path, target_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_t("invalid_image_file")) from exc
     return {
         "style_image": style_filename,
         "style_description": style_prompt,

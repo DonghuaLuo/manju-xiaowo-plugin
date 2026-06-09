@@ -15,13 +15,13 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 from pathlib import Path
 
 import httpx
 
+from lib.image_utils import prepare_provider_image_data_uri
 from lib.retry import BASE_RETRYABLE_ERRORS
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,6 @@ VIDU_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
 
 # Vidu 文档限制单次请求体 ≤ 20MB；base64 自带 ~33% 膨胀，留 2MB 余量给非 images 字段。
 VIDU_MAX_BODY_BYTES = 18 * 1024 * 1024
-
-_IMAGE_MIME_TYPES: dict[str, str] = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-}
-
 
 def resolve_vidu_api_key(api_key: str | None = None) -> str:
     if api_key is None or not api_key.strip():
@@ -71,12 +63,19 @@ def create_vidu_client(
     )
 
 
-def image_to_data_uri(image_path: Path) -> str:
-    """本地图片 → base64 data URI（Vidu 接受 URL 或 data URI；走 data URI 免依赖文件服务）。"""
-    suffix = image_path.suffix.lower()
-    mime = _IMAGE_MIME_TYPES.get(suffix, "image/png")
-    b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+def image_to_data_uri(
+    image_path: Path,
+    *,
+    max_long_edge: int = 2048,
+    jpeg_quality: int = 92,
+) -> str:
+    """本地图片 → provider-safe base64 data URI（Vidu 接受 URL 或 data URI）。"""
+    return prepare_provider_image_data_uri(
+        Path(image_path),
+        purpose="vidu-data-uri",
+        max_long_edge=max_long_edge,
+        jpeg_quality=jpeg_quality,
+    )
 
 
 # 日志输出仅允许的字段白名单（避免 CodeQL 担心 body 里其他字段含敏感数据）。

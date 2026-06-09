@@ -184,14 +184,22 @@ def build_request_body(model: str, request: VideoGenerationRequest) -> dict:
         start = Path(request.start_image)
         if start.exists():
             _warn_if_large(start)
-            body["image_url"] = image_to_base64_data_uri(start)
+            body["image_url"] = image_to_base64_data_uri(
+                start,
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
         else:
             logger.warning("start_image 文件不存在，已忽略: %s", start)
     if request.end_image:
         end = Path(request.end_image)
         if end.exists():
             _warn_if_large(end)
-            body["last_image_url"] = image_to_base64_data_uri(end)
+            body["last_image_url"] = image_to_base64_data_uri(
+                end,
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
         else:
             logger.warning("end_image 文件不存在，已忽略: %s", end)
     if request.reference_images:
@@ -200,7 +208,13 @@ def build_request_body(model: str, request: VideoGenerationRequest) -> dict:
             p = Path(ref)
             if p.exists():
                 _warn_if_large(p)
-                refs.append(image_to_base64_data_uri(p))
+                refs.append(
+                    image_to_base64_data_uri(
+                        p,
+                        max_long_edge=request.provider_input_max_long_edge,
+                        jpeg_quality=request.provider_input_jpeg_quality,
+                    )
+                )
             else:
                 logger.warning("reference_image 文件不存在，已忽略: %s", p)
         if refs:

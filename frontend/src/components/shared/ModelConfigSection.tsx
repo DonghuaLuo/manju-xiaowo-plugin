@@ -6,8 +6,10 @@ import { SelectMenu } from "@/components/ui/SelectMenu";
 import {
   lookupSupportedDurations,
   lookupResolutions,
+  lookupSharedImageOutputFormats,
   lookupVideoContinuityCapability,
   capabilityFromVideoContinuitySupport,
+  type ImageOutputFormat,
   type VideoContinuityCapability,
   type VideoContinuitySupport,
   type VideoServiceTier,
@@ -32,6 +34,7 @@ export interface ModelConfigValue {
   defaultDuration: number | null;
   videoResolution: string | null;
   imageResolution: string | null;
+  imageOutputFormat?: string | null;
 }
 
 export interface ModelConfigSectionProps {
@@ -50,6 +53,7 @@ export interface ModelConfigSectionProps {
     videoServiceTier?: string;
     imageT2I: string;
     imageI2I: string;
+    imageOutputFormat?: string;
     textScript: string;
     textOverview: string;
     textStyle: string;
@@ -88,6 +92,17 @@ function ChannelCard({ kicker, title, children }: ChannelCardProps) {
   );
 }
 
+function imageOutputFormatLabel(
+  value: string | null | undefined,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const normalized = (value || "auto").toLowerCase();
+  if (normalized === "png" || normalized === "jpg" || normalized === "webp") {
+    return normalized.toUpperCase();
+  }
+  return t("dashboard:image_output_format_auto", { defaultValue: "自动" });
+}
+
 export function ModelConfigSection({
   value,
   onChange,
@@ -118,6 +133,8 @@ export function ModelConfigSection({
   const showDuration = enable?.duration !== false;
 
   const effectiveVideoBackend = value.videoBackend || globalDefaults.video || "";
+  const effectiveImageBackendT2I = value.imageBackendT2I || globalDefaults.imageT2I || "";
+  const effectiveImageBackendI2I = value.imageBackendI2I || globalDefaults.imageI2I || "";
   const videoContinuityCapability = useMemo<VideoContinuityCapability>(
     () =>
       videoContinuitySupport
@@ -132,6 +149,43 @@ export function ModelConfigSection({
     if (!raw || raw.length === 0) return null;
     return [...raw].sort((a, b) => a - b);
   }, [providers, effectiveVideoBackend, customProviders]);
+
+  const imageOutputFormats = useMemo<readonly ImageOutputFormat[]>(() => {
+    return lookupSharedImageOutputFormats(
+      providers,
+      [effectiveImageBackendT2I, effectiveImageBackendI2I],
+      customProviders,
+    );
+  }, [customProviders, effectiveImageBackendI2I, effectiveImageBackendT2I, providers]);
+
+  const imageOutputFormatOptions = useMemo(() => {
+    if (imageOutputFormats.length === 0) return [];
+    return [
+      {
+        value: "",
+        label: t("dashboard:follow_global_default", { defaultValue: "跟随全局默认" }),
+        description: t("dashboard:current_global_default", {
+          defaultValue: "当前全局默认：{{value}}",
+          value: imageOutputFormatLabel(globalDefaults.imageOutputFormat, t),
+        }),
+      },
+      {
+        value: "auto",
+        label: imageOutputFormatLabel("auto", t),
+        description: t("dashboard:image_output_format_auto_desc", {
+          defaultValue: "由供应商按模型默认值决定，生成后仍统一保存为 PNG。",
+        }),
+      },
+      ...imageOutputFormats.map((format) => ({
+        value: format,
+        label: imageOutputFormatLabel(format, t),
+        description: t("dashboard:image_output_format_option_desc", {
+          defaultValue: "请求供应商以 {{format}} 输出，生成后仍统一保存为 PNG。",
+          format: format.toUpperCase(),
+        }),
+      })),
+    ];
+  }, [globalDefaults.imageOutputFormat, imageOutputFormats, t]);
 
   const handleVideoChange = (next: string) => {
     const effectiveNext = next || globalDefaults.video || "";
@@ -317,6 +371,7 @@ export function ModelConfigSection({
             onChange={({ t2i, i2i }) => {
               const prevEffectiveT2I = value.imageBackendT2I || globalDefaults.imageT2I || "";
               const nextEffectiveT2I = t2i || globalDefaults.imageT2I || "";
+              const nextEffectiveI2I = i2i || globalDefaults.imageI2I || "";
               const next: ModelConfigValue = {
                 ...value,
                 imageBackendT2I: t2i,
@@ -335,6 +390,16 @@ export function ModelConfigSection({
                           : nextResolutions[0])
                     : value.imageResolution;
               }
+              if (next.imageOutputFormat && next.imageOutputFormat !== "auto") {
+                const nextFormats = lookupSharedImageOutputFormats(
+                  providers,
+                  [nextEffectiveT2I, nextEffectiveI2I],
+                  customProviders,
+                );
+                if (!nextFormats.includes(next.imageOutputFormat as ImageOutputFormat)) {
+                  next.imageOutputFormat = null;
+                }
+              }
               onChange(next);
             }}
             globalDefaultT2I={globalDefaults.imageT2I || undefined}
@@ -342,10 +407,25 @@ export function ModelConfigSection({
           />
 
           {renderResolutionField(
-            value.imageBackendT2I || globalDefaults.imageT2I || "",
+            effectiveImageBackendT2I,
             value.imageResolution,
             (v) => onChange({ ...value, imageResolution: v }),
           )}
+
+          {imageOutputFormatOptions.length > 0 ? (
+            <div className="mt-3">
+              <div className="mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+                {t("dashboard:image_output_format_label", { defaultValue: "供应商输出格式" })}
+              </div>
+              <SelectMenu
+                value={value.imageOutputFormat ?? ""}
+                options={imageOutputFormatOptions}
+                onChange={(next) => onChange({ ...value, imageOutputFormat: next || null })}
+                ariaLabel={t("dashboard:image_output_format_label", { defaultValue: "供应商输出格式" })}
+                panelLabel={t("dashboard:image_output_format_label", { defaultValue: "供应商输出格式" })}
+              />
+            </div>
+          ) : null}
         </ChannelCard>
       )}
 

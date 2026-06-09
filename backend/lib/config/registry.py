@@ -22,6 +22,7 @@ class ModelInfo:
     media_type: str
     capabilities: list[str]
     default: bool = False
+    image_output_formats: list[str] = field(default_factory=list)
     supported_durations: list[int] = field(default_factory=list)
     duration_resolution_constraints: dict[str, list[int]] = field(default_factory=dict)
     resolutions: list[str] = field(default_factory=list)
@@ -683,6 +684,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
+                image_output_formats=["png", "jpg", "webp"],
                 resolutions=["512px", "1K", "2K"],
                 max_reference_images=16,
 

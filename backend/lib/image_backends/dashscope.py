@@ -169,11 +169,11 @@ class DashScopeImageBackend:
             data = resp.json()
 
         url = extract_image_url(data)
-        await download_image_to_path(url, request.output_path)
-        logger.info("DashScope 图片生成完成: %s", request.output_path)
+        image_path = await download_image_to_path(url, request.output_path)
+        logger.info("DashScope 图片生成完成: %s", image_path)
 
         return ImageGenerationResult(
-            image_path=request.output_path,
+            image_path=image_path,
             provider=PROVIDER_DASHSCOPE,
             model=self._model,
             image_uri=url,
@@ -228,7 +228,7 @@ class DashScopeImageBackend:
                     continue
                 try:
                     data_uris.append(image_to_data_uri(path))
-                except OSError as exc:
+                except (OSError, ValueError) as exc:
                     logger.warning("DashScope 参考图读取失败: %s (%s)", path, exc)
                     unreadable.append(path.name)
             if unreadable:

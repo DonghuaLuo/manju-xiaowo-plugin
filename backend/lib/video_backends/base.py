@@ -317,6 +317,8 @@ class VideoGenerationRequest:
     end_image: Path | None = None  # For first_last mode
     reference_images: list[Path] | None = None  # For multi-reference mode
     generate_audio: bool = True
+    provider_input_max_long_edge: int = 2048
+    provider_input_jpeg_quality: int = 92
 
     # 项目上下文（用于构建文件服务 URL 等）
     project_name: str | None = None

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from lib.config.resolver import ConfigResolver
     from lib.image_backends.base import ImageBackend
 
+from lib.config.registry import PROVIDER_REGISTRY
 from lib.db.base import DEFAULT_USER_ID
 from lib.gemini_shared import RateLimiter
 from lib.resource_paths import resource_relative_path
@@ -38,7 +39,26 @@ logger = logging.getLogger(__name__)
 _BASE64_INPUT_WARN_BYTES = 8 * 1024 * 1024
 _BASE64_INPUT_LIMIT_BYTES = 16 * 1024 * 1024
 _BASE64_SENSITIVE_VIDEO_PROVIDERS = frozenset({"vidu", "newapi", "v2-video-generations"})
+_TEMP_FILE_IMAGE_INPUT_PROVIDERS = frozenset({"openai"})
 _SCRIPT_SPLITTING_ASSET_TYPES = frozenset({"storyboards", "videos", "reference_videos", "grids"})
+_IMAGE_OUTPUT_FORMATS = frozenset({"auto", "png", "jpg", "webp"})
+
+
+def _normalize_image_output_format(value: object) -> str | None:
+    if value is None:
+        return None
+    fmt = str(value).strip().lower()
+    if not fmt:
+        return None
+    if fmt == "jpeg":
+        fmt = "jpg"
+    return fmt if fmt in _IMAGE_OUTPUT_FORMATS else None
+
+
+def _supported_image_output_formats(provider_id: str, model_id: str) -> set[str]:
+    meta = PROVIDER_REGISTRY.get(provider_id)
+    model = meta.models.get(model_id) if meta else None
+    return {fmt for fmt in (model.image_output_formats if model else []) if fmt in _IMAGE_OUTPUT_FORMATS and fmt != "auto"}
 
 
 class MediaGenerator:
@@ -169,6 +189,54 @@ class MediaGenerator:
         """确保输出目录存在"""
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _project_model_image_output_format(self, provider_id: str, model_id: str) -> str | None:
+        try:
+            data = json.loads((self.project_path / "project.json").read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        settings = data.get("model_settings") if isinstance(data, dict) else None
+        entry = settings.get(f"{provider_id}/{model_id}") if isinstance(settings, dict) else None
+        raw = entry.get("output_format") if isinstance(entry, dict) else None
+        return _normalize_image_output_format(raw)
+
+    async def _resolve_image_output_format(self, version_metadata: dict[str, Any]) -> str | None:
+        """Resolve provider output format preference; local final asset remains PNG."""
+        if self._image_backend is None:
+            return None
+
+        provider_id = self._image_backend.name
+        model_id = self._image_backend.model
+        supported = _supported_image_output_formats(provider_id, model_id)
+        if not supported:
+            delegate_name = getattr(self._image_backend, "delegate_name", None)
+            if isinstance(delegate_name, str):
+                supported = _supported_image_output_formats(delegate_name, model_id)
+        if not supported:
+            version_metadata.pop("image_output_format", None)
+            return None
+
+        raw = version_metadata.pop("image_output_format", None)
+        fmt = _normalize_image_output_format(raw)
+        if fmt is None:
+            fmt = self._project_model_image_output_format(provider_id, model_id)
+        if fmt is None and self._config is not None:
+            fmt = _normalize_image_output_format(await self._config.default_image_output_format())
+        if fmt is None or fmt == "auto":
+            return None
+        if fmt not in supported:
+            logger.info(
+                "图片供应商输出格式偏好被忽略 provider=%s model=%s requested=%s supported=%s",
+                provider_id,
+                model_id,
+                fmt,
+                ",".join(sorted(supported)),
+            )
+            return None
+
+        version_metadata["image_output_format"] = fmt
+        version_metadata["local_image_output_format"] = "png"
+        return fmt
+
     def generate_image(
         self,
         prompt: str,
@@ -283,6 +351,18 @@ class MediaGenerator:
                 model=self._image_backend.model,
             )
 
+        try:
+            provider_input_max_long_edge = int(version_metadata.pop("provider_input_max_long_edge", 2048))
+        except (TypeError, ValueError):
+            provider_input_max_long_edge = 2048
+        try:
+            provider_input_jpeg_quality = int(version_metadata.pop("provider_input_jpeg_quality", 92))
+        except (TypeError, ValueError):
+            provider_input_jpeg_quality = 92
+        image_output_format = await self._resolve_image_output_format(version_metadata)
+        prepared_images: list[Any] = []
+        prepared_file_images: list[Any] = []
+
         # 2. 记录 API 调用开始
         call_id = await self.usage_tracker.start_call(
             project_name=self.project_name,
@@ -297,21 +377,88 @@ class MediaGenerator:
         )
 
         try:
+            prepared_ref_images = ref_images
+            if ref_images:
+                from lib.image_utils import prepare_provider_image, prepare_provider_image_bytes
+
+                prepared_ref_images = []
+                provider_temp_dir = Path(tempfile.gettempdir()) / "manju-provider-inputs" / self.project_name
+                needs_temp_files = self._image_backend.name in _TEMP_FILE_IMAGE_INPUT_PROVIDERS
+                for idx, ref in enumerate(ref_images):
+                    ref_path = Path(ref.path)
+                    if ref_path.exists():
+                        purpose = f"image-reference-{idx + 1}"
+                        if needs_temp_files:
+                            prepared = prepare_provider_image(
+                                ref_path,
+                                purpose=purpose,
+                                temp_dir=provider_temp_dir,
+                                max_long_edge=provider_input_max_long_edge,
+                                jpeg_quality=provider_input_jpeg_quality,
+                            )
+                            prepared_file_images.append(prepared)
+                            prepared_images.append(prepared)
+                            prepared_ref_images.append(ReferenceImage(path=str(prepared.path), label=ref.label))
+                        else:
+                            prepared = prepare_provider_image_bytes(
+                                ref_path,
+                                purpose=purpose,
+                                max_long_edge=provider_input_max_long_edge,
+                                jpeg_quality=provider_input_jpeg_quality,
+                            )
+                            prepared_images.append(prepared)
+                            prepared_ref_images.append(ref)
+                    else:
+                        prepared_ref_images.append(ref)
+
+                if prepared_images:
+                    metadata_items = [item.to_metadata() for item in prepared_images]
+                    total_base64_bytes = sum(item.estimated_base64_bytes for item in prepared_images)
+                    version_metadata.setdefault("provider_input_images", {"reference_images": metadata_items})
+                    version_metadata.setdefault(
+                        "provider_input_payload",
+                        {
+                            "total_images": len(prepared_images),
+                            "estimated_base64_bytes": total_base64_bytes,
+                            "cleanup_policy": "delete_on_success_keep_on_failure" if needs_temp_files else "memory_only",
+                            "provider": self._image_backend.name,
+                            "model": self._image_backend.model,
+                            "max_long_edge": provider_input_max_long_edge,
+                            "jpeg_quality": provider_input_jpeg_quality,
+                        },
+                    )
+
             request = ImageGenerationRequest(
                 prompt=prompt,
                 output_path=output_path,
-                reference_images=ref_images,
+                reference_images=prepared_ref_images,
                 aspect_ratio=aspect_ratio,
                 image_size=image_size,
+                output_format=image_output_format,
                 project_name=self.project_name,
+                reference_images_prepared=bool(prepared_file_images),
             )
             result = await self._image_backend.generate(request)
+            final_image_path = Path(result.image_path)
+
+            if prepared_file_images:
+                cleaned = 0
+                for item in prepared_file_images:
+                    try:
+                        item.path.unlink(missing_ok=True)
+                        cleaned += 1
+                    except OSError:
+                        logger.warning("清理图片供应商临时输入图失败: %s", item.path, exc_info=True)
+                payload_meta = version_metadata.get("provider_input_payload")
+                if isinstance(payload_meta, dict):
+                    payload_meta["cleaned_up"] = cleaned
+                    payload_meta["retained_on_failure"] = False
 
             # 4. 记录调用成功
             await self.usage_tracker.finish_call(
                 call_id=call_id,
                 status="success",
-                output_path=str(output_path),
+                output_path=str(final_image_path),
                 usage_tokens=getattr(result, "usage_tokens", None),
                 quality=getattr(result, "quality", None),
                 image_input_tokens=getattr(result, "image_input_tokens", None),
@@ -320,6 +467,10 @@ class MediaGenerator:
                 text_output_tokens=getattr(result, "text_output_tokens", None),
             )
         except Exception as e:
+            payload_meta = version_metadata.get("provider_input_payload")
+            if prepared_file_images and isinstance(payload_meta, dict):
+                payload_meta["cleaned_up"] = 0
+                payload_meta["retained_on_failure"] = True
             # 记录调用失败
             logger.exception("生成失败 (%s)", "image")
             await self.usage_tracker.finish_call(
@@ -334,12 +485,12 @@ class MediaGenerator:
             resource_type=resource_type,
             resource_id=resource_id,
             prompt=prompt,
-            source_file=output_path,
+            source_file=final_image_path,
             aspect_ratio=aspect_ratio,
             **version_metadata,
         )
 
-        return output_path, new_version
+        return final_image_path, new_version
 
     def generate_video(
         self,
@@ -466,9 +617,9 @@ class MediaGenerator:
         except (TypeError, ValueError):
             provider_input_max_long_edge = 2048
         try:
-            provider_input_jpeg_quality = int(version_metadata.pop("provider_input_jpeg_quality", 90))
+            provider_input_jpeg_quality = int(version_metadata.pop("provider_input_jpeg_quality", 92))
         except (TypeError, ValueError):
-            provider_input_jpeg_quality = 90
+            provider_input_jpeg_quality = 92
 
         # 1. 若已存在，确保旧文件被记录
         if output_path.exists():
@@ -593,11 +744,10 @@ class MediaGenerator:
                     "不支持参考图输入；请切换到支持 reference images 的模型后重试。"
                 )
 
-            from lib.image_utils import prepare_provider_image_input
+            from lib.image_utils import prepare_provider_image_bytes
 
             prepared_inputs: dict[str, Any] = {}
             prepared_images = []
-            provider_temp_dir = Path(tempfile.gettempdir()) / "manju-provider-inputs" / self.project_name
 
             def _prepare_image_path(value: str | Path | None, purpose: str) -> Path | None:
                 if value is None:
@@ -605,15 +755,14 @@ class MediaGenerator:
                 path = Path(value)
                 if not path.exists():
                     return path
-                prepared = prepare_provider_image_input(
+                prepared = prepare_provider_image_bytes(
                     path,
                     purpose=purpose,
-                    temp_dir=provider_temp_dir,
                     max_long_edge=provider_input_max_long_edge,
                     jpeg_quality=provider_input_jpeg_quality,
                 )
                 prepared_images.append(prepared)
-                return prepared.path
+                return path
 
             prepared_start_image = (
                 _prepare_image_path(start_image, "video-start") if isinstance(start_image, (str, Path)) else None
@@ -648,7 +797,7 @@ class MediaGenerator:
                     "estimated_base64_bytes": total_base64_bytes,
                     "warn_threshold_bytes": _BASE64_INPUT_WARN_BYTES,
                     "limit_threshold_bytes": _BASE64_INPUT_LIMIT_BYTES,
-                    "cleanup_policy": "delete_on_success_keep_on_failure",
+                    "cleanup_policy": "memory_only",
                     "provider": provider_name,
                     "model": model_name,
                     "max_long_edge": provider_input_max_long_edge,
@@ -687,6 +836,8 @@ class MediaGenerator:
                 end_image=prepared_end_image,
                 reference_images=prepared_reference_images,
                 generate_audio=effective_generate_audio,
+                provider_input_max_long_edge=provider_input_max_long_edge,
+                provider_input_jpeg_quality=provider_input_jpeg_quality,
                 project_name=self.project_name,
                 task_id=task_id,
                 service_tier=version_metadata.get("service_tier", "default"),
@@ -698,16 +849,9 @@ class MediaGenerator:
             video_uri = result.video_uri
 
             if prepared_images:
-                cleaned = 0
-                for item in prepared_images:
-                    try:
-                        item.path.unlink(missing_ok=True)
-                        cleaned += 1
-                    except OSError:
-                        logger.warning("清理视频供应商临时输入图失败: %s", item.path, exc_info=True)
                 payload_meta = version_metadata.get("provider_input_payload")
                 if isinstance(payload_meta, dict):
-                    payload_meta["cleaned_up"] = cleaned
+                    payload_meta["cleaned_up"] = 0
                     payload_meta["retained_on_failure"] = False
 
             # Track usage with provider info
@@ -723,8 +867,7 @@ class MediaGenerator:
             payload_meta = version_metadata.get("provider_input_payload")
             if prepared_images and isinstance(payload_meta, dict):
                 payload_meta["cleaned_up"] = 0
-                payload_meta["retained_on_failure"] = True
-                await _append_provider_input_diagnostic("provider_input_retained_on_failure")
+                payload_meta["retained_on_failure"] = False
             # 记录调用失败
             logger.exception("生成失败 (%s)", "video")
             await self.usage_tracker.finish_call(

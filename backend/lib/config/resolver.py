@@ -393,6 +393,15 @@ class ConfigResolver:
         async with self._open_session() as (session, svc):
             return await self._resolve_default_video_service_tier(svc)
 
+    async def default_image_output_format(self) -> str:
+        """返回系统级图片供应商输出格式偏好；本地最终仍保存为 PNG。"""
+        async with self._open_session() as (session, svc):
+            raw = await svc.get_setting("default_image_output_format", "auto")
+        value = str(raw or "auto").strip().lower()
+        if value == "jpeg":
+            value = "jpg"
+        return value if value in {"auto", "png", "jpg", "webp"} else "auto"
+
     async def default_video_backend(self) -> tuple[str, str]:
         """返回系统级默认 (provider_id, model_id)（不含项目级覆盖）。"""
         async with self._open_session() as (session, svc):

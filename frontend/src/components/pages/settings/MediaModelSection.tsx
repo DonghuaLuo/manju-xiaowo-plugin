@@ -17,7 +17,9 @@ import { errMsg } from "@/utils/async";
 import {
   getCustomProviderModels,
   getProviderModels,
+  lookupSharedImageOutputFormats,
   lookupVideoServiceTiers,
+  type ImageOutputFormat,
   type VideoServiceTier,
 } from "@/utils/provider-models";
 import { ACCENT_BTN_CLS, ACCENT_BUTTON_STYLE, CARD_STYLE } from "@/components/ui/darkroom-tokens";
@@ -49,6 +51,13 @@ function SectionCard({ kicker, title, description, children }: CardProps) {
       {children}
     </div>
   );
+}
+
+function imageOutputFormatLabel(value: string): string {
+  const normalized = value.toLowerCase();
+  return normalized === "png" || normalized === "jpg" || normalized === "webp"
+    ? normalized.toUpperCase()
+    : "Auto";
 }
 
 export function MediaModelSection() {
@@ -127,6 +136,8 @@ export function MediaModelSection() {
     settings?.default_image_backend_i2i ??
     settings?.default_image_backend ??
     "";
+  const currentImageOutputFormat =
+    draft.default_image_output_format ?? settings?.default_image_output_format ?? "auto";
   const currentAudio = draft.video_generate_audio ?? settings?.video_generate_audio ?? false;
   const supportedVideoServiceTiers = useMemo(
     () => (currentVideo ? lookupVideoServiceTiers(providers, currentVideo, customProviders) : null),
@@ -149,6 +160,43 @@ export function MediaModelSection() {
       active = false;
     };
   }, [currentVideo, currentVideoServiceTier, supportedVideoServiceTiers]);
+
+  const imageOutputFormats = useMemo<readonly ImageOutputFormat[]>(() => {
+    return lookupSharedImageOutputFormats(providers, [currentImageT2I, currentImageI2I], customProviders);
+  }, [currentImageI2I, currentImageT2I, customProviders, providers]);
+
+  const imageOutputFormatOptions = useMemo(() => {
+    if (imageOutputFormats.length === 0) return [];
+    return [
+      {
+        value: "auto",
+        label: imageOutputFormatLabel("auto"),
+        description: t("image_output_format_auto_desc", {
+          defaultValue: "由供应商按模型默认值决定，生成后仍统一保存为 PNG。",
+        }),
+      },
+      ...imageOutputFormats.map((format) => ({
+        value: format,
+        label: imageOutputFormatLabel(format),
+        description: t("image_output_format_option_desc", {
+          defaultValue: "请求供应商以 {{format}} 输出，生成后仍统一保存为 PNG。",
+          format: format.toUpperCase(),
+        }),
+      })),
+    ];
+  }, [imageOutputFormats, t]);
+
+  useEffect(() => {
+    if (currentImageOutputFormat === "auto") return;
+    if (imageOutputFormats.includes(currentImageOutputFormat as ImageOutputFormat)) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setDraft((prev) => ({ ...prev, default_image_output_format: "auto" }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentImageOutputFormat, imageOutputFormats]);
 
   if (!settings || !options) {
     return (
@@ -299,6 +347,23 @@ export function MediaModelSection() {
         ) : (
           emptyHint(t("no_image_providers_hint"))
         )}
+
+        {imageOutputFormatOptions.length > 0 ? (
+          <div className="mt-4">
+            <div className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4">
+              {t("image_output_format_label", { defaultValue: "供应商输出格式" })}
+            </div>
+            <SelectMenu
+              value={currentImageOutputFormat}
+              options={imageOutputFormatOptions}
+              onChange={(v) =>
+                setDraft((prev) => ({ ...prev, default_image_output_format: v || "auto" }))
+              }
+              ariaLabel={t("image_output_format_label", { defaultValue: "供应商输出格式" })}
+              panelLabel={t("image_output_format_label", { defaultValue: "供应商输出格式" })}
+            />
+          </div>
+        ) : null}
       </SectionCard>
 
       {/* Text */}

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 
 from google import genai
 from PIL import Image
 
 from ..config.url_utils import normalize_base_url
 from ..gemini_shared import VERTEX_SCOPES, with_retry_async
+from ..image_utils import prepare_provider_image_bytes
 from ..logging_utils import format_kwargs_for_log
 from ..providers import PROVIDER_GEMINI
 from .base import (
@@ -122,7 +124,12 @@ class GeminiTextBackend:
         if request.images:
             for img_input in request.images:
                 if img_input.path is not None:
-                    pil_img = Image.open(img_input.path)
+                    prepared = prepare_provider_image_bytes(
+                        img_input.path,
+                        purpose="text-vision",
+                    )
+                    pil_img = Image.open(BytesIO(prepared.data))
+                    pil_img.load()
                     contents.append(pil_img)
                 elif img_input.url is not None:
                     # URL 型图片直接作为字符串传递，SDK 内部会处理

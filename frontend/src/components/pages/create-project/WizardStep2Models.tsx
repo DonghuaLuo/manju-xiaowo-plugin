@@ -40,6 +40,7 @@ export interface WizardStep2Data {
     video: string;
     imageT2I: string;
     imageI2I: string;
+    imageOutputFormat?: string;
     textScript: string;
     textOverview: string;
     textStyle: string;

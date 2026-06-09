@@ -16,6 +16,7 @@ from lib.app_data_dir import app_data_dir
 from lib.asset_types import ASSET_TYPES, BUCKET_KEY, SHEET_KEY
 from lib.db import async_session_factory
 from lib.db.repositories.asset_repo import AssetRepository
+from lib.image_utils import save_project_image, validate_image_file
 from lib.i18n import Translator
 from lib.project_manager import ProjectManager
 from lib.upload_utils import local_upload_path, read_upload_bytes
@@ -60,6 +61,19 @@ def _serialize(asset) -> dict:
     }
 
 
+def _existing_image_suffix(path: Path) -> str:
+    return path.suffix.lower() or ".png"
+
+
+def _copy_existing_image_file(source_path: Path, target_path: Path) -> Path:
+    """Copy an existing asset image without transcoding it."""
+    validate_image_file(source_path)
+    final_path = target_path.with_suffix(_existing_image_suffix(source_path))
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, final_path)
+    return final_path
+
+
 async def _save_upload(file: UploadFile, asset_type: str, _t: Translator) -> str:
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
@@ -67,26 +81,27 @@ async def _save_upload(file: UploadFile, asset_type: str, _t: Translator) -> str
 
     root = get_project_manager().get_global_assets_root() / asset_type
     uid = uuid.uuid4().hex
-    target = root / f"{uid}{ext}"
+    target = root / f"{uid}.png"
 
     source_path = local_upload_path(file)
     if source_path is not None:
         if source_path.stat().st_size > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail=_t("asset_upload_too_large"))
 
-        def _copy() -> None:
-            root.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source_path, target)
-
-        await asyncio.to_thread(_copy)
+        try:
+            await asyncio.to_thread(save_project_image, source_path, target)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
     else:
         data = await asyncio.to_thread(read_upload_bytes, file)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail=_t("asset_upload_too_large"))
-        root.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(target.write_bytes, data)
+        try:
+            await asyncio.to_thread(save_project_image, data, target)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
     # 存相对路径（相对 projects_root）
-    return f"_global_assets/{asset_type}/{uid}{ext}"
+    return f"_global_assets/{asset_type}/{uid}.png"
 
 
 def _delete_global_asset_file(rel_path: str) -> None:
@@ -339,12 +354,14 @@ async def from_project(
     # 5) 拷贝源 sheet 到 _global_assets/{type}/{uuid}.{ext}
     new_image_path: str | None = None
     if source_sheet_path is not None:
-        ext = source_sheet_path.suffix.lower() or ".png"
         root = get_project_manager().get_global_assets_root() / req.resource_type
         uid = uuid.uuid4().hex
-        target = root / f"{uid}{ext}"
-        await asyncio.to_thread(shutil.copyfile, source_sheet_path, target)
-        new_image_path = f"_global_assets/{req.resource_type}/{uid}{ext}"
+        target = root / uid
+        try:
+            copied_path = await asyncio.to_thread(_copy_existing_image_file, source_sheet_path, target)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
+        new_image_path = f"_global_assets/{req.resource_type}/{copied_path.name}"
 
     # 6) 写 DB：失败路径清理拷贝文件
     try:
@@ -473,8 +490,7 @@ async def apply_to_project(
         if a.image_path:
             src = project_manager.projects_root / a.image_path
             if src.exists() and src.is_file():
-                ext = src.suffix.lower() or ".png"
-                rel_sheet = f"{bucket_key}/{desired_name}{ext}"
+                rel_sheet = f"{bucket_key}/{desired_name}{_existing_image_suffix(src)}"
                 try:
                     ProjectManager._safe_subpath(project_dir, rel_sheet)
                 except ValueError:
@@ -512,8 +528,7 @@ async def apply_to_project(
             dst = plan["copy_dst"]
             if src is None or dst is None:
                 continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
+            _copy_existing_image_file(src, dst)
 
     if plans:
         await asyncio.to_thread(_copy_all)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  lookupSharedImageOutputFormats,
   lookupVideoServiceTiers,
   lookupStoryboardVideoStartImageSupport,
   storyboardVideoStartImageSupportFromCapabilities,
@@ -130,5 +131,91 @@ describe("provider-models video service tiers", () => {
       "flex",
     ]);
     expect(lookupVideoServiceTiers([], "custom-7/doubao-seedance-2.0", customProviders)).toEqual(["default"]);
+  });
+});
+
+describe("provider-models image output formats", () => {
+  const providers = [
+    {
+      id: "openai",
+      display_name: "OpenAI",
+      description: "",
+      status: "ready",
+      media_types: ["image"],
+      capabilities: [],
+      configured_keys: [],
+      missing_keys: [],
+      models: {
+        "gpt-image-2": {
+          display_name: "GPT Image 2",
+          media_type: "image",
+          capabilities: ["text_to_image", "image_to_image"],
+          default: true,
+          image_output_formats: ["png", "jpg", "webp"],
+          supported_durations: [],
+          duration_resolution_constraints: {},
+          resolutions: ["1K"],
+        },
+        "gpt-image-png": {
+          display_name: "GPT Image PNG",
+          media_type: "image",
+          capabilities: ["text_to_image", "image_to_image"],
+          default: false,
+          image_output_formats: ["png"],
+          supported_durations: [],
+          duration_resolution_constraints: {},
+          resolutions: ["1K"],
+        },
+      },
+    },
+    {
+      id: "gemini-aistudio",
+      display_name: "Gemini",
+      description: "",
+      status: "ready",
+      media_types: ["image"],
+      capabilities: [],
+      configured_keys: [],
+      missing_keys: [],
+      models: {
+        "imagen": {
+          display_name: "Imagen",
+          media_type: "image",
+          capabilities: ["text_to_image"],
+          default: true,
+          image_output_formats: [],
+          supported_durations: [],
+          duration_resolution_constraints: {},
+          resolutions: ["1K"],
+        },
+      },
+    },
+  ] as Parameters<typeof lookupSharedImageOutputFormats>[0];
+
+  it("returns only formats supported by all selected image backends", () => {
+    expect(
+      lookupSharedImageOutputFormats(providers, [
+        "openai/gpt-image-2",
+        "openai/gpt-image-png",
+      ]),
+    ).toEqual(["png"]);
+  });
+
+  it("uses the selected model formats when both image slots resolve to the same backend", () => {
+    expect(
+      lookupSharedImageOutputFormats(providers, [
+        "openai/gpt-image-2",
+        "openai/gpt-image-2",
+      ]),
+    ).toEqual(["png", "jpg", "webp"]);
+  });
+
+  it("hides provider output format choices when any selected backend has no support", () => {
+    expect(
+      lookupSharedImageOutputFormats(providers, [
+        "openai/gpt-image-2",
+        "gemini-aistudio/imagen",
+      ]),
+    ).toEqual([]);
   });
 });

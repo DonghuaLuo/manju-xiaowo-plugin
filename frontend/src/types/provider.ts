@@ -3,6 +3,7 @@ export interface ModelInfoResponse {
   media_type: string;
   capabilities: string[];
   default: boolean;
+  image_output_formats?: string[];
   supported_durations: number[];
   duration_resolution_constraints: Record<string, number[]>;
   resolutions: string[];

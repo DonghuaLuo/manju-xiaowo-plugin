@@ -8,6 +8,7 @@
 import { PluginSDK } from "xiaowo-sdk";
 import type {
   ProjectData,
+  ModelSettingEntry,
   ProjectSummary,
   ImportConflictPolicy,
   ImportArchiveResponse,
@@ -153,6 +154,7 @@ export interface VersionInfo {
     provider?: string;
     model?: string;
     resolution?: string;
+    image_output_format?: string | null;
     duration_seconds?: number;
     generate_audio?: boolean;
     service_tier?: string;
@@ -165,6 +167,8 @@ export interface VersionInfo {
   };
   generation_route_warnings?: Array<{ key: string; params?: Record<string, unknown> }>;
   provider_capability_hash?: string | null;
+  image_output_format?: string | null;
+  local_image_output_format?: string | null;
   provider_input_images?: Record<
     string,
     ProviderInputImageMetadata | ProviderInputImageMetadata[] | null | undefined
@@ -336,7 +340,7 @@ export interface CreateProjectPayload {
   text_backend_script?: string | null;
   text_backend_overview?: string | null;
   text_backend_style?: string | null;
-  model_settings?: Record<string, { resolution?: string | null }>;
+  model_settings?: Record<string, ModelSettingEntry>;
   generation_profiles?: GenerationProfiles;
   video_service_tier?: string | null;
 }

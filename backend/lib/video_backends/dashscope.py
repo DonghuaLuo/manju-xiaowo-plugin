@@ -54,13 +54,18 @@ from lib.video_backends.base import (
 logger = logging.getLogger(__name__)
 
 
-def _read_image_or_none(path: Path) -> str | None:
+def _read_image_or_none(
+    path: Path,
+    *,
+    max_long_edge: int = 2048,
+    jpeg_quality: int = 92,
+) -> str | None:
     """读成 data URI；缺失（目录/非常规文件，含空串解析出的 "."）或 IO 失败（权限/并发删除）返回 None。"""
     if not path.is_file():
         return None
     try:
-        return image_to_data_uri(path)
-    except OSError as exc:
+        return image_to_data_uri(path, max_long_edge=max_long_edge, jpeg_quality=jpeg_quality)
+    except (OSError, ValueError) as exc:
         logger.warning("DashScope 图片读取失败: %s (%s)", path, exc)
         return None
 
@@ -226,7 +231,11 @@ class DashScopeVideoBackend:
             p = Path(request.start_image)
             # fail-loud：声明了首帧图却缺失（目录/非常规文件，含空串解析出的 "."）或读取失败即中止，
             # 不静默忽略 —— 否则用户拿到一个没用上首帧的结果却不知情。
-            uri = _read_image_or_none(p)
+            uri = _read_image_or_none(
+                p,
+                max_long_edge=request.provider_input_max_long_edge,
+                jpeg_quality=request.provider_input_jpeg_quality,
+            )
             if uri is None:
                 raise VideoCapabilityError("video_start_image_unreadable", model=self._model, name=p.name)
             media.append({"type": "first_frame", "url": uri})
@@ -241,7 +250,11 @@ class DashScopeVideoBackend:
             unreadable: list[str] = []
             for r in provided:
                 p = Path(r)
-                uri = _read_image_or_none(p)
+                uri = _read_image_or_none(
+                    p,
+                    max_long_edge=request.provider_input_max_long_edge,
+                    jpeg_quality=request.provider_input_jpeg_quality,
+                )
                 if uri is None:
                     unreadable.append(p.name)
                 else:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,6 @@ from lib.asset_types import BUCKET_KEY, SHEET_KEY
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
 from lib.db.base import DEFAULT_USER_ID
-from lib.image_utils import compress_image_bytes
 from lib.prompt_builders import append_video_negative_tail
 from lib.reference_video import assemble_shots_text, render_prompt_for_backend
 from lib.reference_video.errors import MissingReferenceError, RequestPayloadTooLargeError
@@ -71,41 +69,6 @@ def _resolve_unit_references(
     if missing:
         raise MissingReferenceError(missing=missing)
     return resolved
-
-
-def _compress_references_to_tempfiles(
-    source_paths: list[Path],
-    *,
-    long_edge: int = 2048,
-    quality: int = 85,
-) -> list[Path]:
-    """把每张 sheet 压到 JPEG bytes 并写入 NamedTemporaryFile，返回 Path 列表。
-
-    调用方须在 finally 里对每个返回 Path 调用 .unlink(missing_ok=True)。
-    """
-    temp_paths: list[Path] = []
-    try:
-        for src in source_paths:
-            tmp = tempfile.NamedTemporaryFile(
-                prefix="refvid-",
-                suffix=".jpg",
-                delete=False,
-            )
-            tmp_path = Path(tmp.name)
-            temp_paths.append(tmp_path)
-            try:
-                raw = src.read_bytes()
-                compressed = compress_image_bytes(raw, max_long_edge=long_edge, quality=quality)
-                tmp.write(compressed)
-            finally:
-                tmp.close()
-    except Exception:
-        # 任何阶段失败都立刻清理已创建的 temp files，避免磁盘泄露
-        for p in temp_paths:
-            with contextlib.suppress(Exception):
-                p.unlink(missing_ok=True)
-        raise
-    return temp_paths
 
 
 def _render_unit_prompt(unit: dict) -> str:
@@ -448,7 +411,7 @@ async def execute_reference_video_task(
                 **version_metadata,
             )
         except RequestPayloadTooLargeError:
-            # 二次压缩重试（1024px/q=70）
+            # 二次压缩重试：只降低长边，JPEG 质量保持默认 92，避免明显损伤参考图细节。
             warnings.append({"key": "ref_payload_too_large", "params": {}})
             output_path, version, _, video_uri = await generator.generate_video_async(
                 prompt=rendered_prompt,
@@ -460,7 +423,7 @@ async def execute_reference_video_task(
                 resolution=resolution,
                 task_id=task_id,
                 provider_input_max_long_edge=1024,
-                provider_input_jpeg_quality=70,
+                provider_input_jpeg_quality=92,
                 **version_metadata,
             )
     finally:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal
@@ -16,6 +17,7 @@ from lib.image_backends.base import (
     ImageGenerationResult,
     save_image_from_response_item,
 )
+from lib.image_utils import prepare_provider_image
 from lib.logging_utils import format_kwargs_for_log
 from lib.openai_shared import (
     OPENAI_IMAGE_QUALITY_MAP as _QUALITY_MAP,
@@ -71,6 +73,15 @@ def _resolve_openai_params(
     return params
 
 
+def _openai_output_format(output_format: str | None) -> str | None:
+    if not output_format:
+        return None
+    fmt = output_format.strip().lower()
+    if fmt == "jpg":
+        return "jpeg"
+    return fmt if fmt in {"png", "jpeg", "webp"} else None
+
+
 class OpenAIImageBackend:
     """OpenAI 图片生成后端，按 mode 决定支持 T2I / I2I / 两者。"""
 
@@ -120,6 +131,8 @@ class OpenAIImageBackend:
             "n": 1,
         }
         kwargs.update(_resolve_openai_params(request.image_size, request.aspect_ratio))
+        if output_format := _openai_output_format(request.output_format):
+            kwargs["output_format"] = output_format
         logger.info("调用 %s 图片 SDK (T2I) kwargs=%s", self.name, format_kwargs_for_log(kwargs))
         response = await self._client.images.generate(**kwargs)
         return await self._save_and_return(response, request)
@@ -134,24 +147,44 @@ class OpenAIImageBackend:
                 max_reference_images=_MAX_REFERENCE_IMAGES,
             )
 
-        def _open_refs() -> tuple[ExitStack, list]:
+        def _open_refs() -> tuple[ExitStack, list, list[Path]]:
             """在 ExitStack 内打开所有参考图，保证部分 open 失败时已打开句柄被释放。"""
             stack = ExitStack()
+            prepared_paths: list[Path] = []
             try:
                 files = []
+                temp_dir = (
+                    Path(tempfile.gettempdir())
+                    / "manju-provider-inputs"
+                    / (request.project_name or "standalone")
+                    / "openai-image"
+                )
                 for ref in refs:
                     ref_path = Path(ref.path)
                     try:
+                        if not request.reference_images_prepared:
+                            prepared = prepare_provider_image(
+                                ref_path,
+                                purpose="openai-image-reference",
+                                temp_dir=temp_dir,
+                            )
+                            ref_path = prepared.path
+                            prepared_paths.append(prepared.path)
                         files.append(stack.enter_context(open(ref_path, "rb")))
                     except FileNotFoundError:
                         logger.warning("参考图不存在，跳过: %s", ref_path)
                 # 把已打开的句柄所有权移交给调用者
-                return stack.pop_all(), files
+                return stack.pop_all(), files, prepared_paths
             except BaseException:
                 stack.close()
+                for path in prepared_paths:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("清理 OpenAI 图片参考图临时文件失败: %s", path, exc_info=True)
                 raise
 
-        stack, image_files = await asyncio.to_thread(_open_refs)
+        stack, image_files, prepared_paths = await asyncio.to_thread(_open_refs)
         try:
             if not image_files:
                 # 旧版会回退到 T2I；新语义下若所有 ref 图都打不开，抛错而非降级
@@ -167,6 +200,8 @@ class OpenAIImageBackend:
                 "prompt": request.prompt,
             }
             edit_kwargs.update(_resolve_openai_params(request.image_size, request.aspect_ratio))
+            if output_format := _openai_output_format(request.output_format):
+                edit_kwargs["output_format"] = output_format
             logger.info(
                 "调用 %s 图片 SDK (I2I) kwargs=%s",
                 self.name,
@@ -175,6 +210,11 @@ class OpenAIImageBackend:
             response = await self._client.images.edit(**edit_kwargs)
         finally:
             stack.close()
+            for path in prepared_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("清理 OpenAI 图片参考图临时文件失败: %s", path, exc_info=True)
         return await self._save_and_return(response, request)
 
     async def _save_and_return(self, response, request: ImageGenerationRequest) -> ImageGenerationResult:
@@ -184,8 +224,8 @@ class OpenAIImageBackend:
             raise RuntimeError(
                 f"OpenAI 图片生成响应 data 为空 (model={self._model})，可能触发内容安全过滤或上游服务异常"
             )
-        await save_image_from_response_item(data[0], request.output_path)
-        logger.info("OpenAI 图片生成完成: %s", request.output_path)
+        image_path = await save_image_from_response_item(data[0], request.output_path)
+        logger.info("OpenAI 图片生成完成: %s", image_path)
         quality = _quality_for(request.image_size)
 
         img_in = img_out = txt_in = txt_out = None
@@ -215,7 +255,7 @@ class OpenAIImageBackend:
                 img_in = img_out = txt_in = txt_out = None
 
         return ImageGenerationResult(
-            image_path=request.output_path,
+            image_path=image_path,
             provider=PROVIDER_OPENAI,
             model=self._model,
             quality=quality,

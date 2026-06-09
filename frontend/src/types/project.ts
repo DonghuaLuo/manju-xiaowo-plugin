@@ -95,6 +95,7 @@ export interface EpisodeMeta {
 
 export interface ModelSettingEntry {
   resolution?: string | null;
+  output_format?: string | null;
 }
 
 export type GenerationQuality = "draft" | "final" | "custom";

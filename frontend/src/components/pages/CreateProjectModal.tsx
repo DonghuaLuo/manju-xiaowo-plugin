@@ -30,7 +30,7 @@ import { WizardStep2Models, type WizardStep2Data } from "./create-project/Wizard
 import { WizardStep3Style, type WizardStep3Value } from "./create-project/WizardStep3Style";
 import type { ModelConfigValue } from "@/components/shared/ModelConfigSection";
 import type { UploadFileInput } from "@/utils/desktop-file";
-import type { GenerationProfiles, MediaType } from "@/types";
+import type { GenerationProfiles, MediaType, ModelSettingEntry } from "@/types";
 
 // 新建项目对话框 · "Open Reel"
 // 仪式感来自项目大厅的 Darkroom 美学：editorial 衬线 + mono 标尺线 + sprocket 胶片孔。
@@ -210,6 +210,7 @@ export function CreateProjectModal() {
     defaultDuration: null,
     videoResolution: null,
     imageResolution: null,
+    imageOutputFormat: null,
   });
   const [generationProfilesExpanded, setGenerationProfilesExpanded] = useState(false);
   const [generationProfilesCustomized, setGenerationProfilesCustomized] = useState(false);
@@ -290,6 +291,7 @@ export function CreateProjectModal() {
               sysConfig.settings.default_image_backend_i2i ??
               sysConfig.settings.default_image_backend ??
               "",
+            imageOutputFormat: sysConfig.settings.default_image_output_format ?? "auto",
             textScript: sysConfig.settings.text_backend_script ?? "",
             textOverview: sysConfig.settings.text_backend_overview ?? "",
             textStyle: sysConfig.settings.text_backend_style ?? "",
@@ -410,12 +412,19 @@ export function CreateProjectModal() {
         return;
       }
       const effectiveImageT2I = models.imageBackendT2I || step2Data?.globalDefaults.imageT2I || "";
-      const modelSettings: Record<string, { resolution: string }> = {};
+      const effectiveImageI2I = models.imageBackendI2I || step2Data?.globalDefaults.imageI2I || "";
+      const modelSettings: Record<string, ModelSettingEntry> = {};
       if (effectiveVideo && models.videoResolution) {
         modelSettings[effectiveVideo] = { resolution: models.videoResolution };
       }
-      if (effectiveImageT2I && models.imageResolution) {
-        modelSettings[effectiveImageT2I] = { resolution: models.imageResolution };
+      if (effectiveImageT2I && (models.imageResolution || models.imageOutputFormat)) {
+        modelSettings[effectiveImageT2I] = {
+          ...(models.imageResolution ? { resolution: models.imageResolution } : {}),
+          output_format: models.imageOutputFormat || null,
+        };
+      }
+      if (effectiveImageI2I && effectiveImageI2I !== effectiveImageT2I && models.imageOutputFormat) {
+        modelSettings[effectiveImageI2I] = { output_format: models.imageOutputFormat };
       }
       const stylePrompt = style.stylePrompt.trim();
       const defaultGenerationProfiles = createDefaultGenerationProfiles({
