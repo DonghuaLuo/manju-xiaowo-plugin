@@ -3,9 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lib.agent_provider_catalog import get_preset
 from lib.config.env_keys import ANTHROPIC_ENV_KEYS
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.repository import ProviderConfigRepository, SystemSettingRepository
@@ -15,20 +17,67 @@ _DEFAULT_VIDEO_BACKEND = "gemini-aistudio/veo-3.1-lite-generate-preview"
 _DEFAULT_IMAGE_BACKEND = "gemini-aistudio/gemini-3.1-flash-image-preview"
 _DEFAULT_TEXT_BACKEND = "gemini-aistudio/gemini-3-flash-preview"
 
-# DB setting key → environment variable name
-_ANTHROPIC_ENV_MAP: dict[str, str] = {
-    "anthropic_api_key": "ANTHROPIC_API_KEY",
-    "anthropic_base_url": "ANTHROPIC_BASE_URL",
-    "anthropic_model": "ANTHROPIC_MODEL",
-    "anthropic_default_haiku_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "anthropic_default_opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "anthropic_default_sonnet_model": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "claude_code_subagent_model": "CLAUDE_CODE_SUBAGENT_MODEL",
-}
+# DB setting key → environment variable name.
+_ANTHROPIC_ENV_MAP: tuple[tuple[str, str], ...] = (
+    ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    ("anthropic_auth_token", "ANTHROPIC_AUTH_TOKEN"),
+    ("anthropic_base_url", "ANTHROPIC_BASE_URL"),
+    ("anthropic_model", "ANTHROPIC_MODEL"),
+    ("anthropic_default_haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+    ("anthropic_default_opus_model", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    ("anthropic_default_sonnet_model", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+    ("claude_code_subagent_model", "CLAUDE_CODE_SUBAGENT_MODEL"),
+)
 # 一致性守护：env 名单与 ANTHROPIC_ENV_KEYS 必须对齐。
-assert set(_ANTHROPIC_ENV_MAP.values()) == set(ANTHROPIC_ENV_KEYS), (
+assert {env_key for _, env_key in _ANTHROPIC_ENV_MAP} == set(ANTHROPIC_ENV_KEYS), (
     "_ANTHROPIC_ENV_MAP 与 lib.config.env_keys.ANTHROPIC_ENV_KEYS 漂移"
 )
+
+_AUTH_TOKEN_GATEWAY_PATHS: dict[str, tuple[str, ...]] = {
+    "api.deepseek.com": ("/anthropic",),
+    "open.bigmodel.cn": ("/api/anthropic",),
+    "api.z.ai": ("/api/anthropic",),
+    "api.minimax.io": ("/anthropic",),
+    "api.minimaxi.com": ("/anthropic",),
+    "api.kimi.com": ("/coding",),
+}
+
+
+def _looks_like_auth_token_gateway(base_url: str | None) -> bool:
+    """Infer Claude Code gateway auth mode for custom/legacy Anthropic-compatible URLs."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if host == "api.anthropic.com":
+        return False
+
+    expected_paths = _AUTH_TOKEN_GATEWAY_PATHS.get(host)
+    if expected_paths is None:
+        return False
+
+    path = "/" + (parsed.path or "").strip("/")
+    return any(path == expected or path.startswith(f"{expected}/") for expected in expected_paths)
+
+
+def _build_anthropic_auth_env(
+    api_key: str,
+    preset_id: str | None,
+    base_url: str | None = None,
+) -> dict[str, str]:
+    """Map the stored credential to the auth env expected by the preset."""
+    preset = get_preset(preset_id or "")
+    if preset is not None:
+        auth_env_mode = preset.auth_env_mode
+    elif _looks_like_auth_token_gateway(base_url):
+        auth_env_mode = "auth_token"
+    else:
+        auth_env_mode = "api_key"
+
+    if auth_env_mode == "auth_token":
+        return {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": api_key}
+    return {"ANTHROPIC_API_KEY": api_key, "ANTHROPIC_AUTH_TOKEN": ""}
 
 
 async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
@@ -47,8 +96,13 @@ async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
 
     if cred is not None:
         settings = await SystemSettingRepository(session).get_all()
+        auth_env = _build_anthropic_auth_env(
+            cred.api_key or "",
+            getattr(cred, "preset_id", None),
+            cred.base_url or "",
+        )
         return {
-            "ANTHROPIC_API_KEY": cred.api_key or "",
+            **auth_env,
             "ANTHROPIC_BASE_URL": cred.base_url or "",
             "ANTHROPIC_MODEL": cred.model or settings.get("anthropic_model", "").strip(),
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": cred.haiku_model
@@ -61,7 +115,25 @@ async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
 
     # 无 active credential — 回退 system_settings（双轨期兼容）
     settings = await SystemSettingRepository(session).get_all()
-    return {env_key: settings.get(db_key, "").strip() for db_key, env_key in _ANTHROPIC_ENV_MAP.items()}
+    explicit_auth_token = settings.get("anthropic_auth_token", "").strip()
+    if explicit_auth_token:
+        auth_env = {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": explicit_auth_token}
+    else:
+        auth_env = _build_anthropic_auth_env(
+            settings.get("anthropic_api_key", "").strip(),
+            None,
+            settings.get("anthropic_base_url", "").strip(),
+        )
+
+    return {
+        **auth_env,
+        "ANTHROPIC_BASE_URL": settings.get("anthropic_base_url", "").strip(),
+        "ANTHROPIC_MODEL": settings.get("anthropic_model", "").strip(),
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": settings.get("anthropic_default_haiku_model", "").strip(),
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": settings.get("anthropic_default_opus_model", "").strip(),
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": settings.get("anthropic_default_sonnet_model", "").strip(),
+        "CLAUDE_CODE_SUBAGENT_MODEL": settings.get("claude_code_subagent_model", "").strip(),
+    }
 
 
 @dataclass

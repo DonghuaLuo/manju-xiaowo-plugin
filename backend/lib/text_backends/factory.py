@@ -7,6 +7,7 @@ from lib.config.resolver import ConfigResolver
 from lib.custom_provider import is_custom_provider, parse_provider_id
 from lib.db import async_session_factory
 from lib.providers import PROVIDER_DASHSCOPE, PROVIDER_OPENAI
+from lib.text_backends.openai import OPENAI_RESPONSES_BACKEND, is_responses_preferred_model
 from lib.text_backends.base import TextBackend, TextTaskType
 from lib.text_backends.registry import create_backend
 
@@ -20,6 +21,13 @@ PROVIDER_ID_TO_BACKEND: dict[str, str] = {
     # 阿里百炼文本走 OpenAI 兼容协议，复用 OpenAI 后端（base_url 与 provider_name 在下方特例处理）
     "dashscope": "openai",
 }
+
+
+def _runtime_custom_text_endpoint(endpoint: str, model_id: str) -> str:
+    """Upgrade stale GPT-5 custom text models from Chat Completions to Responses."""
+    if endpoint == "openai-chat" and is_responses_preferred_model(model_id):
+        return OPENAI_RESPONSES_BACKEND
+    return endpoint
 
 
 async def create_text_backend_for_task(
@@ -70,12 +78,16 @@ async def create_text_backend_for_task(
                     model_id = default_model.model_id
                 assert model_id is not None
                 return create_custom_backend(  # type: ignore[return-value]
-                    provider=provider, model_id=model_id, endpoint=model.endpoint
+                    provider=provider,
+                    model_id=model_id,
+                    endpoint=_runtime_custom_text_endpoint(model.endpoint, model_id),
                 )
 
         provider_config = await r.provider_config(provider_id)
 
     backend_name = PROVIDER_ID_TO_BACKEND.get(provider_id, provider_id)
+    if provider_id == PROVIDER_OPENAI and is_responses_preferred_model(model_id):
+        backend_name = OPENAI_RESPONSES_BACKEND
     kwargs: dict = {"model": model_id}
 
     if provider_id == "gemini-vertex":

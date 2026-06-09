@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from openai import AsyncOpenAI, BadRequestError
 from pydantic import BaseModel, ValidationError
@@ -23,6 +24,18 @@ from lib.text_backends.base import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-5.4-mini"
+
+OPENAI_RESPONSES_BACKEND = "openai-responses"
+_RESPONSES_PREFERRED_MODEL_RE = r"(^|[/:\s_-])gpt[-_]?5(?:[.\s_-]|$)"
+
+
+def is_responses_preferred_model(model: str | None) -> bool:
+    """Return True for OpenAI-family models that should avoid Chat Completions."""
+    if not model:
+        return False
+    import re
+
+    return bool(re.search(_RESPONSES_PREFERRED_MODEL_RE, model.strip().lower()))
 
 
 class OpenAITextBackend:
@@ -145,6 +158,92 @@ class OpenAITextBackend:
         )
 
 
+class OpenAIResponsesTextBackend:
+    """OpenAI 文本生成后端，使用 Responses API。"""
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        provider_name: str = PROVIDER_OPENAI,
+    ):
+        self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
+        self._model = model or DEFAULT_MODEL
+        self._provider_name = provider_name
+        self._capabilities: set[TextCapability] = {
+            TextCapability.TEXT_GENERATION,
+            TextCapability.STRUCTURED_OUTPUT,
+            TextCapability.VISION,
+        }
+
+    @property
+    def name(self) -> str:
+        return self._provider_name
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def capabilities(self) -> set[TextCapability]:
+        return self._capabilities
+
+    @with_retry_async(max_attempts=4, backoff_seconds=(2, 4, 8), retryable_errors=OPENAI_RETRYABLE_ERRORS)
+    async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
+        format_mode = "json_schema" if request.response_schema else None
+        return await self._generate_with_format(request, format_mode=format_mode)
+
+    async def _generate_with_format(
+        self,
+        request: TextGenerationRequest,
+        *,
+        format_mode: str | None,
+    ) -> TextGenerationResult:
+        kwargs = _build_responses_kwargs(self._model, request, format_mode=format_mode)
+        logger.info("调用 %s Responses SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
+        try:
+            response = await self._client.responses.create(**kwargs)
+        except Exception as exc:
+            if request.response_schema and format_mode == "json_schema" and _is_schema_error(exc):
+                logger.warning(
+                    "Responses 原生 json_schema 失败 (%s)，降级到 Responses json_object 路径",
+                    exc,
+                )
+                return await self._generate_with_format(request, format_mode="json_object")
+            raise
+
+        text = _extract_responses_text(response)
+        if request.response_schema and format_mode == "json_schema" and not _is_valid_json(text):
+            logger.warning("Responses json_schema 返回非 JSON 内容，降级到 Responses json_object 路径")
+            return await self._generate_with_format(request, format_mode="json_object")
+        if request.response_schema and format_mode == "json_schema" and _pydantic_validation_error(
+            text, request.response_schema
+        ):
+            logger.warning("Responses json_schema 返回 JSON 但不符合 Pydantic schema，降级到 Responses json_object 路径")
+            return await self._generate_with_format(request, format_mode="json_object")
+
+        usage = _read_attr_or_key(response, "usage")
+        input_tokens = _read_int_attr_or_key(usage, "input_tokens", "prompt_tokens")
+        output_tokens = _read_int_attr_or_key(usage, "output_tokens", "completion_tokens")
+        warn_if_truncated(
+            _extract_responses_finish_reason(response),
+            provider=self._provider_name,
+            model=self._model,
+            output_tokens=output_tokens,
+            truncation_values=("length", "MAX_TOKENS", "max_tokens", "max_output_tokens"),
+        )
+
+        return TextGenerationResult(
+            text=text,
+            provider=self._provider_name,
+            model=self._model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+
 def _build_messages(request: TextGenerationRequest) -> list[dict]:
     """将 TextGenerationRequest 转为 OpenAI messages 格式。"""
     messages: list[dict] = []
@@ -169,6 +268,98 @@ def _build_messages(request: TextGenerationRequest) -> list[dict]:
         messages.append({"role": "user", "content": request.prompt})
 
     return messages
+
+
+def _build_responses_kwargs(
+    model: str,
+    request: TextGenerationRequest,
+    *,
+    format_mode: str | None,
+) -> dict:
+    """将 TextGenerationRequest 转为 OpenAI Responses API kwargs。"""
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "input": _build_responses_input(request),
+    }
+    if request.system_prompt:
+        kwargs["instructions"] = request.system_prompt
+    if request.max_output_tokens is not None:
+        kwargs["max_output_tokens"] = request.max_output_tokens
+    if format_mode == "json_schema" and request.response_schema:
+        kwargs["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "response",
+                "strict": True,
+                "schema": resolve_schema(request.response_schema),
+            }
+        }
+    elif format_mode == "json_object":
+        kwargs["text"] = {"format": {"type": "json_object"}}
+    return kwargs
+
+
+def _build_responses_input(request: TextGenerationRequest) -> str | list[dict]:
+    if not request.images:
+        return request.prompt
+
+    from lib.image_backends.base import image_to_base64_data_uri
+
+    content: list[dict] = [{"type": "input_text", "text": request.prompt}]
+    for img in request.images:
+        image_url: str | None = None
+        if img.path:
+            image_url = image_to_base64_data_uri(img.path)
+        elif img.url:
+            image_url = img.url
+        if image_url:
+            content.append({"type": "input_image", "image_url": image_url})
+    return [{"role": "user", "content": content}]
+
+
+def _extract_responses_text(response: Any) -> str:
+    output_text = _read_attr_or_key(response, "output_text")
+    if isinstance(output_text, str):
+        return output_text
+
+    chunks: list[str] = []
+    output = _read_attr_or_key(response, "output")
+    if not isinstance(output, (list, tuple)):
+        return ""
+    for item in output:
+        content = _read_attr_or_key(item, "content")
+        if not isinstance(content, (list, tuple)):
+            continue
+        for part in content:
+            text = _read_attr_or_key(part, "text")
+            if isinstance(text, str):
+                chunks.append(text)
+    return "".join(chunks)
+
+
+def _extract_responses_finish_reason(response: Any) -> str | None:
+    incomplete_details = _read_attr_or_key(response, "incomplete_details")
+    reason = _read_attr_or_key(incomplete_details, "reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    status = _read_attr_or_key(response, "status")
+    return status if isinstance(status, str) else None
+
+
+def _read_attr_or_key(obj: Any, key: str) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _read_int_attr_or_key(obj: Any, *keys: str) -> int | None:
+    for key in keys:
+        value = _read_attr_or_key(obj, key)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 _SCHEMA_ERROR_KEYWORDS = (

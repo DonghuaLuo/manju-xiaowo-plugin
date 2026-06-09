@@ -21,7 +21,11 @@ from lib.image_backends.dashscope import DashScopeImageBackend
 from lib.image_backends.gemini import GeminiImageBackend
 from lib.image_backends.openai import OpenAIImageBackend
 from lib.text_backends.gemini import GeminiTextBackend
-from lib.text_backends.openai import OpenAITextBackend
+from lib.text_backends.openai import (
+    OpenAIResponsesTextBackend,
+    OpenAITextBackend,
+    is_responses_preferred_model,
+)
 from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.base import VideoCapabilities
 from lib.video_backends.dashscope import DashScopeVideoBackend
@@ -64,6 +68,18 @@ class EndpointSpec:
 def _build_openai_chat(provider, model_id: str) -> CustomTextBackend:
     base_url = ensure_openai_base_url(provider.base_url)
     delegate = OpenAITextBackend(
+        api_key=provider.api_key,
+        base_url=base_url,
+        model=model_id,
+        provider_name=provider.provider_id,
+        prefer_native_structured_output=False,
+    )
+    return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+
+
+def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
+    base_url = ensure_openai_base_url(provider.base_url)
+    delegate = OpenAIResponsesTextBackend(
         api_key=provider.api_key,
         base_url=base_url,
         model=model_id,
@@ -179,6 +195,15 @@ ENDPOINT_REGISTRY: dict[str, EndpointSpec] = {
         request_method="POST",
         request_path_template="/v1/chat/completions",
         build_backend=_build_openai_chat,
+    ),
+    "openai-responses": EndpointSpec(
+        key="openai-responses",
+        media_type="text",
+        family="openai",
+        display_name_key="endpoint_openai_responses_display",
+        request_method="POST",
+        request_path_template="/v1/responses",
+        build_backend=_build_openai_responses,
     ),
     "gemini-generate": EndpointSpec(
         key="gemini-generate",
@@ -408,4 +433,6 @@ def infer_endpoint(model_id: str, discovery_format: str) -> str:
         return "openai-video"
     if is_image:
         return "gemini-image" if discovery_format == "google" else "openai-images"
-    return "gemini-generate" if discovery_format == "google" else "openai-chat"
+    if discovery_format == "google":
+        return "gemini-generate"
+    return "openai-responses" if is_responses_preferred_model(model_id) else "openai-chat"

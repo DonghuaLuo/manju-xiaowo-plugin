@@ -40,6 +40,7 @@ from lib.text_backends.grok import GrokTextBackend
 register_backend(PROVIDER_GROK, GrokTextBackend)
 
 from lib.providers import PROVIDER_OPENAI
-from lib.text_backends.openai import OpenAITextBackend
+from lib.text_backends.openai import OPENAI_RESPONSES_BACKEND, OpenAIResponsesTextBackend, OpenAITextBackend
 
 register_backend(PROVIDER_OPENAI, OpenAITextBackend)
+register_backend(OPENAI_RESPONSES_BACKEND, OpenAIResponsesTextBackend)

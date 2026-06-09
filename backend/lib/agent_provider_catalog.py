@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 CUSTOM_SENTINEL_ID = "__custom__"
 
@@ -28,6 +29,7 @@ class PresetProvider:
     notes_i18n_key: str | None
     api_key_pattern: str | None
     is_recommended: bool
+    auth_env_mode: Literal["api_key", "auth_token"] = "api_key"
 
 
 PRESET_PROVIDERS: dict[str, PresetProvider] = {
@@ -72,6 +74,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         notes_i18n_key=None,
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "glm-intl": PresetProvider(
         id="glm-intl",
@@ -86,6 +89,7 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         notes_i18n_key=None,
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "xiaomi-mimo": PresetProvider(
         id="xiaomi-mimo",
@@ -107,13 +111,14 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="DeepSeek",
         messages_url="https://api.deepseek.com/anthropic",
         discovery_url="https://api.deepseek.com",
-        default_model="deepseek-v4-pro",
+        default_model="deepseek-v4-pro[1m]",
         suggested_models=(),
         docs_url=None,
         api_key_url="https://platform.deepseek.com/",
         notes_i18n_key="preset_notes_deepseek",
         api_key_pattern=r"^sk-[A-Za-z0-9]+$",
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "minimax-cn": PresetProvider(
         id="minimax-cn",
@@ -121,13 +126,14 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="Minimax",
         messages_url="https://api.minimaxi.com/anthropic",
         discovery_url="https://api.minimaxi.com/anthropic",
-        default_model="MiniMax-M2.7",
+        default_model="MiniMax-M3",
         suggested_models=(),
         docs_url=None,
         api_key_url="https://platform.minimaxi.com/subscribe/coding-plan",
         notes_i18n_key=None,
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "minimax-intl": PresetProvider(
         id="minimax-intl",
@@ -135,13 +141,14 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="Minimax",
         messages_url="https://api.minimax.io/anthropic",
         discovery_url="https://api.minimax.io/anthropic",
-        default_model="MiniMax-M2.7",
+        default_model="MiniMax-M3",
         suggested_models=(),
         docs_url=None,
         api_key_url="https://platform.minimax.io/subscribe/coding-plan",
         notes_i18n_key=None,
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "kimi": PresetProvider(
         id="kimi",
@@ -149,13 +156,14 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="Kimi",
         messages_url="https://api.kimi.com/coding",
         discovery_url="https://api.kimi.com/coding",
-        default_model="",
-        suggested_models=(),
+        default_model="kimi-for-coding",
+        suggested_models=("kimi-for-coding",),
         docs_url=None,
         api_key_url="https://www.kimi.com/coding/docs/",
         notes_i18n_key=None,
         api_key_pattern=r"^sk-[A-Za-z0-9]+$",
         is_recommended=False,
+        auth_env_mode="auth_token",
     ),
     "ark-coding-plan": PresetProvider(
         id="ark-coding-plan",

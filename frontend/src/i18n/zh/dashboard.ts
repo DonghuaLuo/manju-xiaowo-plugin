@@ -638,6 +638,7 @@ export default {
   endpoint_image_group: "图片",
   endpoint_video_group: "视频",
   endpoint_openai_chat_display: "OpenAI 文本",
+  endpoint_openai_responses_display: "OpenAI Responses 文本",
   endpoint_gemini_generate_display: "Gemini 文本",
   endpoint_openai_images_display: "OpenAI 图片",
   endpoint_openai_images_generations_display: "OpenAI 图片（仅文生图）",
