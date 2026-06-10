@@ -7,8 +7,8 @@ from lib.config.resolver import ConfigResolver
 from lib.custom_provider import is_custom_provider, parse_provider_id
 from lib.db import async_session_factory
 from lib.providers import PROVIDER_DASHSCOPE, PROVIDER_OPENAI
-from lib.text_backends.openai import OPENAI_RESPONSES_BACKEND, is_responses_preferred_model
 from lib.text_backends.base import TextBackend, TextTaskType
+from lib.text_backends.openai import OPENAI_RESPONSES_BACKEND, is_responses_preferred_model
 from lib.text_backends.registry import create_backend
 
 PROVIDER_ID_TO_BACKEND: dict[str, str] = {
@@ -24,9 +24,7 @@ PROVIDER_ID_TO_BACKEND: dict[str, str] = {
 
 
 def _runtime_custom_text_endpoint(endpoint: str, model_id: str) -> str:
-    """Upgrade stale GPT-5 custom text models from Chat Completions to Responses."""
-    if endpoint == "openai-chat" and is_responses_preferred_model(model_id):
-        return OPENAI_RESPONSES_BACKEND
+    """Return the saved custom endpoint without inferring capability from model names."""
     return endpoint
 
 
@@ -106,6 +104,7 @@ async def create_text_backend_for_task(
 
             kwargs["base_url"] = dashscope_text_base_url(user_base_url)
             kwargs["provider_name"] = PROVIDER_DASHSCOPE
+            kwargs["prefer_native_structured_output"] = False
         else:
             # ark / ark-agent-plan 等：用户优先，缺省回落 ProviderMeta.default_base_url
             # （与 server.services.generation_tasks._fill_simple_provider_kwargs 对称）。

@@ -17,8 +17,8 @@ from lib.text_backends.base import (
     ImageInput,
     TextCapability,
     TextGenerationRequest,
-    TextGenerationResult,
     ensure_structured_output,
+    structured_output_error,
 )
 
 
@@ -86,6 +86,31 @@ def test_ensure_structured_output_wraps_pydantic_schema_mismatch():
         )
 
 
+def test_ensure_structured_output_validates_dict_schema_mismatch():
+    schema = {
+        "type": "object",
+        "required": ["title", "scenes"],
+        "properties": {
+            "title": {"type": "string"},
+            "scenes": {"type": "array"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="custom-42/gpt-5.5 结构化输出无效"):
+        ensure_structured_output(
+            '{"episode": 1}',
+            schema,
+            provider="custom-42",
+            model="gpt-5.5",
+        )
+
+
+def test_structured_output_error_validates_dict_schema_type_mismatch():
+    schema = {"type": "object", "required": ["age"], "properties": {"age": {"type": "integer"}}}
+
+    assert structured_output_error('{"age": "old"}', schema)
+
+
 class TestOpenAITextBackend:
     def test_name_and_model(self):
         with patch("lib.openai_shared.AsyncOpenAI"):
@@ -109,6 +134,15 @@ class TestOpenAITextBackend:
             backend = OpenAITextBackend(api_key="test-key")
             assert TextCapability.TEXT_GENERATION in backend.capabilities
             assert TextCapability.STRUCTURED_OUTPUT in backend.capabilities
+            assert TextCapability.VISION in backend.capabilities
+
+    def test_compatible_chat_without_native_schema_does_not_advertise_structured_output(self):
+        with patch("lib.openai_shared.AsyncOpenAI"):
+            from lib.text_backends.openai import OpenAITextBackend
+
+            backend = OpenAITextBackend(api_key="test-key", prefer_native_structured_output=False)
+            assert TextCapability.TEXT_GENERATION in backend.capabilities
+            assert TextCapability.STRUCTURED_OUTPUT not in backend.capabilities
             assert TextCapability.VISION in backend.capabilities
 
     async def test_generate_plain_text(self):
@@ -221,6 +255,19 @@ class TestOpenAITextBackend:
 
 
 class TestOpenAIResponsesTextBackend:
+    def test_compatible_responses_without_native_schema_does_not_advertise_structured_output(self):
+        with patch("lib.openai_shared.AsyncOpenAI"):
+            from lib.text_backends.openai import OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(
+                api_key="test-key",
+                provider_name="custom-42",
+                prefer_native_structured_output=False,
+            )
+            assert TextCapability.TEXT_GENERATION in backend.capabilities
+            assert TextCapability.STRUCTURED_OUTPUT not in backend.capabilities
+            assert TextCapability.VISION in backend.capabilities
+
     async def test_generate_without_system_prompt_sends_default_instructions(self):
         mock_client = AsyncMock()
         mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response("Test output"))
@@ -286,6 +333,7 @@ class TestOpenAIResponsesTextBackend:
                 send_max_output_tokens=False,
                 use_input_item_list=True,
                 stream_response=True,
+                prefer_native_structured_output=False,
             )
             result = await backend.generate(TextGenerationRequest(prompt="Normalize this script", max_output_tokens=16000))
 
@@ -328,13 +376,9 @@ class TestOpenAIResponsesTextBackend:
                 send_max_output_tokens=False,
                 use_input_item_list=True,
                 stream_response=True,
+                prefer_native_structured_output=False,
             )
-            result = await backend.generate(
-                TextGenerationRequest(
-                    prompt="Return JSON",
-                    response_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
-                )
-            )
+            result = await backend.generate(TextGenerationRequest(prompt="Return JSON"))
 
         assert result.text == '{"ok": true}'
         assert result.input_tokens == 15
@@ -365,6 +409,53 @@ class TestOpenAIResponsesTextBackend:
         assert call_kwargs["text"]["format"]["name"] == "response"
         assert call_kwargs["text"]["format"]["strict"] is True
 
+    async def test_responses_without_native_structured_output_raises_before_request(self):
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock()
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(
+                api_key="test-key",
+                model="gpt-5.5",
+                provider_name="custom-42",
+                prefer_native_structured_output=False,
+            )
+            with pytest.raises(ValueError, match="未发送原生 text.format.json_schema 请求"):
+                await backend.generate(TextGenerationRequest(prompt="Extract info", response_schema=_PersonSchema))
+
+        mock_client.responses.create.assert_not_called()
+
+    async def test_responses_schema_mismatch_raises_without_json_object_fallback(self):
+        wrong_schema_json = json.dumps({"title": "Wrong shape", "language": "zh"})
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response(wrong_schema_json))
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(api_key="test-key", model="gpt-5.5")
+            with pytest.raises(ValueError, match="不能降级到 json_object/Instructor"):
+                await backend.generate(TextGenerationRequest(prompt="Extract info", response_schema=_PersonSchema))
+
+        assert mock_client.responses.create.await_count == 1
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert call_kwargs["text"]["format"]["type"] == "json_schema"
+
+    async def test_responses_schema_error_raises_without_json_object_fallback(self):
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock(side_effect=_make_bad_request_error())
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(api_key="test-key", model="gpt-5.5")
+            with pytest.raises(ValueError, match="接口拒绝 json_schema 请求"):
+                await backend.generate(TextGenerationRequest(prompt="Extract info", response_schema=_PersonSchema))
+
+        assert mock_client.responses.create.await_count == 1
+
 
 def _make_bad_request_error(message: str = "Invalid schema") -> BadRequestError:
     """构造 OpenAI BadRequestError。"""
@@ -380,19 +471,16 @@ class _PersonSchema(BaseModel):
     age: int
 
 
-class TestInstructorFallback:
-    """Instructor 降级路径测试。"""
+class TestStrictStructuredOutput:
+    """Strict schema 路径不能降级到 Instructor/json_object。"""
 
     async def test_native_structured_output_success_no_fallback(self):
-        """原生 response_format 成功时，不走 Instructor 降级。"""
+        """原生 response_format 成功时，不走降级路径。"""
         schema_response = json.dumps({"name": "Alice", "age": 30})
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=_make_mock_response(schema_response))
 
-        with (
-            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
-            patch("lib.text_backends.openai._instructor_fallback") as mock_fallback,
-        ):
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
 
             backend = OpenAITextBackend(api_key="test-key")
@@ -403,24 +491,14 @@ class TestInstructorFallback:
             result = await backend.generate(request)
 
         assert result.text == schema_response
-        mock_fallback.assert_not_called()
+        assert mock_client.chat.completions.create.await_count == 1
 
-    async def test_skip_native_structured_output_uses_instructor_directly(self):
-        """OpenAI 兼容代理可跳过原生 response_format，避免先打一次易失败的 json_schema 请求。"""
+    async def test_skip_native_structured_output_raises_without_fallback(self):
+        """OpenAI 兼容代理不能跳过原生 json_schema 后继续声称 strict schema。"""
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock()
-        fallback_result = TextGenerationResult(
-            text=_PersonSchema(name="Bob", age=25).model_dump_json(),
-            provider=PROVIDER_OPENAI,
-            model="gpt-4o",
-            input_tokens=30,
-            output_tokens=12,
-        )
 
-        with (
-            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
-            patch("lib.text_backends.openai._instructor_fallback", new=AsyncMock(return_value=fallback_result)) as mock_fallback,
-        ):
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
 
             backend = OpenAITextBackend(
@@ -428,36 +506,18 @@ class TestInstructorFallback:
                 model="gpt-4o",
                 prefer_native_structured_output=False,
             )
-            result = await backend.generate(
-                TextGenerationRequest(prompt="Extract info", response_schema=_PersonSchema)
-            )
+            with pytest.raises(ValueError, match="未发送原生 json_schema 请求"):
+                await backend.generate(TextGenerationRequest(prompt="Extract info", response_schema=_PersonSchema))
 
-        assert result is fallback_result
         mock_client.chat.completions.create.assert_not_called()
-        mock_fallback.assert_awaited_once()
 
-    async def test_non_json_response_triggers_instructor_fallback_pydantic(self):
-        """原生返回 200 但内容非 JSON（OpenAI 兼容代理静默忽略 response_format），应降级到 Instructor。"""
+    async def test_non_json_response_raises_without_fallback(self):
+        """原生返回 200 但内容非 JSON 时，不能降级到 Instructor。"""
         markdown_text = "## 小说关键信息提取\n\n- 主角: 张三\n- 题材: 都市悬疑\n开放式续集铺垫"
-        instructor_result = _PersonSchema(name="Bob", age=25)
-        instructor_completion = MagicMock()
-        instructor_completion.usage = MagicMock()
-        instructor_completion.usage.prompt_tokens = 50
-        instructor_completion.usage.completion_tokens = 20
-
         mock_client = AsyncMock()
-        # 原生调用返回 200 + markdown 文本（无异常）
         mock_client.chat.completions.create = AsyncMock(return_value=_make_mock_response(markdown_text, 100, 60))
 
-        mock_patched = AsyncMock()
-        mock_patched.chat.completions.create_with_completion = AsyncMock(
-            return_value=(instructor_result, instructor_completion)
-        )
-
-        with (
-            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
-            patch("instructor.from_openai", return_value=mock_patched),
-        ):
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
 
             backend = OpenAITextBackend(api_key="test-key")
@@ -465,36 +525,21 @@ class TestInstructorFallback:
                 prompt="Extract info",
                 response_schema=_PersonSchema,
             )
-            result = await backend.generate(request)
+            with pytest.raises(ValueError, match="模型返回非 JSON 内容"):
+                await backend.generate(request)
 
-        assert result.text == instructor_result.model_dump_json()
-        assert result.provider == PROVIDER_OPENAI
-        assert result.input_tokens == 50
-        assert result.output_tokens == 20
+        assert mock_client.chat.completions.create.await_count == 1
 
-    async def test_valid_json_wrong_schema_triggers_instructor_fallback_pydantic(self):
-        """原生返回可解析 JSON 但不符合 Pydantic schema 时，也应降级到 Instructor。"""
+    async def test_valid_json_wrong_schema_raises_without_fallback(self):
+        """原生返回可解析 JSON 但不符合 Pydantic schema 时，不能降级到 Instructor。"""
         wrong_schema_json = json.dumps({"title": "Wrong shape", "language": "zh"})
-        instructor_result = _PersonSchema(name="Bob", age=25)
-        instructor_completion = MagicMock()
-        instructor_completion.usage = MagicMock()
-        instructor_completion.usage.prompt_tokens = 50
-        instructor_completion.usage.completion_tokens = 20
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(
             return_value=_make_mock_response(wrong_schema_json, 100, 60)
         )
 
-        mock_patched = AsyncMock()
-        mock_patched.chat.completions.create_with_completion = AsyncMock(
-            return_value=(instructor_result, instructor_completion)
-        )
-
-        with (
-            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
-            patch("instructor.from_openai", return_value=mock_patched),
-        ):
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
 
             backend = OpenAITextBackend(api_key="test-key")
@@ -502,33 +547,17 @@ class TestInstructorFallback:
                 prompt="Extract info",
                 response_schema=_PersonSchema,
             )
-            result = await backend.generate(request)
+            with pytest.raises(ValueError, match="模型返回 JSON 但不符合 schema"):
+                await backend.generate(request)
 
-        assert result.text == instructor_result.model_dump_json()
-        assert result.provider == PROVIDER_OPENAI
-        assert result.input_tokens == 50
-        assert result.output_tokens == 20
+        assert mock_client.chat.completions.create.await_count == 1
 
-    async def test_bad_request_error_triggers_instructor_fallback_pydantic(self):
-        """原生 response_format 抛 BadRequestError 且 schema 为 Pydantic 类时，走 Instructor 降级。"""
+    async def test_bad_request_error_raises_without_fallback_pydantic(self):
+        """原生 response_format 抛 BadRequestError 且 schema 为 Pydantic 类时，不做降级。"""
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=_make_bad_request_error())
 
-        instructor_result = _PersonSchema(name="Bob", age=25)
-        instructor_completion = MagicMock()
-        instructor_completion.usage = MagicMock()
-        instructor_completion.usage.prompt_tokens = 20
-        instructor_completion.usage.completion_tokens = 10
-
-        mock_patched = AsyncMock()
-        mock_patched.chat.completions.create_with_completion = AsyncMock(
-            return_value=(instructor_result, instructor_completion)
-        )
-
-        with (
-            patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client),
-            patch("instructor.from_openai", return_value=mock_patched),
-        ):
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
 
             backend = OpenAITextBackend(api_key="test-key")
@@ -536,22 +565,15 @@ class TestInstructorFallback:
                 prompt="Extract info",
                 response_schema=_PersonSchema,
             )
-            result = await backend.generate(request)
+            with pytest.raises(ValueError, match="接口拒绝 json_schema 请求"):
+                await backend.generate(request)
 
-        assert result.text == instructor_result.model_dump_json()
-        assert result.provider == PROVIDER_OPENAI
-        assert result.input_tokens == 20
-        assert result.output_tokens == 10
+        assert mock_client.chat.completions.create.await_count == 1
 
-    async def test_bad_request_error_with_dict_schema_falls_back_to_plain(self):
-        """原生 response_format 抛 BadRequestError 且 schema 为 dict 时，降级为无结构化输出的普通调用。"""
+    async def test_bad_request_error_with_dict_schema_raises_without_json_object(self):
+        """原生 response_format 抛 BadRequestError 且 schema 为 dict 时，不降级到 json_object。"""
         mock_client = AsyncMock()
-        # 第一次调用（带 response_format）抛错
-        # 第二次调用（不带 response_format）返回正常结果
-        fallback_json = json.dumps({"name": "Charlie", "age": 35})
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=[_make_bad_request_error(), _make_mock_response(fallback_json, 12, 6)]
-        )
+        mock_client.chat.completions.create = AsyncMock(side_effect=_make_bad_request_error())
 
         with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend
@@ -564,14 +586,10 @@ class TestInstructorFallback:
                     "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
                 },
             )
-            result = await backend.generate(request)
+            with pytest.raises(ValueError, match="不能降级到 json_object/Instructor"):
+                await backend.generate(request)
 
-        assert result.text == fallback_json
-        assert result.input_tokens == 12
-        assert result.output_tokens == 6
-        # 验证第二次调用使用 json_object 模式（而非原生 json_schema）
-        second_call_kwargs = mock_client.chat.completions.create.call_args_list[1][1]
-        assert second_call_kwargs.get("response_format") == {"type": "json_object"}
+        assert mock_client.chat.completions.create.await_count == 1
 
     async def test_bad_request_error_without_schema_propagates(self):
         """没有 response_schema 时，BadRequestError 应原样抛出，不做降级。"""

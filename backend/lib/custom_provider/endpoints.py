@@ -24,7 +24,6 @@ from lib.text_backends.gemini import GeminiTextBackend
 from lib.text_backends.openai import (
     OpenAIResponsesTextBackend,
     OpenAITextBackend,
-    is_responses_preferred_model,
 )
 from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.base import VideoCapabilities
@@ -89,6 +88,7 @@ def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
         send_max_output_tokens=False,
         use_input_item_list=True,
         stream_response=True,
+        prefer_native_structured_output=False,
     )
     return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 
@@ -440,4 +440,6 @@ def infer_endpoint(model_id: str, discovery_format: str) -> str:
         return "gemini-image" if discovery_format == "google" else "openai-images"
     if discovery_format == "google":
         return "gemini-generate"
-    return "openai-responses" if is_responses_preferred_model(model_id) else "openai-chat"
+    # 自定义/聚合供应商的 discovery_format=openai 只说明基础协议形态相近，
+    # 不能仅凭 gpt-5.x 这类模型名推断 /v1/responses 或 strict json_schema 可用。
+    return "openai-chat"

@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from openai import OpenAI
-
 from lib.ark_shared import ARK_BASE_URL, create_ark_client, resolve_ark_api_key
 from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_ARK
@@ -33,12 +31,9 @@ class ArkTextBackend:
         model: str | None = None,
         base_url: str | None = None,
     ):
-        # Instructor 要求 openai.OpenAI 实例；Ark SDK client 类型不兼容，
-        # 但 Ark API 是 OpenAI 兼容的，因此额外创建原生 OpenAI 客户端供降级使用。
         resolved_key = resolve_ark_api_key(api_key)
         effective_base_url = base_url or ARK_BASE_URL
         self._client = create_ark_client(api_key=resolved_key, base_url=effective_base_url)
-        self._openai_client = OpenAI(base_url=effective_base_url, api_key=resolved_key)
         self._model = model or DEFAULT_MODEL
         self._capabilities: set[TextCapability] = self._resolve_capabilities()
 
@@ -57,7 +52,7 @@ class ArkTextBackend:
             if model_info and TextCapability.STRUCTURED_OUTPUT in model_info.capabilities:
                 base.add(TextCapability.STRUCTURED_OUTPUT)
                 break
-        # 未注册模型不加 STRUCTURED_OUTPUT：宁可走 Instructor 降级也不调用会报错的原生 API
+        # 未注册模型不加 STRUCTURED_OUTPUT：不要把 json_object/Instructor 当成 strict schema。
         return base
 
     @property
@@ -93,48 +88,40 @@ class ArkTextBackend:
     async def _generate_structured(self, request: TextGenerationRequest) -> TextGenerationResult:
         messages = self._build_messages(request)
 
-        if TextCapability.STRUCTURED_OUTPUT in self._capabilities:
-            from lib.text_backends.base import resolve_schema
+        if TextCapability.STRUCTURED_OUTPUT not in self._capabilities:
+            raise ValueError(
+                _strict_structured_output_failure(
+                    self._model,
+                    "当前 Ark 模型未声明已验证的原生 json_schema 结构化输出能力",
+                )
+            )
 
-            if request.response_schema is None:
-                raise ValueError("structured 模式要求 response_schema 非空")
-            schema = resolve_schema(request.response_schema)
-            kwargs: dict = {
-                "model": self._model,
-                "messages": messages,
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "response", "schema": schema},
-                },
-            }
-            if request.max_output_tokens is not None:
-                kwargs["max_tokens"] = request.max_output_tokens
-            logger.info("调用 %s 文本 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
-            try:
-                response = await asyncio.to_thread(self._client.chat.completions.create, **kwargs)
-                result = self._parse_chat_response(response)
-                if error := structured_output_error(result.text, request.response_schema):
-                    logger.warning("原生 response_format 返回无效结构化内容（%s），降级到 Instructor/json_object 路径", error)
-                    return await self._structured_fallback(request, messages)
-                return result
-            except Exception as exc:
-                logger.warning("原生 response_format 失败 (%s)，降级到 Instructor/json_object 路径", exc)
+        from lib.text_backends.base import resolve_schema
 
-        return await self._structured_fallback(request, messages)
+        if request.response_schema is None:
+            raise ValueError("structured 模式要求 response_schema 非空")
+        schema = resolve_schema(request.response_schema)
+        kwargs: dict = {
+            "model": self._model,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "strict": True, "schema": schema},
+            },
+        }
+        if request.max_output_tokens is not None:
+            kwargs["max_tokens"] = request.max_output_tokens
+        logger.info("调用 %s 文本 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
+        try:
+            response = await asyncio.to_thread(self._client.chat.completions.create, **kwargs)
+        except Exception as exc:
+            logger.warning("Ark 原生 response_format.json_schema 失败，不降级到 Instructor/json_object：%s", exc)
+            raise ValueError(_strict_structured_output_failure(self._model, f"接口拒绝 json_schema 请求: {exc}")) from exc
 
-    async def _structured_fallback(self, request: TextGenerationRequest, messages: list[dict]) -> TextGenerationResult:
-        """Instructor / json_object 降级路径。"""
-        from lib.text_backends.instructor_support import instructor_fallback_sync
-
-        return await asyncio.to_thread(
-            instructor_fallback_sync,
-            client=self._openai_client,
-            model=self._model,
-            messages=messages,
-            response_schema=request.response_schema,
-            provider=PROVIDER_ARK,
-            max_tokens=request.max_output_tokens,
-        )
+        result = self._parse_chat_response(response)
+        if error := structured_output_error(result.text, request.response_schema):
+            raise ValueError(_strict_structured_output_failure(self._model, error))
+        return result
 
     def _build_messages(self, request: TextGenerationRequest) -> list[dict]:
         messages: list[dict] = []
@@ -178,3 +165,11 @@ class ArkTextBackend:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+
+def _strict_structured_output_failure(model: str, detail: str) -> str:
+    return (
+        f"{PROVIDER_ARK}/{model} strict JSON Schema 结构化输出失败：{detail}。"
+        "根据 provider-api-evidence 资料，不能降级到 json_object/Instructor 后继续当作 strict schema；"
+        "请改用已验证支持 json_schema 的 endpoint/供应商，或为该模型配置独立的非 strict 纠错流程。"
+    )

@@ -47,6 +47,7 @@ class TestEndpointDispatch:
             send_max_output_tokens=False,
             use_input_item_list=True,
             stream_response=True,
+            prefer_native_structured_output=False,
         )
 
     @patch("lib.custom_provider.endpoints.GeminiTextBackend")

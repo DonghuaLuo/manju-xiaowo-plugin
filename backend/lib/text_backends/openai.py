@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from openai import AsyncOpenAI, BadRequestError
-from pydantic import BaseModel, ValidationError
 
 from lib.logging_utils import format_kwargs_for_log
 from lib.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
@@ -18,6 +16,7 @@ from lib.text_backends.base import (
     TextGenerationRequest,
     TextGenerationResult,
     resolve_schema,
+    structured_output_error,
     warn_if_truncated,
 )
 
@@ -63,6 +62,8 @@ class OpenAITextBackend:
             TextCapability.STRUCTURED_OUTPUT,
             TextCapability.VISION,
         }
+        if not prefer_native_structured_output:
+            self._capabilities.discard(TextCapability.STRUCTURED_OUTPUT)
 
     @property
     def name(self) -> str:
@@ -82,16 +83,18 @@ class OpenAITextBackend:
 
         单一重试循环包裹整个流程：
         1. 尝试原生 response_format 调用
-        2. 若遇 schema 不兼容错误 → 本次 attempt 内降级到 Instructor
+        2. 若遇 schema 不兼容错误，立即返回 capability 错误，不降级到 JSON mode
         3. 若遇瞬态错误（429/500/503/网络）→ 由装饰器自动重试整个流程
-
-        这样无论是原生调用还是降级路径遇到瞬态错误，都统一由外层重试处理。
         """
         messages = _build_messages(request)
         if request.response_schema and not self._prefer_native_structured_output:
-            logger.info("跳过原生 response_format，直接使用 Instructor/json_object 路径")
-            return await _instructor_fallback(
-                self._client, self._model, request, messages, provider=self._provider_name
+            raise ValueError(
+                _strict_structured_output_failure(
+                    self._provider_name,
+                    self._model,
+                    "Chat response_format.json_schema",
+                    "当前 endpoint 配置为 OpenAI-compatible 兼容路径，未发送原生 json_schema 请求",
+                )
             )
 
         kwargs: dict = {"model": self._model, "messages": messages}
@@ -114,13 +117,15 @@ class OpenAITextBackend:
             response = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             if request.response_schema and _is_schema_error(exc):
-                logger.warning(
-                    "原生 response_format 失败 (%s)，降级到 Instructor 路径",
-                    exc,
-                )
-                return await _instructor_fallback(
-                    self._client, self._model, request, messages, provider=self._provider_name
-                )
+                logger.warning("原生 response_format 失败，不降级到 Instructor/json_object：%s", exc)
+                raise ValueError(
+                    _strict_structured_output_failure(
+                        self._provider_name,
+                        self._model,
+                        "Chat response_format.json_schema",
+                        f"接口拒绝 json_schema 请求: {exc}",
+                    )
+                ) from exc
             raise
 
         usage = response.usage
@@ -128,21 +133,17 @@ class OpenAITextBackend:
         output_tokens = usage.completion_tokens if usage else None
         text = choice.message.content or ""
 
-        if request.response_schema and not _is_valid_json(text):
-            logger.warning(
-                "原生 response_format 返回非 JSON 内容（代理可能未支持 response_format），降级到 Instructor 路径",
-            )
-            return await _instructor_fallback(
-                self._client, self._model, request, messages, provider=self._provider_name
-            )
-        if request.response_schema and _pydantic_validation_error(text, request.response_schema):
-            logger.warning(
-                "原生 response_format 返回 JSON 但不符合 Pydantic schema（代理可能未支持 json_schema），"
-                "降级到 Instructor 路径",
-            )
-            return await _instructor_fallback(
-                self._client, self._model, request, messages, provider=self._provider_name
-            )
+        if request.response_schema:
+            error = structured_output_error(text, request.response_schema)
+            if error:
+                raise ValueError(
+                    _strict_structured_output_failure(
+                        self._provider_name,
+                        self._model,
+                        "Chat response_format.json_schema",
+                        error,
+                    )
+                )
 
         warn_if_truncated(
             getattr(choice, "finish_reason", None),
@@ -172,6 +173,7 @@ class OpenAIResponsesTextBackend:
         send_max_output_tokens: bool = True,
         use_input_item_list: bool = False,
         stream_response: bool = False,
+        prefer_native_structured_output: bool = True,
     ):
         self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
         self._model = model or DEFAULT_MODEL
@@ -179,11 +181,14 @@ class OpenAIResponsesTextBackend:
         self._send_max_output_tokens = send_max_output_tokens
         self._use_input_item_list = use_input_item_list
         self._stream_response = stream_response
+        self._prefer_native_structured_output = prefer_native_structured_output
         self._capabilities: set[TextCapability] = {
             TextCapability.TEXT_GENERATION,
             TextCapability.STRUCTURED_OUTPUT,
             TextCapability.VISION,
         }
+        if not prefer_native_structured_output:
+            self._capabilities.discard(TextCapability.STRUCTURED_OUTPUT)
 
     @property
     def name(self) -> str:
@@ -199,6 +204,15 @@ class OpenAIResponsesTextBackend:
 
     @with_retry_async(max_attempts=4, backoff_seconds=(2, 4, 8), retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
+        if request.response_schema and not self._prefer_native_structured_output:
+            raise ValueError(
+                _strict_structured_output_failure(
+                    self._provider_name,
+                    self._model,
+                    "Responses text.format.json_schema",
+                    "当前 endpoint 配置为 OpenAI-compatible 兼容路径，未发送原生 text.format.json_schema 请求",
+                )
+            )
         format_mode = "json_schema" if request.response_schema else None
         return await self._generate_with_format(request, format_mode=format_mode)
 
@@ -223,22 +237,29 @@ class OpenAIResponsesTextBackend:
                 response = await self._client.responses.create(**kwargs)
         except Exception as exc:
             if request.response_schema and format_mode == "json_schema" and _is_schema_error(exc):
-                logger.warning(
-                    "Responses 原生 json_schema 失败 (%s)，降级到 Responses json_object 路径",
-                    exc,
-                )
-                return await self._generate_with_format(request, format_mode="json_object")
+                logger.warning("Responses 原生 json_schema 失败，不降级到 json_object：%s", exc)
+                raise ValueError(
+                    _strict_structured_output_failure(
+                        self._provider_name,
+                        self._model,
+                        "Responses text.format.json_schema",
+                        f"接口拒绝 json_schema 请求: {exc}",
+                    )
+                ) from exc
             raise
 
         text = _extract_responses_text(response)
-        if request.response_schema and format_mode == "json_schema" and not _is_valid_json(text):
-            logger.warning("Responses json_schema 返回非 JSON 内容，降级到 Responses json_object 路径")
-            return await self._generate_with_format(request, format_mode="json_object")
-        if request.response_schema and format_mode == "json_schema" and _pydantic_validation_error(
-            text, request.response_schema
-        ):
-            logger.warning("Responses json_schema 返回 JSON 但不符合 Pydantic schema，降级到 Responses json_object 路径")
-            return await self._generate_with_format(request, format_mode="json_object")
+        if request.response_schema and format_mode == "json_schema":
+            error = structured_output_error(text, request.response_schema)
+            if error:
+                raise ValueError(
+                    _strict_structured_output_failure(
+                        self._provider_name,
+                        self._model,
+                        "Responses text.format.json_schema",
+                        error,
+                    )
+                )
 
         usage = _read_attr_or_key(response, "usage")
         input_tokens = _read_int_attr_or_key(usage, "input_tokens", "prompt_tokens")
@@ -355,6 +376,14 @@ def _build_responses_input(
     return [message]
 
 
+def _strict_structured_output_failure(provider: str, model: str, endpoint: str, detail: str) -> str:
+    return (
+        f"{provider}/{model} strict JSON Schema 结构化输出失败：{endpoint} {detail}。"
+        "根据 provider-api-evidence 资料，不能降级到 json_object/Instructor 后继续当作 strict schema；"
+        "请改用已验证支持 json_schema 的 endpoint/供应商，或为该自定义模型配置独立的非 strict 纠错流程。"
+    )
+
+
 async def _create_streamed_response(client: AsyncOpenAI, kwargs: dict[str, Any]) -> Any:
     """Call Responses with stream=true and return an accumulated Response-like object."""
     stream = await client.responses.create(**kwargs, stream=True)
@@ -462,36 +491,6 @@ _SCHEMA_ERROR_KEYWORDS = (
 )
 
 
-def _is_valid_json(text: str) -> bool:
-    """判断字符串是否为合法 JSON。
-
-    一些 OpenAI 兼容代理（自定义供应商常见情况）会静默忽略 response_format
-    参数并返回纯文本/markdown，需要据此触发 Instructor 降级。
-    """
-    if not text or not text.strip():
-        return False
-    try:
-        json.loads(text)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def _pydantic_validation_error(text: str, schema: dict | type | None) -> bool:
-    """判断 Pydantic schema 的原生 JSON 响应是否结构不匹配。
-
-    一些 OpenAI 兼容代理会返回合法 JSON，但忽略 json_schema 的必填字段约束；
-    如果这里不拦截，错误会延迟到业务层的 model_validate_json 才暴露。
-    """
-    if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-        return False
-    try:
-        schema.model_validate_json(text)
-    except ValidationError:
-        return True
-    return False
-
-
 def _is_schema_error(exc: BaseException) -> bool:
     """判断异常是否为 JSON Schema 不兼容导致的错误。
 
@@ -504,24 +503,3 @@ def _is_schema_error(exc: BaseException) -> bool:
     # 代理可能把上游 schema 错误包装成非 400 状态码
     error_str = str(exc)
     return any(kw in error_str for kw in _SCHEMA_ERROR_KEYWORDS)
-
-
-async def _instructor_fallback(
-    client: AsyncOpenAI,
-    model: str,
-    request: TextGenerationRequest,
-    messages: list[dict],
-    *,
-    provider: str = PROVIDER_OPENAI,
-) -> TextGenerationResult:
-    """Instructor 降级：当原生 response_format 不可用时的备选路径。"""
-    from lib.text_backends.instructor_support import instructor_fallback_async
-
-    return await instructor_fallback_async(
-        client=client,
-        model=model,
-        messages=messages,
-        response_schema=request.response_schema,
-        provider=provider,
-        max_tokens=request.max_output_tokens,
-    )

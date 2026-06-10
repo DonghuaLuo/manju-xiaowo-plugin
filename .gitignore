@@ -28,3 +28,7 @@ backend/compile/
 !/backend/tests/test_openai_text_backend.py
 !/backend/tests/test_text_backend_factory.py
 !/backend/tests/test_script_splitting_mvp.py
+!/backend/tests/test_text_backends/
+/backend/tests/test_text_backends/*
+!/backend/tests/test_text_backends/test_ark.py
+!/backend/tests/test_text_backends/test_factory.py

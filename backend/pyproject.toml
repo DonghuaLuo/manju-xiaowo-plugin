@@ -12,6 +12,7 @@ dependencies = [
     "google-genai>=1.65.0",
     "Pillow>=12.1.1",
     "pydantic>=2.12.5",
+    "jsonschema>=4.26.0",
     "PyYAML>=6.0.3",
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.22",

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import contextlib
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -24,14 +25,28 @@ async def _make_session():
     return factory, engine
 
 
-def test_runtime_custom_text_endpoint_upgrades_stale_gpt5_chat_endpoint():
-    assert _runtime_custom_text_endpoint("openai-chat", "gpt-5.5") == "openai-responses"
+def _make_mock_resolver(**async_methods):
+    mock = MagicMock()
+    for name, return_value in async_methods.items():
+        setattr(mock, name, AsyncMock(return_value=return_value))
+
+    @contextlib.asynccontextmanager
+    async def _session():
+        yield mock
+
+    mock.session = _session
+    return mock
+
+
+def test_runtime_custom_text_endpoint_keeps_saved_endpoint():
+    assert _runtime_custom_text_endpoint("openai-chat", "gpt-5.5") == "openai-chat"
+    assert _runtime_custom_text_endpoint("openai-responses", "gpt-5.5") == "openai-responses"
     assert _runtime_custom_text_endpoint("openai-chat", "gpt-4o") == "openai-chat"
 
 
 @pytest.mark.asyncio
-async def test_custom_gpt5_saved_as_openai_chat_routes_to_responses(monkeypatch):
-    """旧自定义供应商模型无需重新发现，也应避开 /v1/chat/completions 慢路径。"""
+async def test_custom_gpt5_saved_as_openai_chat_keeps_chat_endpoint(monkeypatch):
+    """自定义供应商必须尊重用户保存的 endpoint，不能按模型名偷换 Responses。"""
 
     factory, engine = await _make_session()
     try:
@@ -63,20 +78,44 @@ async def test_custom_gpt5_saved_as_openai_chat_routes_to_responses(monkeypatch)
             patch("lib.custom_provider.endpoints.OpenAIResponsesTextBackend") as mock_responses,
             patch("lib.custom_provider.endpoints.OpenAITextBackend") as mock_chat,
         ):
-            mock_responses.return_value.capabilities = set()
+            mock_chat.return_value.capabilities = set()
 
             backend = await create_text_backend_for_task(TextTaskType.SCRIPT)
 
         assert isinstance(backend, CustomTextBackend)
-        mock_responses.assert_called_once_with(
+        mock_chat.assert_called_once_with(
             api_key="sk-test",
             base_url="https://sub2api.example.com/v1",
             model="gpt-5.5",
             provider_name=provider_runtime_id,
-            send_max_output_tokens=False,
-            use_input_item_list=True,
-            stream_response=True,
+            prefer_native_structured_output=False,
         )
-        mock_chat.assert_not_called()
+        mock_responses.assert_not_called()
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dashscope_text_backend_disables_native_structured_output():
+    """DashScope 复用 OpenAI-compatible 后端，但不能继续宣称原生 strict json_schema。"""
+
+    resolver = _make_mock_resolver(
+        text_backend_for_task=("dashscope", "qwen-plus"),
+        provider_config={"api_key": "dash-key", "base_url": "https://dashscope.aliyuncs.com/api/v1"},
+    )
+
+    with (
+        patch("lib.text_backends.factory.ConfigResolver", return_value=resolver),
+        patch("lib.text_backends.factory.create_backend") as mock_create,
+    ):
+        mock_create.return_value = MagicMock()
+        await create_text_backend_for_task(TextTaskType.SCRIPT)
+
+    mock_create.assert_called_once_with(
+        "openai",
+        api_key="dash-key",
+        model="qwen-plus",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        provider_name="dashscope",
+        prefer_native_structured_output=False,
+    )

@@ -9,6 +9,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from jsonschema import SchemaError
+from jsonschema import ValidationError as JsonSchemaValidationError
+from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -52,6 +55,30 @@ def _format_validation_error(exc: ValidationError, *, limit: int = 3) -> str:
     return "; ".join(parts)
 
 
+def _format_json_schema_validation_errors(errors: list[JsonSchemaValidationError], *, limit: int = 3) -> str:
+    parts: list[str] = []
+    for err in errors[:limit]:
+        loc = ".".join(str(part) for part in err.absolute_path)
+        msg = err.message
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    if len(errors) > limit:
+        parts.append(f"... 另有 {len(errors) - limit} 个错误")
+    return "; ".join(parts)
+
+
+def _validate_json_schema_dict(data: Any, schema: dict) -> str | None:
+    try:
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
+        validator = validator_cls(schema)
+        errors = sorted(validator.iter_errors(data), key=lambda err: list(err.absolute_path))
+    except SchemaError as exc:
+        return f"传入的 JSON Schema 无效: {exc.message}"
+    if errors:
+        return f"模型返回 JSON 但不符合 schema: {_format_json_schema_validation_errors(errors)}"
+    return None
+
+
 def structured_output_error(text: str, schema: dict | type | None) -> str | None:
     """Return an error string when a structured text result is empty, non-JSON or schema-invalid."""
     if schema is None:
@@ -67,6 +94,8 @@ def structured_output_error(text: str, schema: dict | type | None) -> str | None
             schema.model_validate(data)
         except ValidationError as exc:
             return f"模型返回 JSON 但不符合 schema: {_format_validation_error(exc)}"
+    if isinstance(schema, dict):
+        return _validate_json_schema_dict(data, schema)
     return None
 
 
@@ -77,22 +106,9 @@ def ensure_structured_output(
     provider: str,
     model: str,
 ) -> None:
-    if schema is None:
-        return
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError(f"{provider}/{model} 结构化输出无效：模型返回空内容，无法解析为结构化输出")
-    try:
-        data = json.loads(text)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{provider}/{model} 结构化输出无效：模型返回非 JSON 内容: {exc}") from exc
-    if isinstance(schema, type) and issubclass(schema, BaseModel):
-        try:
-            schema.model_validate(data)
-        except ValidationError as exc:
-            raise ValueError(
-                f"{provider}/{model} 结构化输出无效：模型返回 JSON 但不符合 schema: "
-                f"{_format_validation_error(exc)}"
-            ) from exc
+    error = structured_output_error(text, schema)
+    if error:
+        raise ValueError(f"{provider}/{model} 结构化输出无效：{error}")
 
 
 class TextCapability(StrEnum):

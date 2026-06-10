@@ -162,9 +162,9 @@ class TestInferEndpoint:
         "model_id,discovery_format,expected",
         [
             ("gpt-4o", "openai", "openai-chat"),
-            ("gpt-5.5", "openai", "openai-responses"),
-            ("gpt5.5", "openai", "openai-responses"),
-            ("openai/gpt-5.4-mini", "openai", "openai-responses"),
+            ("gpt-5.5", "openai", "openai-chat"),
+            ("gpt5.5", "openai", "openai-chat"),
+            ("openai/gpt-5.4-mini", "openai", "openai-chat"),
             ("gemini-2.5-flash", "google", "gemini-generate"),
             ("gemini-2.5-flash", "openai", "gemini-generate"),  # content-first: 中转站里原生 Gemini 走 Google 端点
             ("claude-sonnet-4.5", "openai", "openai-chat"),

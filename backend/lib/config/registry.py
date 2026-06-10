@@ -374,7 +374,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "doubao-seed-1-8-251228": ModelInfo(
                 display_name="豆包 Seed 1.8",
                 media_type="text",
-                capabilities=["text_generation", "structured_output", "vision"],
+                capabilities=["text_generation", "vision"],
 
                 pricing=_ark_text_pricing("doubao-seed-1-8-251228", 0.80, 2.00),),
             # --- image ---
@@ -808,38 +808,38 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "qwen-plus": ModelInfo(
                 display_name="Qwen Plus",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 default=True,
                 pricing=_dashscope_text_pricing("qwen-plus", 0.8, 2.0),
             ),
             "qwen3.6-plus": ModelInfo(
                 display_name="Qwen3.6 Plus",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 pricing=_dashscope_text_pricing("qwen3.6-plus", 2.0, 12.0),
             ),
             "qwen3-max": ModelInfo(
                 display_name="Qwen3 Max",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 pricing=_dashscope_text_pricing("qwen3-max", 2.5, 10.0),
             ),
             "qwen3.7-max": ModelInfo(
                 display_name="Qwen3.7 Max",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 pricing=_dashscope_text_pricing("qwen3.7-max", 12.0, 36.0),
             ),
             "qwen3.6-flash": ModelInfo(
                 display_name="Qwen3.6 Flash",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 pricing=_dashscope_text_pricing("qwen3.6-flash", 1.2, 7.2),
             ),
             "qwen-long": ModelInfo(
                 display_name="Qwen Long",
                 media_type="text",
-                capabilities=["text_generation", "structured_output"],
+                capabilities=["text_generation"],
                 pricing=_dashscope_text_pricing("qwen-long", 0.5, 2.0),
             ),
             "qwen-image-2.0": ModelInfo(

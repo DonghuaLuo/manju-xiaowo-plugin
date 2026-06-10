@@ -36,6 +36,16 @@ class TestInferEndpointSmoke:
         assert infer_endpoint("gemini-3-flash", "google") == "gemini-generate"
 
 
+def test_unproven_json_schema_text_models_do_not_advertise_structured_output():
+    """DashScope/Ark 当前证据不足，不能进入 strict schema 文本生成候选。"""
+    from lib.config.registry import PROVIDER_REGISTRY
+
+    for provider_id in ("dashscope", "ark"):
+        for model_id, model in PROVIDER_REGISTRY[provider_id].models.items():
+            if model.media_type == "text":
+                assert "structured_output" not in model.capabilities, f"{provider_id}/{model_id}"
+
+
 # ---------------------------------------------------------------------------
 # discover_models — OpenAI format
 # ---------------------------------------------------------------------------
@@ -98,8 +108,8 @@ class TestDiscoverModelsOpenAI:
 
         # 按 id 排序: dall-e-4, gpt-5.4, gpt-5.4-mini, gpt-image-2
         # openai-images: dall-e-4 (default), gpt-image-2
-        # openai-responses: gpt-5.4 (default), gpt-5.4-mini
-        text_models = [m for m in result if m["endpoint"] == "openai-responses"]
+        # openai-chat: gpt-5.4 (default), gpt-5.4-mini
+        text_models = [m for m in result if m["endpoint"] == "openai-chat"]
         image_models = [m for m in result if m["endpoint"] == "openai-images"]
 
         assert text_models[0]["is_default"] is True
