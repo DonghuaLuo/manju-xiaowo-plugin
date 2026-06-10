@@ -3,6 +3,7 @@
     "arcreel-sync-guide.md",
     "backend/projects",
     "backend/tests",
-    "backend/logs"
+    "backend/logs",
+    "docs"
   ]
 }
