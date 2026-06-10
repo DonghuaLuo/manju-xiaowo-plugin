@@ -17,6 +17,7 @@ from .base import (
     TextCapability,
     TextGenerationRequest,
     TextGenerationResult,
+    ensure_structured_output,
     warn_if_truncated,
 )
 
@@ -178,6 +179,12 @@ class GeminiTextBackend:
                 output_tokens=output_tokens,
             )
 
+        ensure_structured_output(
+            text,
+            request.response_schema,
+            provider=PROVIDER_GEMINI,
+            model=self._model,
+        )
         return TextGenerationResult(
             text=text,
             provider=PROVIDER_GEMINI,

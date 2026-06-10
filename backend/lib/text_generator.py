@@ -13,6 +13,7 @@ from lib.text_backends.base import (
     TextGenerationRequest,
     TextGenerationResult,
     TextTaskType,
+    ensure_structured_output,
 )
 from lib.text_backends.factory import create_text_backend_for_task
 from lib.usage_tracker import UsageTracker
@@ -61,6 +62,12 @@ class TextGenerator:
         )
         try:
             result = await self.backend.generate(request)
+            ensure_structured_output(
+                result.text,
+                request.response_schema,
+                provider=result.provider,
+                model=result.model,
+            )
             await self.usage_tracker.finish_call(
                 call_id,
                 status="success",

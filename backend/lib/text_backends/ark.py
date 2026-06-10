@@ -15,6 +15,7 @@ from lib.text_backends.base import (
     TextCapability,
     TextGenerationRequest,
     TextGenerationResult,
+    structured_output_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,11 @@ class ArkTextBackend:
             logger.info("调用 %s 文本 SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
             try:
                 response = await asyncio.to_thread(self._client.chat.completions.create, **kwargs)
-                return self._parse_chat_response(response)
+                result = self._parse_chat_response(response)
+                if error := structured_output_error(result.text, request.response_schema):
+                    logger.warning("原生 response_format 返回无效结构化内容（%s），降级到 Instructor/json_object 路径", error)
+                    return await self._structured_fallback(request, messages)
+                return result
             except Exception as exc:
                 logger.warning("原生 response_format 失败 (%s)，降级到 Instructor/json_object 路径", exc)
 

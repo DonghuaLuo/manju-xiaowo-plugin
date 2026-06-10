@@ -43,6 +43,7 @@ SCRIPT_MAX_OUTPUT_TOKENS = 32000
 # 集号前缀正则：仅匹配 `E{数字}` + 紧随 S/U（segment/scene 用 S，video_unit 用 U），
 # 保留后缀（如 `E1S03_2` → `E2S03_2`）。设计契约见 lib/script_models.py。
 _EID_PREFIX_RE = re.compile(r"^E\d+(?=[SU])")
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 # 质量探针阈值：仅捕极端短样本，正常完整描述应远超这些值。
 _QUALITY_PROBE_SCENE_MIN_LEN = 40
@@ -71,6 +72,96 @@ _ASSET_REF_BUCKETS = {
     "prop": "props",
     "props": "props",
 }
+_STEP1_HEADER_ALIASES = {
+    "场景id": "scene_id",
+    "场景编号": "scene_id",
+    "分镜id": "scene_id",
+    "分镜编号": "scene_id",
+    "镜头id": "scene_id",
+    "镜头编号": "scene_id",
+    "片段id": "segment_id",
+    "片段编号": "segment_id",
+    "片段": "segment_id",
+    "单元id": "unit_id",
+    "单元编号": "unit_id",
+    "视频单元id": "unit_id",
+    "时长": "duration_seconds",
+    "总时长": "duration_seconds",
+    "duration": "duration_seconds",
+    "segmentbreak": "segment_break",
+}
+
+
+def _normalize_episode_prefix_no_log(rid: object, ep: int) -> object:
+    if not isinstance(rid, str):
+        return rid
+    return _EID_PREFIX_RE.sub(f"E{ep}", rid)
+
+
+def _response_excerpt(text: str, limit: int = 240) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) > limit:
+        return compact[:limit] + "..."
+    return compact
+
+
+def _format_pydantic_error(exc: ValidationError, limit: int = 5) -> str:
+    parts: list[str] = []
+    for err in exc.errors()[:limit]:
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    if len(exc.errors()) > limit:
+        parts.append(f"... 另有 {len(exc.errors()) - limit} 个错误")
+    return "; ".join(parts)
+
+
+def _json_payload_candidates(response_text: str) -> list[str]:
+    stripped = str(response_text or "").strip()
+    candidates: list[str] = []
+    if stripped:
+        candidates.append(stripped)
+    for match in _JSON_FENCE_RE.finditer(stripped):
+        body = match.group(1).strip()
+        if body and body not in candidates:
+            candidates.append(body)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if 0 <= start < end:
+        body = stripped[start : end + 1].strip()
+        if body and body not in candidates:
+            candidates.append(body)
+    return candidates
+
+
+def _canonical_step1_header(value: str) -> str:
+    normalized = _normalize_step1_header(value)
+    return _STEP1_HEADER_ALIASES.get(normalized, normalized)
+
+
+def _extract_step1_ids(markdown: str, id_field: str, episode: int) -> list[str]:
+    header: list[str] | None = None
+    id_index = -1
+    ids: list[str] = []
+    for line in markdown.splitlines():
+        cells = _split_markdown_row(line)
+        if not cells:
+            continue
+        if header is None:
+            normalized = [_canonical_step1_header(cell) for cell in cells]
+            if id_field not in normalized:
+                continue
+            header = normalized
+            id_index = header.index(id_field)
+            continue
+        if _is_markdown_separator(cells):
+            continue
+        if id_index >= len(cells):
+            continue
+        item_id = _strip_markdown_cell(cells[id_index])
+        if item_id:
+            ids.append(str(_normalize_episode_prefix_no_log(item_id, episode)))
+    return ids
 
 
 def _rewrite_episode_prefix(rid: object, ep: int) -> object:
@@ -395,6 +486,7 @@ class ScriptGenerator:
 
         # 6. 补充元数据
         script_data = self._add_metadata(script_data, episode)
+        self._validate_step1_alignment(script_data, step1_md, episode)
 
         # 7. 经写盘统一入口保存，继承结构校验、元数据同步、锁与路径围栏。
         filename = self._resolve_output_filename(output_path, episode)
@@ -668,21 +760,22 @@ class ScriptGenerator:
         Returns:
             验证后的剧本数据字典
         """
-        # 清理可能的 markdown 包装
-        text = response_text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        # 解析 JSON
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"JSON 解析失败: {e}")
+        # 解析 JSON。兼容部分代理把 JSON 包进 fenced code block 或前后附加说明文字。
+        parse_error: json.JSONDecodeError | None = None
+        data = None
+        for text in _json_payload_candidates(response_text):
+            try:
+                data = json.loads(text)
+                break
+            except json.JSONDecodeError as e:
+                parse_error = e
+        if data is None:
+            if not str(response_text or "").strip():
+                raise ValueError("JSON 解析失败: 模型返回空内容")
+            detail = f": {parse_error}" if parse_error else ""
+            raise ValueError(f"JSON 解析失败{detail}; 返回片段: {_response_excerpt(response_text)}")
+        if not isinstance(data, dict):
+            raise ValueError(f"JSON 解析失败: 顶层必须是对象，实际为 {type(data).__name__}")
 
         # Pydantic 验证
         try:
@@ -694,9 +787,46 @@ class ScriptGenerator:
                 validated = DramaEpisodeScript.model_validate(data)
             return validated.model_dump()
         except ValidationError as e:
-            logger.warning("数据验证警告: %s", e)
-            # 返回原始数据，允许部分不符合 schema
-            return data
+            raise ValueError(f"剧本结构校验失败: {_format_pydantic_error(e)}") from e
+
+    def _validate_step1_alignment(self, script_data: dict, step1_md: str, episode: int) -> None:
+        gen_mode = self._effective_generation_mode(episode)
+        if gen_mode == "reference_video":
+            items_key = "video_units"
+            id_field = "unit_id"
+        elif self.content_mode == "narration":
+            items_key = "segments"
+            id_field = "segment_id"
+        else:
+            items_key = "scenes"
+            id_field = "scene_id"
+
+        expected_ids = _extract_step1_ids(step1_md, id_field, episode)
+        if not expected_ids:
+            return
+
+        items = script_data.get(items_key)
+        if not isinstance(items, list):
+            raise ValueError(f"剧本结构校验失败: 缺少 {items_key} 列表")
+        actual_ids = [
+            str(_normalize_episode_prefix_no_log(item.get(id_field), episode))
+            for item in items
+            if isinstance(item, dict) and item.get(id_field)
+        ]
+        if actual_ids == expected_ids:
+            return
+
+        missing = [item_id for item_id in expected_ids if item_id not in actual_ids]
+        extra = [item_id for item_id in actual_ids if item_id not in expected_ids]
+        if len(actual_ids) != len(expected_ids):
+            raise ValueError(
+                f"剧本条目数与 Step 1 不一致: Step 1 有 {len(expected_ids)} 条，"
+                f"模型输出 {len(actual_ids)} 条；缺失={missing[:8]}，多余={extra[:8]}"
+            )
+        raise ValueError(
+            "剧本条目顺序/ID 与 Step 1 不一致，拒绝写入以避免分镜偏移；"
+            f"Step 1 前几项={expected_ids[:8]}，模型输出前几项={actual_ids[:8]}"
+        )
 
     def _add_metadata(self, script_data: dict, episode: int) -> dict:
         """

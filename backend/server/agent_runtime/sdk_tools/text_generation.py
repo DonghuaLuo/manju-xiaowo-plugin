@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,169 @@ from server.services.generation_route_resolver import GenerationRoute, resolve_g
 logger = logging.getLogger(__name__)
 
 _FALLBACK_SUPPORTED_DURATIONS: list[int] = [4, 6, 8]
+_MARKDOWN_FENCE_RE = re.compile(r"^\s*```(?:markdown|md)?\s*(.*?)\s*```\s*$", re.IGNORECASE | re.DOTALL)
+_STEP1_ID_RE = re.compile(r"^E(?P<episode>\d+)S\d+(?:_\d+)?$")
+_STEP1_EMPTY_VALUES = {"", "-", "无", "none", "null"}
+_STEP1_HEADER_ALIASES = {
+    "场景id": "scene_id",
+    "场景编号": "scene_id",
+    "分镜id": "scene_id",
+    "分镜编号": "scene_id",
+    "镜头id": "scene_id",
+    "镜头编号": "scene_id",
+    "场景描述": "scene_description",
+    "分镜描述": "scene_description",
+    "镜头描述": "scene_description",
+    "描述": "scene_description",
+    "时长": "duration_seconds",
+    "duration": "duration_seconds",
+    "segmentbreak": "segment_break",
+}
+
+
+def _strip_markdown_fence(text: str) -> str:
+    stripped = str(text or "").strip()
+    match = _MARKDOWN_FENCE_RE.match(stripped)
+    return match.group(1).strip() if match else stripped
+
+
+def _split_markdown_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    cells = [cell.strip() for cell in stripped.split("|")]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
+
+
+def _is_markdown_separator(cells: list[str]) -> bool:
+    return bool(cells) and all(bool(re.fullmatch(r":?-{3,}:?", cell.strip())) for cell in cells)
+
+
+def _canonical_step1_header(cell: str) -> str:
+    normalized = str(cell or "").strip().strip("`").lower().replace(" ", "")
+    return _STEP1_HEADER_ALIASES.get(normalized, normalized)
+
+
+def _profile_output_fields(profile: dict[str, Any]) -> list[str]:
+    fields = [str(field) for field in profile.get("output_fields") or [] if str(field).strip()]
+    return fields or ["scene_id", "scene_description", "duration_seconds", "segment_break"]
+
+
+def _validate_normalized_drama_step1(
+    markdown: str,
+    *,
+    episode: int,
+    script_profile: dict[str, Any],
+    supported_durations: list[int],
+) -> int:
+    if not markdown.strip():
+        raise ValueError("normalize_drama_script 返回空内容，拒绝写入 Step 1")
+
+    header: list[str] | None = None
+    rows: list[dict[str, str]] = []
+    for line in markdown.splitlines():
+        cells = _split_markdown_row(line)
+        if not cells:
+            continue
+        if header is None:
+            normalized = [_canonical_step1_header(cell) for cell in cells]
+            if "scene_id" not in normalized:
+                continue
+            header = normalized
+            continue
+        if _is_markdown_separator(cells):
+            continue
+        row = {field: cells[index].strip() if index < len(cells) else "" for index, field in enumerate(header)}
+        if any(value.strip() for value in row.values()):
+            rows.append(row)
+
+    if header is None:
+        raise ValueError("normalize_drama_script 未返回包含 scene_id/场景 ID 的 Markdown 表格")
+    missing_fields = [field for field in _profile_output_fields(script_profile) if field not in header]
+    if missing_fields:
+        raise ValueError(f"normalize_drama_script 返回表格缺少列: {', '.join(missing_fields)}")
+    if not rows:
+        raise ValueError("normalize_drama_script 返回表格没有任何场景行")
+
+    allowed_durations = {int(value) for value in supported_durations}
+    seen_ids: set[str] = set()
+    for index, row in enumerate(rows, start=1):
+        scene_id = row.get("scene_id", "").strip().strip("`")
+        match = _STEP1_ID_RE.fullmatch(scene_id)
+        if match is None:
+            raise ValueError(f"第 {index} 行 scene_id 无效: {scene_id!r}，应为 E{episode}S01 格式")
+        if int(match.group("episode")) != int(episode):
+            raise ValueError(f"第 {index} 行 scene_id 集号错误: {scene_id!r}，当前应为第 {episode} 集")
+        if scene_id in seen_ids:
+            raise ValueError(f"normalize_drama_script 返回重复 scene_id: {scene_id}")
+        seen_ids.add(scene_id)
+
+        raw_duration = row.get("duration_seconds", "").strip().lower().removesuffix("秒").removesuffix("s").strip()
+        if raw_duration:
+            try:
+                duration = int(raw_duration)
+            except ValueError as exc:
+                raise ValueError(f"第 {index} 行 duration_seconds 不是整数: {row.get('duration_seconds')!r}") from exc
+            if allowed_durations and duration not in allowed_durations:
+                raise ValueError(
+                    f"第 {index} 行 duration_seconds={duration} 不在模型支持集合 {sorted(allowed_durations)} 内"
+                )
+
+        segment_break = row.get("segment_break", "").strip().lower()
+        if segment_break not in _STEP1_EMPTY_VALUES | {"是", "否", "true", "false", "yes", "no", "y", "n"}:
+            raise ValueError(f"第 {index} 行 segment_break 值无效: {row.get('segment_break')!r}")
+
+    return len(rows)
+
+
+def _read_episode_source_text(project_path: Path, episode: int, source: Any) -> tuple[str, list[Path]]:
+    if source:
+        source_path = (project_path / str(source)).resolve()
+        if not source_path.is_relative_to(project_path.resolve()):
+            raise ValueError(f"路径超出项目目录: {source_path}")
+        if not source_path.exists():
+            raise FileNotFoundError(f"未找到源文件: {source_path}")
+        return source_path.read_text(encoding="utf-8"), [source_path]
+
+    source_dir = project_path / "source"
+    if not source_dir.exists() or not any(source_dir.iterdir()):
+        raise FileNotFoundError(f"source/ 目录为空或不存在: {source_dir}")
+
+    suffixes = (".txt", ".md", ".text")
+    episode_files = [
+        source_dir / f"episode_{episode}{suffix}"
+        for suffix in suffixes
+        if (source_dir / f"episode_{episode}{suffix}").is_file()
+    ]
+    files = episode_files or [path for path in sorted(source_dir.iterdir()) if path.suffix in suffixes]
+    return "\n\n".join(path.read_text(encoding="utf-8") for path in files), files
+
+
+def _project_for_drama_normalization(project: dict[str, Any]) -> dict[str, Any]:
+    project_for_prompt = dict(project)
+    project_for_prompt["content_mode"] = "drama"
+    snapshot = project_for_prompt.get("script_splitting")
+    profile = snapshot.get("resolved_profile") if isinstance(snapshot, dict) else None
+    if isinstance(profile, dict) and profile.get("content_mode") != "drama":
+        project_for_prompt.pop("script_splitting", None)
+        project_for_prompt.pop("script_splitting_template_id", None)
+    return project_for_prompt
+
+
+def _resolve_drama_script_profile(project_for_prompt: dict[str, Any]) -> dict[str, Any]:
+    try:
+        ensure_project_script_splitting_snapshot(project_for_prompt)
+    except ValueError as exc:
+        if "不能用于 drama 项目" not in str(exc):
+            raise
+        project_for_prompt.pop("script_splitting", None)
+        project_for_prompt.pop("script_splitting_template_id", None)
+        ensure_project_script_splitting_snapshot(project_for_prompt)
+    return current_profile(project_for_prompt)
 
 
 def _write_dry_run_prompt(project_path: Path, episode: int, name: str, prompt: str) -> Path:
@@ -323,46 +487,26 @@ def normalize_drama_script_tool(ctx: ToolContext):
             project_path = ctx.project_path
             project = ctx.pm.load_project(ctx.project_name)
 
-            if source:
-                source_path = (project_path / source).resolve()
-                if not source_path.is_relative_to(project_path.resolve()):
-                    return {
-                        "content": [{"type": "text", "text": f"❌ 路径超出项目目录: {source_path}"}],
-                        "is_error": True,
-                    }
-                if not source_path.exists():
-                    return {
-                        "content": [{"type": "text", "text": f"❌ 未找到源文件: {source_path}"}],
-                        "is_error": True,
-                    }
-                novel_text = source_path.read_text(encoding="utf-8")
-            else:
-                source_dir = project_path / "source"
-                if not source_dir.exists() or not any(source_dir.iterdir()):
-                    return {
-                        "content": [{"type": "text", "text": f"❌ source/ 目录为空或不存在: {source_dir}"}],
-                        "is_error": True,
-                    }
-                texts = [
-                    f.read_text(encoding="utf-8")
-                    for f in sorted(source_dir.iterdir())
-                    if f.suffix in (".txt", ".md", ".text")
-                ]
-                novel_text = "\n\n".join(texts)
+            try:
+                novel_text, source_files = _read_episode_source_text(project_path, episode, source)
+            except FileNotFoundError as exc:
+                return {"content": [{"type": "text", "text": f"❌ {exc}"}], "is_error": True}
+            except ValueError as exc:
+                return {"content": [{"type": "text", "text": f"❌ {exc}"}], "is_error": True}
 
             if not novel_text.strip():
                 return {"content": [{"type": "text", "text": "❌ 小说原文为空"}], "is_error": True}
 
-            default_duration, supported_durations = await _fetch_caps_with_fallback(project)
-            ensure_project_script_splitting_snapshot(project)
-            script_profile = current_profile(project)
+            project_for_prompt = _project_for_drama_normalization(project)
+            default_duration, supported_durations = await _fetch_caps_with_fallback(project_for_prompt)
+            script_profile = _resolve_drama_script_profile(project_for_prompt)
             prompt = build_normalize_prompt(
                 novel_text=novel_text,
-                project_overview=project.get("overview", {}),
-                style=project.get("style", ""),
-                characters=project.get("characters", {}),
-                scenes=project.get("scenes", {}),
-                props=project.get("props", {}),
+                project_overview=project_for_prompt.get("overview", {}),
+                style=project_for_prompt.get("style", ""),
+                characters=project_for_prompt.get("characters", {}),
+                scenes=project_for_prompt.get("scenes", {}),
+                props=project_for_prompt.get("props", {}),
                 default_duration=default_duration,
                 supported_durations=supported_durations,
                 episode=episode,
@@ -378,7 +522,13 @@ def normalize_drama_script_tool(ctx: ToolContext):
                 TextGenerationRequest(prompt=prompt, max_output_tokens=16000),
                 project_name=ctx.project_name,
             )
-            response = result.text
+            response = _strip_markdown_fence(result.text)
+            scene_count = _validate_normalized_drama_step1(
+                response,
+                episode=episode,
+                script_profile=script_profile,
+                supported_durations=supported_durations,
+            )
 
             drafts_dir = project_path / "drafts" / f"episode_{episode}"
             drafts_dir.mkdir(parents=True, exist_ok=True)
@@ -390,16 +540,16 @@ def normalize_drama_script_tool(ctx: ToolContext):
             )
             step1_path.write_text(step1_content, encoding="utf-8")
 
-            scene_count = sum(
-                1
-                for line in step1_content.split("\n")
-                if line.strip().startswith("|") and "场景 ID" not in line and "---" not in line
-            )
+            source_summary = ", ".join(path.relative_to(project_path).as_posix() for path in source_files)
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"✅ 规范化剧本已保存: {step1_path}\n📊 生成统计: {scene_count} 个场景",
+                        "text": (
+                            f"✅ 规范化剧本已保存: {step1_path}\n"
+                            f"📄 源文件: {source_summary}\n"
+                            f"📊 生成统计: {scene_count} 个场景"
+                        ),
                     }
                 ]
             }

@@ -374,7 +374,11 @@ async def _create_streamed_response(client: AsyncOpenAI, kwargs: dict[str, Any])
             elif event_type == "response.completed":
                 final_response = _read_attr_or_key(event, "response")
                 if final_response is not None:
-                    return final_response
+                    if _extract_responses_text(final_response):
+                        return final_response
+                    accumulated_text = "".join(chunks)
+                    if accumulated_text:
+                        return _responses_text_fallback(final_response, accumulated_text)
             elif event_type == "response.failed":
                 response = _read_attr_or_key(event, "response")
                 error = _read_attr_or_key(response, "error")
@@ -388,12 +392,19 @@ async def _create_streamed_response(client: AsyncOpenAI, kwargs: dict[str, Any])
                 await result
 
     if final_response is not None:
+        accumulated_text = "".join(chunks)
+        if accumulated_text and not _extract_responses_text(final_response):
+            return _responses_text_fallback(final_response, accumulated_text)
         return final_response
+    return _responses_text_fallback(None, "".join(chunks))
+
+
+def _responses_text_fallback(response: Any | None, text: str) -> dict[str, Any]:
     return {
-        "output_text": "".join(chunks),
-        "usage": None,
-        "status": "completed",
-        "incomplete_details": None,
+        "output_text": text,
+        "usage": _read_attr_or_key(response, "usage"),
+        "status": _read_attr_or_key(response, "status") or "completed",
+        "incomplete_details": _read_attr_or_key(response, "incomplete_details"),
     }
 
 

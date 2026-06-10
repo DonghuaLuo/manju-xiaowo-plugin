@@ -97,7 +97,7 @@ class GrokTextBackend:
 
                 DynamicModel = _schema_to_pydantic(resolve_schema(request.response_schema))
             response, parsed = await chat.parse(DynamicModel)
-            text = response.content if hasattr(response, "content") else parsed.model_dump_json()
+            text = parsed.model_dump_json()
         else:
             response = await chat.sample()
             text = response.content if hasattr(response, "content") else str(response)

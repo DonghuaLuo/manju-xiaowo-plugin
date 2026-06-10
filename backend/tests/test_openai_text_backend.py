@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from openai import BadRequestError
 from PIL import Image
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from lib.text_backends.base import (
     TextCapability,
     TextGenerationRequest,
     TextGenerationResult,
+    ensure_structured_output,
 )
 
 
@@ -69,6 +71,19 @@ class _FakeAsyncStream:
 
     async def close(self):
         self.closed = True
+
+
+def test_ensure_structured_output_wraps_pydantic_schema_mismatch():
+    class ResponseModel(BaseModel):
+        key: str
+
+    with pytest.raises(ValueError, match="custom-42/gpt-5.5 结构化输出无效"):
+        ensure_structured_output(
+            '{"wrong": "field"}',
+            ResponseModel,
+            provider="custom-42",
+            model="gpt-5.5",
+        )
 
 
 class TestOpenAITextBackend:
@@ -288,6 +303,42 @@ class TestOpenAIResponsesTextBackend:
         ]
         assert call_kwargs["instructions"] == DEFAULT_RESPONSES_INSTRUCTIONS
         assert "max_output_tokens" not in call_kwargs
+        assert stream.closed is True
+
+    async def test_custom_responses_stream_keeps_delta_when_completed_response_has_no_text(self):
+        usage = SimpleNamespace(input_tokens=15, output_tokens=8)
+        final_response = SimpleNamespace(output=[], usage=usage, status="completed", incomplete_details=None)
+        stream = _FakeAsyncStream(
+            [
+                SimpleNamespace(type="response.output_text.delta", delta='{"ok": '),
+                SimpleNamespace(type="response.output_text.delta", delta="true}"),
+                SimpleNamespace(type="response.completed", response=final_response),
+            ]
+        )
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock(return_value=stream)
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(
+                api_key="test-key",
+                model="gpt-5.5",
+                provider_name="custom-42",
+                send_max_output_tokens=False,
+                use_input_item_list=True,
+                stream_response=True,
+            )
+            result = await backend.generate(
+                TextGenerationRequest(
+                    prompt="Return JSON",
+                    response_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+                )
+            )
+
+        assert result.text == '{"ok": true}'
+        assert result.input_tokens == 15
+        assert result.output_tokens == 8
         assert stream.closed is True
 
     async def test_generate_structured_output_uses_responses_text_format(self):
@@ -526,8 +577,6 @@ class TestInstructorFallback:
         """没有 response_schema 时，BadRequestError 应原样抛出，不做降级。"""
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=_make_bad_request_error())
-
-        import pytest
 
         with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import OpenAITextBackend

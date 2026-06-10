@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -38,6 +39,60 @@ def warn_if_truncated(
         )
         return True
     return False
+
+
+def _format_validation_error(exc: ValidationError, *, limit: int = 3) -> str:
+    parts: list[str] = []
+    for err in exc.errors()[:limit]:
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    if len(exc.errors()) > limit:
+        parts.append(f"... 另有 {len(exc.errors()) - limit} 个错误")
+    return "; ".join(parts)
+
+
+def structured_output_error(text: str, schema: dict | type | None) -> str | None:
+    """Return an error string when a structured text result is empty, non-JSON or schema-invalid."""
+    if schema is None:
+        return None
+    if not isinstance(text, str) or not text.strip():
+        return "模型返回空内容，无法解析为结构化输出"
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        return f"模型返回非 JSON 内容: {exc}"
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        try:
+            schema.model_validate(data)
+        except ValidationError as exc:
+            return f"模型返回 JSON 但不符合 schema: {_format_validation_error(exc)}"
+    return None
+
+
+def ensure_structured_output(
+    text: str,
+    schema: dict | type | None,
+    *,
+    provider: str,
+    model: str,
+) -> None:
+    if schema is None:
+        return
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError(f"{provider}/{model} 结构化输出无效：模型返回空内容，无法解析为结构化输出")
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{provider}/{model} 结构化输出无效：模型返回非 JSON 内容: {exc}") from exc
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        try:
+            schema.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(
+                f"{provider}/{model} 结构化输出无效：模型返回 JSON 但不符合 schema: "
+                f"{_format_validation_error(exc)}"
+            ) from exc
 
 
 class TextCapability(StrEnum):
