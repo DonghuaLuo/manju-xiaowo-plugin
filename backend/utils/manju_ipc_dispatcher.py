@@ -120,6 +120,7 @@ _COMMAND_ENDPOINTS: dict[str, tuple[str, str]] = {
     "manju_api_preview_generation_routes": ("server.routers.generate", "preview_generation_routes"),
     "manju_api_preview_script_splitting_template_change": ("server.routers.projects", "preview_script_splitting_template_change"),
     "manju_api_preview_storyboard_reference_usage": ("server.routers.generate", "preview_storyboard_references"),
+    "manju_api_probe_text_structured_output": ("server.routers.providers", "probe_text_structured_output"),
     "manju_api_regenerate_grid": ("server.routers.grids", "regenerate_grid"),
     "manju_api_reorder_reference_video_units": ("server.routers.reference_videos", "reorder_units"),
     "manju_api_replace_asset_image": ("server.routers.assets", "replace_image"),

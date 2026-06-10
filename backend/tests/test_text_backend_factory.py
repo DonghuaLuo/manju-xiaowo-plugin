@@ -88,7 +88,7 @@ async def test_custom_gpt5_saved_as_openai_chat_keeps_chat_endpoint(monkeypatch)
             base_url="https://sub2api.example.com/v1",
             model="gpt-5.5",
             provider_name=provider_runtime_id,
-            prefer_native_structured_output=False,
+            prefer_native_structured_output=True,
         )
         mock_responses.assert_not_called()
     finally:

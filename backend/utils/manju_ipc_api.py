@@ -120,6 +120,7 @@ MANJU_API_COMMANDS = (
     "manju_api_preview_generation_routes",
     "manju_api_preview_script_splitting_template_change",
     "manju_api_preview_storyboard_reference_usage",
+    "manju_api_probe_text_structured_output",
     "manju_api_read_local_file",
     "manju_api_regenerate_grid",
     "manju_api_reorder_reference_video_units",

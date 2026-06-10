@@ -71,9 +71,9 @@ def _build_openai_chat(provider, model_id: str) -> CustomTextBackend:
         base_url=base_url,
         model=model_id,
         provider_name=provider.provider_id,
-        prefer_native_structured_output=False,
+        prefer_native_structured_output=True,
     )
-    return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+    return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id, endpoint="openai-chat")
 
 
 def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
@@ -90,13 +90,23 @@ def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
         stream_response=True,
         prefer_native_structured_output=False,
     )
-    return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+    return CustomTextBackend(
+        provider_id=provider.provider_id,
+        delegate=delegate,
+        model=model_id,
+        endpoint="openai-responses",
+    )
 
 
 def _build_gemini_generate(provider, model_id: str) -> CustomTextBackend:
     base_url = ensure_google_base_url(provider.base_url) or None
     delegate = GeminiTextBackend(api_key=provider.api_key, base_url=base_url, model=model_id)
-    return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
+    return CustomTextBackend(
+        provider_id=provider.provider_id,
+        delegate=delegate,
+        model=model_id,
+        endpoint="gemini-generate",
+    )
 
 
 def _build_openai_images(provider, model_id: str) -> CustomImageBackend:

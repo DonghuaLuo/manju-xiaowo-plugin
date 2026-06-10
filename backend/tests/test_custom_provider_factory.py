@@ -30,7 +30,7 @@ class TestEndpointDispatch:
             base_url="https://api.example.com/v1",
             model="gpt-4o",
             provider_name="custom-42",
-            prefer_native_structured_output=False,
+            prefer_native_structured_output=True,
         )
 
     @patch("lib.custom_provider.endpoints.OpenAIResponsesTextBackend")
@@ -154,7 +154,7 @@ class TestUrlNormalization:
             base_url="https://api.example.com/v1",
             model="gpt-4o",
             provider_name="custom-42",
-            prefer_native_structured_output=False,
+            prefer_native_structured_output=True,
         )
 
     @patch("lib.custom_provider.endpoints.GeminiTextBackend")

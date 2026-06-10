@@ -92,3 +92,15 @@ class TextGenerator:
             if friendly_error != str(e):
                 raise RuntimeError(friendly_error) from e
             raise
+
+    async def probe_structured_output(self):
+        """Run a tiny strict schema request against the resolved backend."""
+        from lib.text_backends.structured_probe import probe_text_structured_output_backend
+
+        return await probe_text_structured_output_backend(self.backend)
+
+    async def ensure_structured_output_ready(self):
+        """Raise a concise capability error when strict schema output is unavailable."""
+        from lib.text_backends.structured_probe import ensure_text_structured_output_ready
+
+        return await ensure_text_structured_output_ready(self.backend)

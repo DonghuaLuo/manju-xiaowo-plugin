@@ -29,6 +29,7 @@ from lib.db.base import dt_to_iso
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.gemini_shared import VERTEX_SCOPES
 from lib.i18n import Translator
+from lib.text_backends.base import TextTaskType
 from lib.upload_utils import read_upload_bytes
 from server.dependencies import get_config_service
 
@@ -117,6 +118,25 @@ class ConnectionTestResponse(BaseModel):
     success: bool
     available_models: list[str]
     message: str
+
+
+class TextStructuredOutputProbeRequest(BaseModel):
+    task_type: TextTaskType = TextTaskType.SCRIPT
+    project_name: str | None = None
+
+
+class TextStructuredOutputProbeResponse(BaseModel):
+    ok: bool
+    status: str
+    provider: str
+    model: str
+    detail: str
+    capabilities: list[str]
+    endpoint: str | None = None
+    backend_type: str | None = None
+    delegate_type: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class CredentialResponse(BaseModel):
@@ -317,6 +337,17 @@ async def patch_provider_config(
     await _invalidate_caches(request)
 
     return Response(status_code=204)
+
+
+@router.post("/text/structured-output/probe", response_model=TextStructuredOutputProbeResponse)
+async def probe_text_structured_output(
+    body: TextStructuredOutputProbeRequest = TextStructuredOutputProbeRequest(),
+) -> TextStructuredOutputProbeResponse:
+    """Probe the currently selected text backend with a tiny strict JSON Schema request."""
+    from lib.text_backends.structured_probe import probe_text_structured_output_for_task
+
+    result = await probe_text_structured_output_for_task(body.task_type, body.project_name)
+    return TextStructuredOutputProbeResponse(**result.to_dict())
 
 
 # ---------------------------------------------------------------------------

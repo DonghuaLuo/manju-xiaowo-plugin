@@ -19,10 +19,11 @@ from lib.video_backends.base import (
 class CustomTextBackend:
     """自定义供应商文本生成后端包装类。"""
 
-    def __init__(self, *, provider_id: str, delegate: TextBackend, model: str) -> None:
+    def __init__(self, *, provider_id: str, delegate: TextBackend, model: str, endpoint: str | None = None) -> None:
         self._provider_id = provider_id
         self._delegate = delegate
         self._model = model
+        self._endpoint = endpoint
 
     @property
     def name(self) -> str:
@@ -35,6 +36,14 @@ class CustomTextBackend:
     @property
     def capabilities(self) -> set[TextCapability]:
         return self._delegate.capabilities
+
+    @property
+    def delegate_name(self) -> str:
+        return self._delegate.name
+
+    @property
+    def endpoint(self) -> str | None:
+        return self._endpoint
 
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
         return await self._delegate.generate(request)

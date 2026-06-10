@@ -468,9 +468,15 @@ class ScriptGenerator:
             )
             schema = DramaEpisodeScript
 
-        # 4. 调用 TextBackend
-        logger.info("正在生成第 %d 集剧本...", episode)
+        # 4. 生成剧本前先做真实 strict JSON Schema capability probe，避免完整 prompt
+        #    打出去后才发现 endpoint 没有执行原生 schema 约束。
         project_name = self.project_path.name
+        ensure_ready = getattr(self.generator, "ensure_structured_output_ready", None)
+        if callable(ensure_ready):
+            await ensure_ready()
+
+        # 5. 调用 TextBackend
+        logger.info("正在生成第 %d 集剧本...", episode)
         result = await self.generator.generate(
             TextGenerationRequest(
                 prompt=prompt,
@@ -481,14 +487,14 @@ class ScriptGenerator:
         )
         response_text = result.text
 
-        # 5. 解析并验证响应
+        # 6. 解析并验证响应
         script_data = self._parse_response(response_text, episode)
 
-        # 6. 补充元数据
+        # 7. 补充元数据
         script_data = self._add_metadata(script_data, episode)
         self._validate_step1_alignment(script_data, step1_md, episode)
 
-        # 7. 经写盘统一入口保存，继承结构校验、元数据同步、锁与路径围栏。
+        # 8. 经写盘统一入口保存，继承结构校验、元数据同步、锁与路径围栏。
         filename = self._resolve_output_filename(output_path, episode)
         pm = ProjectManager(str(self.project_path.parent))
         output_path = pm.save_script(self.project_path.name, script_data, filename, validate=True)

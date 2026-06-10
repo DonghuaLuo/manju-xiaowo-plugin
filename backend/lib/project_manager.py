@@ -2043,6 +2043,8 @@ class ProjectManager:
             f"{source_content}"
         )
 
+        await generator.ensure_structured_output_ready()
+
         result = await generator.generate(
             TextGenerationRequest(
                 prompt=prompt,
