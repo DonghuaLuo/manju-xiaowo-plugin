@@ -350,7 +350,9 @@ function MarkdownTable({
       </div>
 
       <div className="markdown-table-scroll">
-        {tableElement}
+        <div className="markdown-table-content">
+          {tableElement}
+        </div>
       </div>
 
       {fullscreenOpen
@@ -375,7 +377,9 @@ function MarkdownTable({
               </div>
               <div className="markdown-table-fullscreen-body">
                 <div className="markdown-table-scroll markdown-table-scroll-fullscreen">
-                  {tableElement}
+                  <div className="markdown-table-content">
+                    {tableElement}
+                  </div>
                 </div>
               </div>
             </div>,

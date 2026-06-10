@@ -511,14 +511,20 @@ body {
     max-width: 100%;
     overflow-x: scroll;
     overflow-y: hidden;
-    padding-inline-end: 14px;
-    scrollbar-gutter: stable both-edges;
     scrollbar-width: auto;
     scrollbar-color: oklch(0.74 0.055 285 / var(--scrollbar-opacity)) oklch(1 0 0 / 0.10);
     border-radius: 0 0 8px 8px;
     background: oklch(0.145 0.009 265 / 0.98);
     box-shadow: inset -18px 0 20px -22px var(--color-accent-glow);
     -webkit-overflow-scrolling: touch;
+}
+
+.markdown-table-content {
+    display: inline-block;
+    box-sizing: content-box;
+    min-width: 100%;
+    padding-inline-end: 14px;
+    vertical-align: top;
 }
 
 .markdown-table-scroll:hover,
