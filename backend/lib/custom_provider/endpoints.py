@@ -84,6 +84,8 @@ def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
         base_url=base_url,
         model=model_id,
         provider_name=provider.provider_id,
+        # sub2api 等中转的 Responses 兼容层会拒绝 max_output_tokens；官方 OpenAI 路径仍保留该参数。
+        send_max_output_tokens=False,
     )
     return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 

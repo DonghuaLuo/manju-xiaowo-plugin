@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-5.4-mini"
 
 OPENAI_RESPONSES_BACKEND = "openai-responses"
+DEFAULT_RESPONSES_INSTRUCTIONS = "Follow the user's instructions and produce the requested output."
 _RESPONSES_PREFERRED_MODEL_RE = r"(^|[/:\s_-])gpt[-_]?5(?:[.\s_-]|$)"
 
 
@@ -168,10 +169,12 @@ class OpenAIResponsesTextBackend:
         model: str | None = None,
         base_url: str | None = None,
         provider_name: str = PROVIDER_OPENAI,
+        send_max_output_tokens: bool = True,
     ):
         self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
         self._model = model or DEFAULT_MODEL
         self._provider_name = provider_name
+        self._send_max_output_tokens = send_max_output_tokens
         self._capabilities: set[TextCapability] = {
             TextCapability.TEXT_GENERATION,
             TextCapability.STRUCTURED_OUTPUT,
@@ -201,7 +204,12 @@ class OpenAIResponsesTextBackend:
         *,
         format_mode: str | None,
     ) -> TextGenerationResult:
-        kwargs = _build_responses_kwargs(self._model, request, format_mode=format_mode)
+        kwargs = _build_responses_kwargs(
+            self._model,
+            request,
+            format_mode=format_mode,
+            send_max_output_tokens=self._send_max_output_tokens,
+        )
         logger.info("调用 %s Responses SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
         try:
             response = await self._client.responses.create(**kwargs)
@@ -275,15 +283,15 @@ def _build_responses_kwargs(
     request: TextGenerationRequest,
     *,
     format_mode: str | None,
+    send_max_output_tokens: bool = True,
 ) -> dict:
     """将 TextGenerationRequest 转为 OpenAI Responses API kwargs。"""
     kwargs: dict[str, Any] = {
         "model": model,
         "input": _build_responses_input(request),
+        "instructions": _responses_instructions(request),
     }
-    if request.system_prompt:
-        kwargs["instructions"] = request.system_prompt
-    if request.max_output_tokens is not None:
+    if send_max_output_tokens and request.max_output_tokens is not None:
         kwargs["max_output_tokens"] = request.max_output_tokens
     if format_mode == "json_schema" and request.response_schema:
         kwargs["text"] = {
@@ -297,6 +305,12 @@ def _build_responses_kwargs(
     elif format_mode == "json_object":
         kwargs["text"] = {"format": {"type": "json_object"}}
     return kwargs
+
+
+def _responses_instructions(request: TextGenerationRequest) -> str:
+    if request.system_prompt and request.system_prompt.strip():
+        return request.system_prompt
+    return DEFAULT_RESPONSES_INSTRUCTIONS
 
 
 def _build_responses_input(request: TextGenerationRequest) -> str | list[dict]:

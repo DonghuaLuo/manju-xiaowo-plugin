@@ -186,6 +186,20 @@ class TestOpenAITextBackend:
 
 
 class TestOpenAIResponsesTextBackend:
+    async def test_generate_without_system_prompt_sends_default_instructions(self):
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response("Test output"))
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import DEFAULT_RESPONSES_INSTRUCTIONS, OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(api_key="test-key", model="gpt-5.5")
+            await backend.generate(TextGenerationRequest(prompt="Normalize this script"))
+
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert call_kwargs["input"] == "Normalize this script"
+        assert call_kwargs["instructions"] == DEFAULT_RESPONSES_INSTRUCTIONS
+
     async def test_generate_plain_text_uses_responses_api(self):
         mock_client = AsyncMock()
         mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response("Test output", 15, 8))
@@ -214,6 +228,26 @@ class TestOpenAIResponsesTextBackend:
         assert call_kwargs["instructions"] == "You are helpful"
         assert call_kwargs["max_output_tokens"] == 1234
         mock_client.chat.completions.create.assert_not_called()
+
+    async def test_custom_responses_backend_can_omit_max_output_tokens(self):
+        mock_client = AsyncMock()
+        mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response("Test output"))
+
+        with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
+            from lib.text_backends.openai import DEFAULT_RESPONSES_INSTRUCTIONS, OpenAIResponsesTextBackend
+
+            backend = OpenAIResponsesTextBackend(
+                api_key="test-key",
+                model="gpt-5.5",
+                provider_name="custom-42",
+                send_max_output_tokens=False,
+            )
+            await backend.generate(TextGenerationRequest(prompt="Normalize this script", max_output_tokens=16000))
+
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert call_kwargs["input"] == "Normalize this script"
+        assert call_kwargs["instructions"] == DEFAULT_RESPONSES_INSTRUCTIONS
+        assert "max_output_tokens" not in call_kwargs
 
     async def test_generate_structured_output_uses_responses_text_format(self):
         schema_response = json.dumps({"name": "Alice", "age": 30})
