@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -49,6 +50,25 @@ def _make_mock_responses_response(content="Hello", input_tokens=10, output_token
     response.status = "completed"
     response.incomplete_details = None
     return response
+
+
+class _FakeAsyncStream:
+    def __init__(self, events):
+        self._events = list(events)
+        self.closed = False
+
+    def __aiter__(self):
+        self._iter = iter(self._events)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+    async def close(self):
+        self.closed = True
 
 
 class TestOpenAITextBackend:
@@ -229,9 +249,17 @@ class TestOpenAIResponsesTextBackend:
         assert call_kwargs["max_output_tokens"] == 1234
         mock_client.chat.completions.create.assert_not_called()
 
-    async def test_custom_responses_backend_can_omit_max_output_tokens(self):
+    async def test_custom_responses_backend_uses_relay_compatible_stream_shape(self):
+        final_response = _make_mock_responses_response("Test output", 15, 8)
+        stream = _FakeAsyncStream(
+            [
+                SimpleNamespace(type="response.output_text.delta", delta="Test "),
+                SimpleNamespace(type="response.output_text.delta", delta="output"),
+                SimpleNamespace(type="response.completed", response=final_response),
+            ]
+        )
         mock_client = AsyncMock()
-        mock_client.responses.create = AsyncMock(return_value=_make_mock_responses_response("Test output"))
+        mock_client.responses.create = AsyncMock(return_value=stream)
 
         with patch("lib.openai_shared.AsyncOpenAI", return_value=mock_client):
             from lib.text_backends.openai import DEFAULT_RESPONSES_INSTRUCTIONS, OpenAIResponsesTextBackend
@@ -241,13 +269,26 @@ class TestOpenAIResponsesTextBackend:
                 model="gpt-5.5",
                 provider_name="custom-42",
                 send_max_output_tokens=False,
+                use_input_item_list=True,
+                stream_response=True,
             )
-            await backend.generate(TextGenerationRequest(prompt="Normalize this script", max_output_tokens=16000))
+            result = await backend.generate(TextGenerationRequest(prompt="Normalize this script", max_output_tokens=16000))
 
         call_kwargs = mock_client.responses.create.call_args[1]
-        assert call_kwargs["input"] == "Normalize this script"
+        assert result.text == "Test output"
+        assert result.input_tokens == 15
+        assert result.output_tokens == 8
+        assert call_kwargs["stream"] is True
+        assert call_kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Normalize this script"}],
+            }
+        ]
         assert call_kwargs["instructions"] == DEFAULT_RESPONSES_INSTRUCTIONS
         assert "max_output_tokens" not in call_kwargs
+        assert stream.closed is True
 
     async def test_generate_structured_output_uses_responses_text_format(self):
         schema_response = json.dumps({"name": "Alice", "age": 30})

@@ -74,6 +74,8 @@ async def test_custom_gpt5_saved_as_openai_chat_routes_to_responses(monkeypatch)
             model="gpt-5.5",
             provider_name=provider_runtime_id,
             send_max_output_tokens=False,
+            use_input_item_list=True,
+            stream_response=True,
         )
         mock_chat.assert_not_called()
     finally:

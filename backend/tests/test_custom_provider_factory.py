@@ -45,6 +45,8 @@ class TestEndpointDispatch:
             model="gpt-5.5",
             provider_name="custom-42",
             send_max_output_tokens=False,
+            use_input_item_list=True,
+            stream_response=True,
         )
 
     @patch("lib.custom_provider.endpoints.GeminiTextBackend")

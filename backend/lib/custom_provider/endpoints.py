@@ -84,8 +84,11 @@ def _build_openai_responses(provider, model_id: str) -> CustomTextBackend:
         base_url=base_url,
         model=model_id,
         provider_name=provider.provider_id,
-        # sub2api 等中转的 Responses 兼容层会拒绝 max_output_tokens；官方 OpenAI 路径仍保留该参数。
+        # sub2api/new-api 的 Codex/OAuth Responses 兼容层更接近 message list + SSE 形态；
+        # 官方 OpenAI 路径仍保留 string input、max_output_tokens 和非流式请求。
         send_max_output_tokens=False,
+        use_input_item_list=True,
+        stream_response=True,
     )
     return CustomTextBackend(provider_id=provider.provider_id, delegate=delegate, model=model_id)
 

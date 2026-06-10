@@ -46,7 +46,7 @@ async def test_active_credential_returns_full_dict(monkeypatch: pytest.MonkeyPat
     assert result["ANTHROPIC_MODEL"] == "claude-opus-4-7"
 
 
-@pytest.mark.parametrize("preset_id", ["glm-cn", "glm-intl", "deepseek", "minimax-intl", "minimax-cn", "kimi"])
+@pytest.mark.parametrize("preset_id", ["glm-cn", "glm-intl", "deepseek", "minimax-intl", "minimax-cn"])
 @pytest.mark.asyncio
 async def test_gateway_active_credential_uses_auth_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -82,6 +82,41 @@ async def test_gateway_active_credential_uses_auth_token(
     result = await build_anthropic_env_dict(session)
     assert result["ANTHROPIC_API_KEY"] == ""
     assert result["ANTHROPIC_AUTH_TOKEN"] == "sk-gateway"
+
+
+@pytest.mark.asyncio
+async def test_kimi_active_credential_uses_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = AsyncMock()
+    repo_mock = AsyncMock()
+    cred = type(
+        "Cred",
+        (),
+        dict(
+            api_key="sk-kimi",
+            preset_id="kimi",
+            base_url="https://api.kimi.com/coding",
+            model="kimi-for-coding",
+            haiku_model=None,
+            sonnet_model=None,
+            opus_model=None,
+            subagent_model=None,
+        ),
+    )()
+    repo_mock.get_active = AsyncMock(return_value=cred)
+
+    setting_repo = AsyncMock()
+    setting_repo.get_all = AsyncMock(return_value={})
+
+    monkeypatch.setattr(
+        "lib.db.repositories.agent_credential_repo.AgentCredentialRepository",
+        lambda _s: repo_mock,
+    )
+    monkeypatch.setattr("lib.config.service.SystemSettingRepository", lambda _s: setting_repo)
+
+    result = await build_anthropic_env_dict(session)
+    assert result["ANTHROPIC_API_KEY"] == "sk-kimi"
+    assert result["ANTHROPIC_AUTH_TOKEN"] == ""
+    assert result["ANTHROPIC_BASE_URL"] == "https://api.kimi.com/coding"
 
 
 @pytest.mark.asyncio
@@ -217,7 +252,8 @@ async def test_no_active_credential_falls_back_to_system_settings(monkeypatch: p
         "https://api.z.ai/api/anthropic",
         "https://api.minimax.io/anthropic",
         "https://api.minimaxi.com/anthropic",
-        "https://api.kimi.com/coding",
+        "https://api.moonshot.ai/anthropic",
+        "https://api.moonshot.cn/anthropic",
     ],
 )
 @pytest.mark.asyncio
@@ -248,6 +284,35 @@ async def test_no_active_credential_infers_auth_token_for_known_gateway_settings
     assert result["ANTHROPIC_AUTH_TOKEN"] == "legacy-sk"
     assert result["ANTHROPIC_BASE_URL"] == base_url
     assert result["ANTHROPIC_MODEL"] == "gateway-model"
+
+
+@pytest.mark.asyncio
+async def test_no_active_credential_keeps_api_key_for_kimi_code_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock()
+    repo_mock = AsyncMock()
+    repo_mock.get_active = AsyncMock(return_value=None)
+
+    legacy = {
+        "anthropic_api_key": "legacy-sk",
+        "anthropic_base_url": "https://api.kimi.com/coding",
+        "anthropic_model": "kimi-for-coding",
+    }
+    setting_repo = AsyncMock()
+    setting_repo.get_all = AsyncMock(return_value=legacy)
+
+    monkeypatch.setattr(
+        "lib.db.repositories.agent_credential_repo.AgentCredentialRepository",
+        lambda _s: repo_mock,
+    )
+    monkeypatch.setattr("lib.config.service.SystemSettingRepository", lambda _s: setting_repo)
+
+    result = await build_anthropic_env_dict(session)
+    assert result["ANTHROPIC_API_KEY"] == "legacy-sk"
+    assert result["ANTHROPIC_AUTH_TOKEN"] == ""
+    assert result["ANTHROPIC_BASE_URL"] == "https://api.kimi.com/coding"
+    assert result["ANTHROPIC_MODEL"] == "kimi-for-coding"
 
 
 @pytest.mark.asyncio

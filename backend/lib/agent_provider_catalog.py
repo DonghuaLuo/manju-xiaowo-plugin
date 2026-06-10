@@ -163,7 +163,6 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         notes_i18n_key=None,
         api_key_pattern=r"^sk-[A-Za-z0-9]+$",
         is_recommended=False,
-        auth_env_mode="auth_token",
     ),
     "ark-coding-plan": PresetProvider(
         id="ark-coding-plan",

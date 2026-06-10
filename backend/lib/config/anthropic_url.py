@@ -1,15 +1,17 @@
 """Anthropic base_url 派生：把用户填的 URL 拆为 messages_root + discovery_root。
 
 各国内代理网关把 Claude 兼容协议挂在不同的子路径下：
-- /anthropic              DeepSeek、Kimi、MiniMax、腾讯 Hunyuan、小米 MiMo
+- /anthropic              DeepSeek、Moonshot Kimi K2.5、MiniMax、腾讯 Hunyuan、小米 MiMo
 - /api/anthropic          GLM (z.ai)
+- /coding                 Kimi Code 专用 Claude Code 入口；模型发现也保留在该 root
 - /apps/anthropic         阿里百炼 (DashScope)
 - /plan/anthropic         腾讯 LKEAP Token Plan
 - /coding/anthropic       腾讯 LKEAP Coding Plan
 - /api/coding             火山方舟 Coding Plan
 - /api/plan               火山方舟 Agent Plan
 
-而模型发现 /v1/models 总是在「子路径之前的根」下。
+大多数 /anthropic 网关的模型发现 /v1/models 在「子路径之前的根」下；Kimi Code
+这类专用 /coding 入口则保留原 root。
 本模块负责一次性派生这两个 root，下游 SDK / 模型发现各取所需。
 """
 

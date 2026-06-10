@@ -170,11 +170,15 @@ class OpenAIResponsesTextBackend:
         base_url: str | None = None,
         provider_name: str = PROVIDER_OPENAI,
         send_max_output_tokens: bool = True,
+        use_input_item_list: bool = False,
+        stream_response: bool = False,
     ):
         self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
         self._model = model or DEFAULT_MODEL
         self._provider_name = provider_name
         self._send_max_output_tokens = send_max_output_tokens
+        self._use_input_item_list = use_input_item_list
+        self._stream_response = stream_response
         self._capabilities: set[TextCapability] = {
             TextCapability.TEXT_GENERATION,
             TextCapability.STRUCTURED_OUTPUT,
@@ -209,10 +213,14 @@ class OpenAIResponsesTextBackend:
             request,
             format_mode=format_mode,
             send_max_output_tokens=self._send_max_output_tokens,
+            use_input_item_list=self._use_input_item_list,
         )
         logger.info("调用 %s Responses SDK kwargs=%s", self.name, format_kwargs_for_log(kwargs))
         try:
-            response = await self._client.responses.create(**kwargs)
+            if self._stream_response:
+                response = await _create_streamed_response(self._client, kwargs)
+            else:
+                response = await self._client.responses.create(**kwargs)
         except Exception as exc:
             if request.response_schema and format_mode == "json_schema" and _is_schema_error(exc):
                 logger.warning(
@@ -284,11 +292,12 @@ def _build_responses_kwargs(
     *,
     format_mode: str | None,
     send_max_output_tokens: bool = True,
+    use_input_item_list: bool = False,
 ) -> dict:
     """将 TextGenerationRequest 转为 OpenAI Responses API kwargs。"""
     kwargs: dict[str, Any] = {
         "model": model,
-        "input": _build_responses_input(request),
+        "input": _build_responses_input(request, use_input_item_list=use_input_item_list),
         "instructions": _responses_instructions(request),
     }
     if send_max_output_tokens and request.max_output_tokens is not None:
@@ -313,8 +322,20 @@ def _responses_instructions(request: TextGenerationRequest) -> str:
     return DEFAULT_RESPONSES_INSTRUCTIONS
 
 
-def _build_responses_input(request: TextGenerationRequest) -> str | list[dict]:
+def _build_responses_input(
+    request: TextGenerationRequest,
+    *,
+    use_input_item_list: bool = False,
+) -> str | list[dict]:
     if not request.images:
+        if use_input_item_list:
+            return [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": request.prompt}],
+                }
+            ]
         return request.prompt
 
     from lib.image_backends.base import image_to_base64_data_uri
@@ -328,7 +349,52 @@ def _build_responses_input(request: TextGenerationRequest) -> str | list[dict]:
             image_url = img.url
         if image_url:
             content.append({"type": "input_image", "image_url": image_url})
-    return [{"role": "user", "content": content}]
+    message = {"role": "user", "content": content}
+    if use_input_item_list:
+        message["type"] = "message"
+    return [message]
+
+
+async def _create_streamed_response(client: AsyncOpenAI, kwargs: dict[str, Any]) -> Any:
+    """Call Responses with stream=true and return an accumulated Response-like object."""
+    stream = await client.responses.create(**kwargs, stream=True)
+    chunks: list[str] = []
+    final_response: Any | None = None
+    try:
+        async for event in stream:
+            event_type = _read_attr_or_key(event, "type")
+            if event_type == "response.output_text.delta":
+                delta = _read_attr_or_key(event, "delta")
+                if isinstance(delta, str):
+                    chunks.append(delta)
+            elif event_type == "response.output_text.done":
+                text = _read_attr_or_key(event, "text")
+                if isinstance(text, str):
+                    chunks = [text]
+            elif event_type == "response.completed":
+                final_response = _read_attr_or_key(event, "response")
+                if final_response is not None:
+                    return final_response
+            elif event_type == "response.failed":
+                response = _read_attr_or_key(event, "response")
+                error = _read_attr_or_key(response, "error")
+                message = _read_attr_or_key(error, "message") or _read_attr_or_key(response, "error")
+                raise RuntimeError(f"Responses stream failed: {message or response or 'unknown error'}")
+    finally:
+        close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
+        if close:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+    if final_response is not None:
+        return final_response
+    return {
+        "output_text": "".join(chunks),
+        "usage": None,
+        "status": "completed",
+        "incomplete_details": None,
+    }
 
 
 def _extract_responses_text(response: Any) -> str:

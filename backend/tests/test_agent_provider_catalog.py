@@ -91,10 +91,17 @@ def test_default_models_match_table() -> None:
 
 def test_claude_code_gateway_presets_use_bearer_auth_token() -> None:
     """Claude Code 第三方 Anthropic 兼容网关应通过 ANTHROPIC_AUTH_TOKEN 传密钥。"""
-    for preset_id in ("glm-cn", "glm-intl", "deepseek", "minimax-cn", "minimax-intl", "kimi"):
+    for preset_id in ("glm-cn", "glm-intl", "deepseek", "minimax-cn", "minimax-intl"):
         p = get_preset(preset_id)
         assert p is not None
         assert p.auth_env_mode == "auth_token"
+
+
+def test_kimi_code_preset_uses_anthropic_api_key() -> None:
+    """Kimi Code 官方 Claude Code 配置使用 ANTHROPIC_API_KEY。"""
+    p = get_preset("kimi")
+    assert p is not None
+    assert p.auth_env_mode == "api_key"
 
 
 def test_kimi_uses_stable_coding_model_id() -> None:

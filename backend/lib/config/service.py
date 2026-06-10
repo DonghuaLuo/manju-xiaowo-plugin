@@ -39,7 +39,8 @@ _AUTH_TOKEN_GATEWAY_PATHS: dict[str, tuple[str, ...]] = {
     "api.z.ai": ("/api/anthropic",),
     "api.minimax.io": ("/anthropic",),
     "api.minimaxi.com": ("/anthropic",),
-    "api.kimi.com": ("/coding",),
+    "api.moonshot.ai": ("/anthropic",),
+    "api.moonshot.cn": ("/anthropic",),
 }
 
 
