@@ -94,4 +94,39 @@ describe("StreamMarkdown table controls", () => {
       tableLayout: "auto",
     });
   });
+
+  it("maps raw script preprocessing field headers to readable labels", async () => {
+    render(
+      <StreamMarkdown
+        mapTableFieldLabels
+        content={[
+          "| scene_id | duration_seconds | first_frame_intent | payoff_hook |",
+          "| --- | --- | --- | --- |",
+          "| E01S01 | 5 | 她站在门口看见汤碗落地 | 下一镜看丈夫反应 |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(await screen.findByText("场景编号")).toBeInTheDocument();
+    expect(screen.getByText("预计时长（秒）")).toBeInTheDocument();
+    expect(screen.getByText("首帧意图")).toBeInTheDocument();
+    expect(screen.getByText("爽点承接")).toBeInTheDocument();
+    expect(screen.queryByText("scene_id")).not.toBeInTheDocument();
+  });
+
+  it("does not map table headers unless requested", async () => {
+    render(
+      <StreamMarkdown
+        content={[
+          "| scene_id | duration_seconds |",
+          "| --- | --- |",
+          "| E01S01 | 5 |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(await screen.findByText("scene_id")).toBeInTheDocument();
+    expect(screen.getByText("duration_seconds")).toBeInTheDocument();
+    expect(screen.queryByText("场景编号")).not.toBeInTheDocument();
+  });
 });

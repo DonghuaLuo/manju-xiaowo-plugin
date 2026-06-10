@@ -506,10 +506,12 @@ body {
 
 .markdown-table-scroll {
     --scrollbar-opacity: 0.42;
+    box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     overflow-x: scroll;
     overflow-y: hidden;
+    padding-inline-end: 14px;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: auto;
     scrollbar-color: oklch(0.74 0.055 285 / var(--scrollbar-opacity)) oklch(1 0 0 / 0.10);

@@ -3,9 +3,11 @@ import {
   useMemo,
   useRef,
   useState,
+  isValidElement,
   type ComponentType,
   type ReactNode,
   type TableHTMLAttributes,
+  type ThHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -30,6 +32,7 @@ import { errMsg, voidCall, voidPromise } from "@/utils/async";
 import { useAppStore } from "@/stores/app-store";
 import { copyText } from "@/utils/clipboard";
 import { saveBlobWithDialog } from "@/utils/desktop-download";
+import { readableMarkdownTableFieldLabel } from "@/utils/field-labels";
 
 // ---------------------------------------------------------------------------
 // StreamMarkdown - lazy-loads the Streamdown component from the `streamdown`
@@ -61,6 +64,7 @@ async function loadStreamdownComponent(): Promise<ComponentType<Record<string, u
 
 interface StreamMarkdownProps {
   content: string;
+  mapTableFieldLabels?: boolean;
 }
 
 type TableExportFormat = "markdown" | "csv" | "tsv";
@@ -138,6 +142,32 @@ function TableDropdown({
     <div className="markdown-table-dropdown" role="menu" aria-label={label}>
       {children}
     </div>
+  );
+}
+
+function plainTextFromNode(node: ReactNode): string | null {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) {
+    const parts = node.map(plainTextFromNode);
+    return parts.every((part): part is string => part !== null) ? parts.join("") : null;
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return plainTextFromNode(node.props.children);
+  }
+  return null;
+}
+
+function MarkdownTableHeader({
+  children,
+  mapFieldLabels,
+  node: _node,
+  ...props
+}: ThHTMLAttributes<HTMLTableCellElement> & { mapFieldLabels?: boolean; node?: unknown }) {
+  const plainText = plainTextFromNode(children);
+  return (
+    <th {...props}>
+      {plainText === null || !mapFieldLabels ? children : readableMarkdownTableFieldLabel(plainText)}
+    </th>
   );
 }
 
@@ -356,7 +386,7 @@ function MarkdownTable({
   );
 }
 
-export function StreamMarkdown({ content }: StreamMarkdownProps) {
+export function StreamMarkdown({ content, mapTableFieldLabels = false }: StreamMarkdownProps) {
   const [StreamdownComponent, setStreamdownComponent] =
     useState<ComponentType<Record<string, unknown>> | null>(null);
   const { t } = useTranslation(["common"]);
@@ -372,7 +402,15 @@ export function StreamMarkdown({ content }: StreamMarkdownProps) {
     viewFullscreen: t("common:titlebar.maximize"),
   }), [t]);
 
-  const components = useMemo(() => ({ table: MarkdownTable }), []);
+  const components = useMemo(
+    () => ({
+      table: MarkdownTable,
+      th: (props: ThHTMLAttributes<HTMLTableCellElement> & { node?: unknown }) => (
+        <MarkdownTableHeader {...props} mapFieldLabels={mapTableFieldLabels} />
+      ),
+    }),
+    [mapTableFieldLabels],
+  );
 
   useEffect(() => {
     let mounted = true;

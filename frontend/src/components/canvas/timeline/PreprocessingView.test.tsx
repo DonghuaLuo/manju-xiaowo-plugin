@@ -29,6 +29,22 @@ describe("PreprocessingView statusLabel by contentMode", () => {
     ).toBeInTheDocument();
   });
 
+  it("maps raw script table headers in preprocessing display mode", async () => {
+    vi.spyOn(API, "getDraftContent").mockResolvedValue([
+      "| scene_id | duration_seconds | first_frame_intent |",
+      "| --- | --- | --- |",
+      "| E01S01 | 5 | 她站在门口看见汤碗落地 |",
+    ].join("\n"));
+
+    render(<PreprocessingView projectName="p" episode={1} contentMode="drama" />);
+
+    await waitFor(() => expect(API.getDraftContent).toHaveBeenCalled());
+    expect(await screen.findByText("场景编号")).toBeInTheDocument();
+    expect(screen.getByText("预计时长（秒）")).toBeInTheDocument();
+    expect(screen.getByText("首帧意图")).toBeInTheDocument();
+    expect(screen.queryByText("scene_id")).not.toBeInTheDocument();
+  });
+
   it("renders reference_video statusLabel", async () => {
     await renderWith("reference_video");
     expect(

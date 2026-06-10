@@ -250,7 +250,7 @@ export function PreprocessingView({
         <div
           className={`preprocessing-document-shell min-w-0 prose-invert max-w-none text-sm ${compact ? "markdown-compact is-compact" : ""}`}
         >
-          <StreamMarkdown content={content} />
+          <StreamMarkdown content={content} mapTableFieldLabels />
         </div>
       )}
     </div>
