@@ -716,7 +716,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "generate_audio"],
                 default=True,
-                supported_durations=[4, 8, 12],
+                supported_durations=[4, 8, 12, 16, 20],
                 resolutions=["720p"],
                 max_reference_images=1,
 
@@ -725,7 +725,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 display_name="Sora 2 Pro",
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "generate_audio"],
-                supported_durations=[4, 8, 12],
+                supported_durations=[4, 8, 12, 16, 20],
                 resolutions=["720p", "1024p"],
                 max_reference_images=1,
 

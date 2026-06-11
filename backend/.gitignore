@@ -60,6 +60,9 @@ CLAUDE.local.md
 # Local Codex runtime metadata
 .codex/
 
+# Agent ops runtime repair tasks
+agent_ops/repair-runs/
+
 # Git backup
 .git.backup
 

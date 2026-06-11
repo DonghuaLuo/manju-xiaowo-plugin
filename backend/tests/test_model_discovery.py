@@ -46,6 +46,15 @@ def test_unproven_json_schema_text_models_do_not_advertise_structured_output():
                 assert "structured_output" not in model.capabilities, f"{provider_id}/{model_id}"
 
 
+def test_openai_sora2_durations_match_video_api():
+    """OpenAI Sora 2 官方 video API 支持 16s/20s，内置 registry 不能落后。"""
+    from lib.config.registry import PROVIDER_REGISTRY
+
+    meta = PROVIDER_REGISTRY["openai"]
+    assert meta.models["sora-2"].supported_durations == [4, 8, 12, 16, 20]
+    assert meta.models["sora-2-pro"].supported_durations == [4, 8, 12, 16, 20]
+
+
 # ---------------------------------------------------------------------------
 # discover_models — OpenAI format
 # ---------------------------------------------------------------------------

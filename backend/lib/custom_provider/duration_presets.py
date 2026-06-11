@@ -15,8 +15,8 @@ DEFAULT_FALLBACK: list[int] = [4, 8]
 
 # 按特异性从高到低排列；命中一条即返回。range 全展开为离散集。
 PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
-    # OpenAI Sora 第一方（严格 regex：可选 -pro，可选 -YYYY-MM-DD 日期后缀）
-    (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12]),
+    # OpenAI Sora 第一方（官方 video docs 确认 sora-2 / sora-2-pro 支持 16 和 20 秒）
+    (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12, 16, 20]),
     # 第三方聚合 Sora-Pro 变体（常见 6/10/12/16/20）
     (re.compile(r"sora.*pro", re.I), [6, 10, 12, 16, 20]),
     # Google Veo（含 fast / lite / preview）

@@ -1,0 +1,30 @@
+{
+  "failure_id": "agent_script_registry_candidate_snapshot_gate",
+  "script_id": "agent_script_registry_flow",
+  "category": "script_error",
+  "status": "regression_tested",
+  "observed_at": "2026-06-10",
+  "summary": "候选 default 版本还没有当前版本稳定快照时，run --rollback-on-failure 被 validate 阶段挡住，失败命令没有执行，也没有触发回滚。",
+  "input": {
+    "script_id": "sample_script",
+    "current_version": "1.0.1",
+    "latest_stable_snapshot": "1.0.0",
+    "command": "agent_script_registry.py --root <temp> run sample_script --rollback-on-failure"
+  },
+  "observed_output": {
+    "error": "stable snapshot does not exist: agent_ops/registry/stable/sample_script-1.0.1.json",
+    "rolled_back": false
+  },
+  "expected_behavior": "run 应允许候选 default 版本先执行验证命令；验证失败时回滚到最新已有稳定快照，验证成功时可通过 --snapshot-on-success 写入当前版本稳定快照。",
+  "evidence": [
+    "agent_ops/execution-plan.md",
+    "agent_ops/README.md"
+  ],
+  "regression_tests": [
+    "agent_ops/tests/test_agent_script_registry.py"
+  ],
+  "notes": [
+    "严格 stable snapshot 检查仍保留在 validate 命令中，用于判断 registry 是否已经处于完整落地态。",
+    "run 命令使用较宽松校验，避免候选版本在完成验证前就被要求拥有稳定快照。"
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "script_id": "custom_provider_model_discovery",
+  "version": "1.0.2",
+  "status": "default",
+  "owner": "manju-agent-tools",
+  "created_at": "2026-06-10",
+  "updated_at": "2026-06-11",
+  "summary": "发现并规范化自定义供应商模型列表，保持 endpoint、media_type、默认模型和能力声明一致。",
+  "working_directory": ".",
+  "entrypoints": [
+    "server/routers/custom_providers.py:discover_models_endpoint",
+    "server/routers/custom_providers.py:discover_models_by_id",
+    "lib/custom_provider/discovery.py",
+    "lib/custom_provider/endpoints.py"
+  ],
+  "source_files": [
+    "server/routers/custom_providers.py",
+    "lib/custom_provider/discovery.py",
+    "lib/custom_provider/endpoints.py",
+    "lib/custom_provider/factory.py",
+    "lib/custom_provider/duration_presets.py",
+    "lib/config/registry.py",
+    "alembic/versions/4c643f3ff5b9_backfill_custom_model_durations.py"
+  ],
+  "evidence": [
+    "docs/provider-api-evidence/api-interface-matrix.md",
+    "docs/provider-api-evidence/call-paths-and-custom-providers.md",
+    "docs/provider-api-evidence/verification-log.md"
+  ],
+  "validation_commands": [
+    "{python} -m pytest tests/test_custom_provider_endpoints.py tests/test_custom_provider_resolution.py tests/test_custom_provider_factory.py tests/test_custom_providers_api.py tests/test_model_discovery.py tests/test_duration_presets.py tests/test_alembic_supported_durations_backfill.py -q",
+    "git diff --check"
+  ],
+  "tests": [
+    "tests/test_custom_provider_endpoints.py",
+    "tests/test_custom_provider_resolution.py",
+    "tests/test_custom_provider_factory.py",
+    "tests/test_custom_providers_api.py",
+    "tests/test_model_discovery.py",
+    "tests/test_duration_presets.py",
+    "tests/test_alembic_supported_durations_backfill.py"
+  ],
+  "repair_write_allowlist": [
+    "agent_ops",
+    "server/routers/custom_providers.py",
+    "lib/custom_provider",
+    "lib/config/registry.py",
+    "alembic/versions/4c643f3ff5b9_backfill_custom_model_durations.py",
+    "tests/test_custom_provider_endpoints.py",
+    "tests/test_custom_provider_resolution.py",
+    "tests/test_custom_provider_factory.py",
+    "tests/test_custom_providers_api.py",
+    "tests/test_model_discovery.py",
+    "tests/test_duration_presets.py",
+    "tests/test_alembic_supported_durations_backfill.py",
+    "docs/provider-api-evidence"
+  ],
+  "failure_examples": [
+    "agent_ops/registry/failure-examples/custom_provider_model_discovery_endpoint_mismatch.json",
+    "agent_ops/registry/failure-examples/custom_provider_model_discovery_sora_duration_stale.json"
+  ],
+  "known_failures": [
+    "endpoint_mismatch: 模型保存的 endpoint 与实际媒体类型不一致",
+    "duration_backfill_mismatch: 视频模型 supported_durations 自动补全和期望不一致",
+    "stale_official_duration_preset: 官方视频模型更新支持时长后，本地 duration_presets 与迁移 backfill 常量未同步",
+    "unverified_structured_output: 未验证 json_schema 能力的文本模型不应声明 strict structured output"
+  ],
+  "rollback": [
+    "恢复 endpoint catalog 和 discovery normalize 逻辑到上一个 default 版本",
+    "保留新供应商返回样例，先新增测试再调整解析",
+    "若新网关能力不明，默认标记 unknown 而不是 supported"
+  ],
+  "notes": [
+    "自定义供应商不能按模型名推断 endpoint 能力，必须使用保存的 endpoint 和证据文档",
+    "新增网关适配前先保存最小返回样例和对应测试",
+    "OpenAI Sora 官方 video 文档确认 16/20 秒后，duration_presets、内置 OpenAI registry 和 Alembic backfill 常量必须一起更新"
+  ]
+}

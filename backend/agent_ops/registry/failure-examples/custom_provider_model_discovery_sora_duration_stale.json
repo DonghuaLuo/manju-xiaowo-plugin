@@ -1,0 +1,42 @@
+{
+  "failure_id": "custom_provider_model_discovery_sora_duration_stale",
+  "script_id": "custom_provider_model_discovery",
+  "category": "data_error",
+  "status": "regression_tested",
+  "observed_at": "2026-06-10",
+  "summary": "OpenAI Sora 官方视频接口已支持 16 和 20 秒，但本地 sora-2* duration 预设仍只回填 [4,8,12]。",
+  "input": {
+    "model_id": "sora-2-pro",
+    "endpoint": "openai-video",
+    "supported_durations": null
+  },
+  "observed_output": {
+    "api_create_model_supported_durations": [
+      4,
+      8,
+      12
+    ],
+    "expected_supported_durations": [
+      4,
+      8,
+      12,
+      16,
+      20
+    ]
+  },
+  "expected_behavior": "自定义 openai-video 模型未显式传 supported_durations 时，sora-2 和 sora-2-pro 默认补全必须包含 4、8、12、16、20；Alembic 历史回填脚本也必须保持一致。",
+  "evidence": [
+    "docs/provider-api-evidence/api-interface-matrix.md",
+    "docs/provider-api-evidence/call-paths-and-custom-providers.md",
+    "docs/provider-api-evidence/verification-log.md"
+  ],
+  "regression_tests": [
+    "tests/test_duration_presets.py",
+    "tests/test_custom_providers_api.py",
+    "tests/test_alembic_supported_durations_backfill.py"
+  ],
+  "notes": [
+    "该问题由 agent registry 的 custom_provider_model_discovery 默认验证集暴露。",
+    "修复时不要只改 API 层；duration_presets、迁移 backfill 常量和 evidence 文档要同步。"
+  ]
+}

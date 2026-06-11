@@ -1,0 +1,56 @@
+{
+  "script_id": "plugin_release_pipeline",
+  "version": "1.0.1",
+  "status": "deprecated",
+  "owner": "manju-agent-tools",
+  "created_at": "2026-06-10",
+  "updated_at": "2026-06-11",
+  "summary": "记录插件外部发布流程的历史失败样例；该流程不在 backend 根目录权限范围内，不能作为 agent_ops 默认执行入口。",
+  "working_directory": ".",
+  "entrypoints": [
+    "manual: repository-root release_plugins.py outside backend-root agent_ops permission scope"
+  ],
+  "source_files": [
+    "manual: repository-root release_plugins.py outside backend-root agent_ops permission scope",
+    "manual: plugin manifest.json outside backend-root release reference",
+    "manual: plugin copy_rules.json outside backend-root release reference"
+  ],
+  "evidence": [
+    "agent_ops/execution-plan.md",
+    "README.md"
+  ],
+  "validation_commands": [
+    "manual: git status --short --untracked-files=all 发布前确认工作树只包含本次发布相关改动",
+    "manual: py release_plugins.py manju --prepare-manifest-only --bump-patch 仅在准备发布版本时运行",
+    "manual: py release_plugins.py manju --title \"...\" --description \"- ...\" 仅在确认版本号已高于线上时运行"
+  ],
+  "tests": [
+    "manual: 发布输出必须包含 发布完成 或明确说明本地版本与线上版本相同",
+    "manual: 发布说明每一行必须以 - 开头",
+    "manual: 发布前确认 git 工作树只包含本次版本号或发布相关改动"
+  ],
+  "repair_write_allowlist": [
+    "agent_ops"
+  ],
+  "failure_examples": [
+    "agent_ops/registry/failure-examples/plugin_release_pipeline_same_version_skip.json"
+  ],
+  "known_failures": [
+    "gbk_console_encode_error: Windows 控制台可能打印 gbk codec can't encode character，但若后续步骤继续则通常不是阻断点",
+    "same_version_skip: 本地 manifest 版本与线上版本相同时会跳过发布",
+    "dirty_worktree: 发布前必须人工确认工作树只包含本次发布相关改动",
+    "publish_config_missing: data/publish_plugin_config.local.json 缺失会阻断发布"
+  ],
+  "rollback": [
+    "若发布前失败，恢复 manifest.json 版本号并重新运行发布前检查",
+    "若发布后发现包异常，发布新补丁版本覆盖，不直接修改运行目录",
+    "保留 release_plugins.py 输出日志作为失败样例"
+  ],
+  "notes": [
+    "release_plugins.py 位于 backend 根目录外，不属于 agent_ops 默认执行权限范围",
+    "发布流程只保留人工参考；需要发布时走项目发布流程，不从 agent_ops 自动运行",
+    "release_plugins.py 是完整发布入口，不要默认拆开单独执行 compile/move/compress/publish",
+    "发布动作是外部副作用，不能在普通 registry 校验中自动执行",
+    "git status 只作为发布前人工门禁，避免普通 run 把状态输出误判为发布流程已验证"
+  ]
+}

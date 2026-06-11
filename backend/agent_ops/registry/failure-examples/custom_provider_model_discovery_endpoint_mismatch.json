@@ -1,0 +1,38 @@
+{
+  "failure_id": "custom_provider_model_discovery_endpoint_mismatch",
+  "script_id": "custom_provider_model_discovery",
+  "category": "data_error",
+  "status": "regression_tested",
+  "observed_at": "2026-06-10",
+  "summary": "自定义供应商模型保存的 endpoint 与实际媒体类型或能力声明不一致，导致后续按错误调用路径执行。",
+  "input": {
+    "provider_type": "custom",
+    "media_types": [
+      "text",
+      "image",
+      "video"
+    ],
+    "endpoint": "openai-compatible"
+  },
+  "observed_output": {
+    "result": "模型被错误归类或声明了未验证的 structured_output 能力",
+    "risk": "文本、图片、视频或 agent 调用走错 endpoint"
+  },
+  "expected_behavior": "模型发现必须保留供应商返回的 endpoint/media_type/capability 证据；未验证 strict json_schema 前不能把 structured_output 标记为 supported。",
+  "evidence": [
+    "docs/provider-api-evidence/api-interface-matrix.md",
+    "docs/provider-api-evidence/call-paths-and-custom-providers.md",
+    "docs/provider-api-evidence/verification-log.md"
+  ],
+  "regression_tests": [
+    "tests/test_custom_provider_endpoints.py",
+    "tests/test_custom_provider_resolution.py",
+    "tests/test_custom_provider_factory.py",
+    "tests/test_custom_providers_api.py",
+    "tests/test_model_discovery.py"
+  ],
+  "notes": [
+    "不能按模型名猜 endpoint 或结构化输出能力。",
+    "新增 sub2api、new-api 或同类网关样例时，先记录最小响应样例再改解析。"
+  ]
+}

@@ -71,8 +71,13 @@
 - 插件目录名必须和 `manifest.json` 的 `id` 一致。
 - `dev_mode: true` 时，小蜗会使用 `dev.frontend.entry` 加载前端，适合源码调试和本地部署。
 - `dev_mode: false` 时，小蜗会使用 `frontend.entry`，也就是打包后的 `frontend/dist/index.html`。
-- 本插件依赖扩展模型 / 运行时检查，首次加载项目列表时会触发小蜗宿主根据 `manifest.json` 中的 `extmodels.check_files` 检查所需文件。
+- 本插件依赖扩展模型 / 运行时检查，首次加载项目列表时会根据 `manifest.json` 中的 `extmodels.check_files` 检查所需文件。
 - 修改插件 ID 后，桌面快捷方式、窗口标签、插件数据隔离都会按新的 ID 生效。
+
+## 运维与自动化方案
+
+- [Agent 自迭代执行方案](backend/agent_ops/execution-plan.md)
+- [Agent 运维自动化入口](backend/agent_ops/README.md)
 
 ## License
 

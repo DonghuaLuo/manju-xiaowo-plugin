@@ -10,7 +10,7 @@
   - URL: https://developers.openai.com/api/docs/guides/structured-outputs
 - OpenAI Streaming：官方 Responses stream 事件包含 `response.output_text.delta`、`response.completed`、`error` 等。
   - URL: https://developers.openai.com/api/docs/guides/streaming-responses
-- OpenAI Video：官方 video API 使用创建、查询、下载三段式；查询返回 `queued`、`in_progress`、`completed`、`failed` 等状态。
+- OpenAI Video：官方 video API 使用创建、查询、下载三段式；查询返回 `queued`、`in_progress`、`completed`、`failed` 等状态；文档确认 `sora-2` 和 `sora-2-pro` 支持 16、20 秒生成，并在 Batch 示例中使用 `seconds:"16"` / `"20"`。
   - URL: https://developers.openai.com/api/docs/guides/video-generation
 - OpenAI Image：官方 image generation 文档确认 Image API 有 generations 和 edits 两类 endpoint；Responses API 可通过 `image_generation` tool 生成图片，Image API 示例读取 `data[0].b64_json`。
   - URL: https://developers.openai.com/api/docs/guides/image-generation

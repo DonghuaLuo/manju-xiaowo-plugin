@@ -1,0 +1,47 @@
+{
+  "script_id": "agent_script_registry_flow",
+  "version": "1.1.0",
+  "status": "default",
+  "owner": "manju-agent-tools",
+  "created_at": "2026-06-10",
+  "updated_at": "2026-06-10",
+  "summary": "管理 agent 自迭代脚本 registry 的校验、执行、失败样例、稳定快照和回滚流程。",
+  "working_directory": ".",
+  "entrypoints": [
+    "agent_ops/scripts/agent_script_registry.py"
+  ],
+  "source_files": [
+    "agent_ops/scripts/agent_script_registry.py",
+    "agent_ops/tests/test_agent_script_registry.py",
+    "agent_ops/README.md",
+    "agent_ops/execution-plan.md"
+  ],
+  "evidence": [
+    "agent_ops/execution-plan.md",
+    "agent_ops/README.md"
+  ],
+  "validation_commands": [
+    "{python} -m pytest agent_ops/tests/test_agent_script_registry.py -q",
+    "git diff --check"
+  ],
+  "tests": [
+    "agent_ops/tests/test_agent_script_registry.py"
+  ],
+  "failure_examples": [
+    "agent_ops/registry/failure-examples/agent_script_registry_candidate_snapshot_gate.json"
+  ],
+  "known_failures": [
+    "candidate_snapshot_gate: 候选 default 版本尚未生成当前稳定快照时，run 被严格 validate 拦截，无法触发失败回滚",
+    "manual_side_effect_leak: 发布类 manual 命令不应在普通 run 中自动执行",
+    "rollback_target_missing: 失败回滚必须至少存在一个旧稳定快照"
+  ],
+  "rollback": [
+    "使用 agent_script_registry.py rollback agent_script_registry_flow 恢复上一个稳定记录",
+    "若 registry 管理脚本自身损坏，直接从 agent_ops/registry/stable/agent_script_registry_flow-*.json 复制回记录文件",
+    "保留失败样例和测试，避免再次阻断候选版本验证"
+  ],
+  "notes": [
+    "validate 是落地态检查，要求 default 版本已有稳定快照",
+    "run 是候选验证入口，允许当前 default 暂无同版本稳定快照；失败时可回滚到最新旧稳定快照，成功后可用 --snapshot-on-success 写入新稳定快照"
+  ]
+}

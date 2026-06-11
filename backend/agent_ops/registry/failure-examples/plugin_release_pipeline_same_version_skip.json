@@ -1,0 +1,29 @@
+{
+  "failure_id": "plugin_release_pipeline_same_version_skip",
+  "script_id": "plugin_release_pipeline",
+  "category": "environment_error",
+  "status": "documented",
+  "observed_at": "2026-06-10",
+  "summary": "发布时本地 manifest 版本号与线上版本相同，release_plugins.py 按规则跳过发布。",
+  "input": {
+    "command": "py release_plugins.py manju --title \"...\" --description \"- ...\"",
+    "local_manifest_version": "same_as_remote"
+  },
+  "observed_output": {
+    "result": "跳过发布或未生成新包",
+    "reason": "本地版本未高于线上版本"
+  },
+  "expected_behavior": "发布脚本应保持跳过行为；agent 应先 bump patch 并重新提交发布相关改动，再执行真实发布。",
+  "evidence": [
+    "agent_ops/execution-plan.md",
+    "README.md"
+  ],
+  "regression_tests": [
+    "manual: 发布前读取 manifest.json 和线上版本，确认本地版本更高",
+    "manual: 发布输出必须包含 发布完成 或明确说明同版本跳过"
+  ],
+  "notes": [
+    "同版本跳过不是脚本 bug，而是发布前置条件未满足。",
+    "普通 registry run 不自动执行发布命令，只列出 manual 验证项。"
+  ]
+}

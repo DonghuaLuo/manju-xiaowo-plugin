@@ -27,7 +27,7 @@
 
 | 供应商/网关 | 接口与请求 | 响应/轮询解析 | 证据等级 | Manju 处理结论 |
 | --- | --- | --- | --- | --- |
-| OpenAI Video | `POST /videos` 创建；`GET /videos/{video_id}` 查询；`GET /videos/{video_id}/content` 下载。 | 状态包含 `queued`、`in_progress`、`completed`、`failed`，并可能返回 progress/error。 | 可落地 | 按官方 video API 解析，不要混用 NewAPI/Kling 的 status 字段。 |
+| OpenAI Video | `POST /videos` 创建；`GET /videos/{video_id}` 查询；`GET /videos/{video_id}/content` 下载；请求用 `seconds` 控制长度。官方文档确认 `sora-2` 与 `sora-2-pro` 支持 16 和 20 秒，Batch 示例包含 `seconds:"16"` / `"20"`。 | 状态包含 `queued`、`in_progress`、`completed`、`failed`，并可能返回 progress/error。 | 可落地 | 按官方 video API 解析，不要混用 NewAPI/Kling 的 status 字段；Manju `sora-2*` 默认时长预设应包含 `[4,8,12,16,20]`。 |
 | DashScope Wan video | `POST /api/v1/services/aigc/video-generation/video-synthesis` 创建异步任务。 | 创建返回 `task_id`；轮询任务状态，成功后取视频 URL。 | 可落地 | Manju DashScope video 后端应坚持异步 task 模型。 |
 | Vidu Text to Video | `POST https://api.vidu.com/ent/v2/text2video`；header `Authorization: Token {api key}`；body 包含 `model`、`prompt`、`duration`、`aspect_ratio`、`resolution`、`callback_url` 等。 | 创建返回 `task_id` 和 `state`；状态有 `created`、`queueing`、`processing`、`success`、`failed`。 | 可落地 | 文生视频 endpoint 已确认。 |
 | Vidu Image to Video | `POST https://api.vidu.com/ent/v2/img2video`；body 包含 `model`、`images`、`prompt`、`duration`、`resolution`、`callback_url` 等。 | 创建返回 `task_id` 和 `state`；轮询用 `GET https://api.vidu.com/ent/v2/tasks/{id}/creations`，成功结果在 `creations[].url`、`cover_url`。 | 可落地 | 图生视频 endpoint 和轮询 endpoint 已确认。 |

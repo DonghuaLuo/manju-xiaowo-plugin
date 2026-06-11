@@ -31,7 +31,7 @@ depends_on: str | Sequence[str] | None = None
 _DEFAULT_FALLBACK: list[int] = [4, 8]
 
 _PRESETS: list[tuple[re.Pattern[str], list[int]]] = [
-    (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12]),
+    (re.compile(r"^sora-2(-pro)?(-\d{4}-\d{2}-\d{2})?$", re.I), [4, 8, 12, 16, 20]),
     (re.compile(r"sora.*pro", re.I), [6, 10, 12, 16, 20]),
     (re.compile(r"veo-?\d", re.I), [4, 6, 8]),
     (re.compile(r"kling[-.]?(o1|v?[123](\.\d+)?)", re.I), [5, 10]),

@@ -38,7 +38,7 @@
 | `openai-images-generations` | image | `/v1/images/generations` | 只用于文生图。 |
 | `openai-images-edits` | image | `/v1/images/edits` | 只用于图生图/编辑。 |
 | `gemini-image` | image | `/v1beta/models/{model}:generateContent` | 使用 Gemini 图像输出 content parts。 |
-| `openai-video` | video | `/v1/videos` | 按 OpenAI Sora video create/poll/download。 |
+| `openai-video` | video | `/v1/videos` | 按 OpenAI Sora video create/poll/download；`seconds` 控制长度，`sora-2*` 默认候选时长包含 4/8/12/16/20。 |
 | `newapi-video` | video | `/v1/video/generations` | 按 NewAPI Kling/Jimeng 任务状态和 `url` 解析。 |
 | `v2-video-generations` | video | `/v2/video/generations` | 目前只对 AI/ML API 有官方证据；不要泛化到所有网关。 |
 | `ark-seedance` | video | `/api/v3/contents/generations/tasks` | 火山方舟 Seedance 任务形态，仍需用可读官方正文补强。 |

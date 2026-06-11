@@ -20,7 +20,7 @@
 
 **Windows：**
 ```
-C:\Users\<用户名>\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft
+%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft
 ```
 
 > **提示**：可在剪映设置中查看"草稿路径"的位置。如果你修改过默认路径，请使用实际的草稿目录。

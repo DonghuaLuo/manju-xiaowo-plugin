@@ -1,0 +1,35 @@
+{
+  "failure_id": "text_structured_output_probe_schema_not_enforced",
+  "script_id": "text_structured_output_probe",
+  "category": "parse_error",
+  "status": "regression_tested",
+  "observed_at": "2026-06-10",
+  "summary": "custom-1/gpt-5.5 返回 JSON，但没有生成 DramaEpisodeScript 必需的 title 和 scenes 字段。",
+  "input": {
+    "handler": "generate_episode_script",
+    "params": {
+      "episode": 1
+    },
+    "strict_schema": "DramaEpisodeScript"
+  },
+  "observed_output": {
+    "model_response": {
+      "episode": 1
+    },
+    "error": "结构化输出无效：模型返回 JSON 但不符合 schema: title: Field required; scenes: Field required"
+  },
+  "expected_behavior": "preflight/probe 必须把该 endpoint 判定为 schema_not_enforced 或 unsupported，并阻止 strict 剧本生成；不能降级后继续当作 strict schema 成功。",
+  "evidence": [
+    "docs/provider-api-evidence/api-interface-matrix.md",
+    "docs/provider-api-evidence/call-paths-and-custom-providers.md",
+    "docs/provider-api-evidence/verification-log.md"
+  ],
+  "regression_tests": [
+    "tests/test_text_structured_probe.py",
+    "tests/test_script_generator.py"
+  ],
+  "notes": [
+    "这是 Manju agent 生成剧本反复失败的主样例。",
+    "修复时必须先新增或更新该失败样例对应的断言，再修改 probe 或 endpoint 适配。"
+  ]
+}

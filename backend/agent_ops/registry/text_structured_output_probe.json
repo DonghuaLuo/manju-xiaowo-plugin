@@ -1,0 +1,71 @@
+{
+  "script_id": "text_structured_output_probe",
+  "version": "1.2.0",
+  "status": "default",
+  "owner": "manju-agent-tools",
+  "created_at": "2026-06-10",
+  "updated_at": "2026-06-10",
+  "summary": "验证文本模型 endpoint 是否真正执行 strict JSON Schema，并在剧本和项目总览生成前做 preflight。",
+  "working_directory": ".",
+  "entrypoints": [
+    "lib/text_backends/structured_probe.py:probe_text_structured_output_backend",
+    "lib/text_generator.py:ensure_structured_output_ready",
+    "server/routers/providers.py:probe_text_structured_output",
+    "utils/manju_ipc_dispatcher.py:manju_api_probe_text_structured_output"
+  ],
+  "source_files": [
+    "lib/text_backends/structured_probe.py",
+    "lib/text_backends/openai.py",
+    "lib/custom_provider/endpoints.py",
+    "lib/script_generator.py",
+    "lib/project_manager.py"
+  ],
+  "evidence": [
+    "docs/provider-api-evidence/api-interface-matrix.md",
+    "docs/provider-api-evidence/call-paths-and-custom-providers.md",
+    "docs/provider-api-evidence/verification-log.md"
+  ],
+  "validation_commands": [
+    "{python} -m pytest tests/test_text_structured_probe.py tests/test_openai_text_backend.py tests/test_text_backend_factory.py tests/test_custom_provider_factory.py tests/test_script_generator.py -q",
+    "git diff --check"
+  ],
+  "tests": [
+    "tests/test_text_structured_probe.py",
+    "tests/test_openai_text_backend.py",
+    "tests/test_text_backend_factory.py",
+    "tests/test_custom_provider_factory.py",
+    "tests/test_script_generator.py"
+  ],
+  "repair_write_allowlist": [
+    "agent_ops",
+    "lib/text_backends",
+    "lib/custom_provider/endpoints.py",
+    "lib/script_generator.py",
+    "lib/project_manager.py",
+    "server/routers/providers.py",
+    "utils/manju_ipc_dispatcher.py",
+    "tests/test_text_structured_probe.py",
+    "tests/test_openai_text_backend.py",
+    "tests/test_text_backend_factory.py",
+    "tests/test_custom_provider_factory.py",
+    "tests/test_script_generator.py",
+    "docs/provider-api-evidence"
+  ],
+  "failure_examples": [
+    "agent_ops/registry/failure-examples/text_structured_output_probe_schema_not_enforced.json"
+  ],
+  "known_failures": [
+    "schema_not_enforced: endpoint 返回普通 JSON 但未真正执行 native strict schema",
+    "unsupported: backend capabilities 未声明 structured_output",
+    "schema_rejected: 供应商或中转网关拒绝 response_format.json_schema 请求"
+  ],
+  "rollback": [
+    "将本记录 status 改为 deprecated，并恢复上一个 default 版本记录",
+    "回滚 lib/text_backends/structured_probe.py 与相关 preflight 调用点",
+    "保留失败样例到 tests/test_text_structured_probe.py，避免再次误判"
+  ],
+  "notes": [
+    "probe 必须使用对抗式 prompt，不能用已经合法的样例 JSON 作为唯一判断",
+    "不支持 strict schema 的 endpoint 不能降级后继续伪装成 strict schema 成功"
+  ]
+}

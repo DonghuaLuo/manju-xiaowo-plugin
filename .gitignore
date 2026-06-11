@@ -24,6 +24,8 @@ backend/compile/
 !/backend/tests/test_agent_provider_catalog.py
 !/backend/tests/test_custom_provider_endpoints.py
 !/backend/tests/test_custom_provider_factory.py
+!/backend/tests/test_duration_presets.py
+!/backend/tests/test_alembic_supported_durations_backfill.py
 !/backend/tests/test_model_discovery.py
 !/backend/tests/test_openai_text_backend.py
 !/backend/tests/test_text_backend_factory.py
