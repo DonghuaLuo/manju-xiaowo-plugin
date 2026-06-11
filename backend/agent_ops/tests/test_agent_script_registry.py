@@ -344,9 +344,12 @@ def test_agent_script_registry_run_expands_current_python_token(capsys) -> None:
 
 def test_agent_ops_files_do_not_embed_local_machine_paths() -> None:
     root = backend_root() / "agent_ops"
+    repair_root = repair_runs_dir(backend_root()).resolve()
     offenders: list[str] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in {".json", ".md", ".py"}:
+            continue
+        if path.resolve().is_relative_to(repair_root):
             continue
         text = path.read_text(encoding="utf-8")
         if LOCAL_ABSOLUTE_PATH_RE.search(text):

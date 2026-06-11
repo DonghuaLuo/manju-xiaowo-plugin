@@ -177,6 +177,13 @@ def _normalize_params(params: Any) -> dict[str, Any]:
     return params if isinstance(params, dict) else {}
 
 
+def _json_body_or_payload(payload: dict[str, Any]) -> Any:
+    body = payload.get("body")
+    if isinstance(body, dict) and str(body.get("kind") or "empty") == "json":
+        return body.get("value")
+    return payload
+
+
 def _emit_manju_api_events(sdk: Any, result: dict[str, Any]) -> dict[str, Any]:
     for event in result.get("events") or []:
         sdk.send_event("manju_api_event", event)
@@ -225,6 +232,10 @@ async def handle_manju_api_command(command: str, params: Any, sdk: Any) -> Any:
         from utils.arcreel_ipc_bridge import read_local_file_base64
 
         return read_local_file_base64(payload)
+    if command == "manju_api_run_agent_ops":
+        from utils.manju_agent_ops_ipc import run_agent_ops
+
+        return await run_agent_ops(_json_body_or_payload(payload))
     if command in _DIRECT_ASYNC_COMMANDS:
         return await _handle_direct_async(command, payload)
 

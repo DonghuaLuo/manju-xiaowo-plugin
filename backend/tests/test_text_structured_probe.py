@@ -288,3 +288,113 @@ async def test_ipc_dispatcher_maps_text_structured_output_probe(monkeypatch) -> 
     value = result["content"]["value"]
     assert value["ok"] is True
     assert value["endpoint"] == "openai-chat"
+
+
+async def test_run_agent_ops_accepts_raw_ipc_payload(monkeypatch) -> None:
+    from utils import manju_agent_ops_ipc
+    from utils.manju_ipc_api import handle_manju_api_command
+
+    seen: list[dict] = []
+
+    async def fake_run_agent_ops(body):
+        seen.append(body)
+        return {"success": True, "action": body["action"]}
+
+    monkeypatch.setattr(manju_agent_ops_ipc, "run_agent_ops", fake_run_agent_ops)
+
+    result = await handle_manju_api_command("manju_api_run_agent_ops", {"action": "list"}, sdk=None)
+
+    assert result == {"success": True, "action": "list"}
+    assert seen == [{"action": "list"}]
+
+
+async def test_run_agent_ops_accepts_wrapped_json_body(monkeypatch) -> None:
+    from utils import manju_agent_ops_ipc
+    from utils.manju_ipc_api import handle_manju_api_command
+
+    seen: list[dict] = []
+
+    async def fake_run_agent_ops(body):
+        seen.append(body)
+        return {"success": True, "script_id": body["script_id"], "dry_run": body["dry_run"]}
+
+    monkeypatch.setattr(manju_agent_ops_ipc, "run_agent_ops", fake_run_agent_ops)
+
+    result = await handle_manju_api_command(
+        "manju_api_run_agent_ops",
+        {
+            "body": {
+                "kind": "json",
+                "value": {
+                    "action": "run",
+                    "script_id": "text_structured_output_probe",
+                    "dry_run": True,
+                },
+            }
+        },
+        sdk=None,
+    )
+
+    assert result == {"success": True, "script_id": "text_structured_output_probe", "dry_run": True}
+    assert seen == [
+        {
+            "action": "run",
+            "script_id": "text_structured_output_probe",
+            "dry_run": True,
+        }
+    ]
+
+
+async def test_agent_ops_autofix_writes_runtime_repair_task(tmp_path: Path, monkeypatch) -> None:
+    from utils import agent_ops_autofix
+
+    repair_dir = tmp_path / "repair-runs"
+    monkeypatch.setattr(agent_ops_autofix, "REPAIR_RUNS_DIR", repair_dir)
+    monkeypatch.delenv("MANJU_AGENT_OPS_AGENT_COMMAND", raising=False)
+    monkeypatch.setenv("MANJU_AGENT_OPS_AUTO_REPAIR", "1")
+    monkeypatch.setattr(
+        agent_ops_autofix,
+        "_run_default_sdk_agent_repair",
+        lambda **_kwargs: {
+            "success": True,
+            "returncode": 0,
+            "timed_out": False,
+            "mode": "default_sdk",
+            "command": "claude_agent_sdk.query",
+            "stdout": "repaired",
+            "stderr": "",
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        agent_ops_autofix,
+        "_run_registry_check",
+        lambda script_id, timeout_seconds: {
+            "success": True,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout": "OK",
+            "stderr": "",
+            "error": None,
+        },
+    )
+
+    result = await agent_ops_autofix.auto_repair_runtime_failure(
+        script_id="text_structured_output_probe",
+        tool_name="generate_episode_script",
+        failure_stage="episode_script_json_generation",
+        exc=RuntimeError("strict schema blocked"),
+        context={"episode": 1},
+    )
+
+    assert result["enabled"] is True
+    assert result["agent_command_configured"] is False
+    assert result["agent_repair_attempted"] is True
+    assert result["agent_repair_mode"] == "default_sdk"
+    assert result["repaired"] is True
+    task_path = repair_dir / Path(result["repair_task"]).name
+    payload = json.loads(task_path.read_text(encoding="utf-8"))
+    assert payload["trigger"] == "runtime_failure"
+    assert payload["script_id"] == "text_structured_output_probe"
+    assert payload["tool_name"] == "generate_episode_script"
+    assert payload["context"]["episode"] == 1

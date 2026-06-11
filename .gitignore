@@ -12,11 +12,15 @@ backend/compile/
 *.log
 /MIGRATION_CONSTRAINTS.md
 /backend/logs/
+/backend/agent_ops/repair-runs/
 /backend/tests/*
 !/backend/tests/config/
 /backend/tests/config/*
 !/backend/tests/config/test_anthropic_env_dict.py
 !/backend/tests/config/test_env_keys.py
+!/backend/tests/lib/
+/backend/tests/lib/*
+!/backend/tests/lib/test_script_generator_reference_branch.py
 !/backend/tests/server/
 /backend/tests/server/*
 !/backend/tests/server/test_startup_assertions.py

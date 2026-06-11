@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
@@ -107,6 +107,64 @@ def tool_error(name: str, exc: BaseException, log: list[str] | None = None) -> d
     result = tool_result_text(text, label=f"{name} 错误输出")
     result["is_error"] = True
     return result
+
+
+EXPECTED_TOOL_ERRORS = (FileNotFoundError, ValueError, PermissionError)
+DEFAULT_AGENT_OPS_SCRIPT_ID = "manga_workflow_tool_recovery"
+
+
+async def auto_repair_tool_error(
+    name: str,
+    exc: BaseException,
+    *,
+    ctx: ToolContext,
+    args: dict[str, Any] | None = None,
+    failure_stage: str | None = None,
+    script_id: str = DEFAULT_AGENT_OPS_SCRIPT_ID,
+    retry: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    skip_expected_errors: bool = True,
+) -> dict[str, Any]:
+    """Route unexpected MCP tool failures through agent_ops and retry after repair.
+
+    User/data errors such as missing files and invalid arguments should remain
+    normal tool errors. They are not code repair opportunities.
+    """
+    if skip_expected_errors and isinstance(exc, EXPECTED_TOOL_ERRORS):
+        return tool_error(name, exc)
+
+    from utils.agent_ops_autofix import auto_repair_runtime_failure, format_auto_repair_note
+
+    repair_result = await auto_repair_runtime_failure(
+        script_id=script_id,
+        tool_name=name,
+        failure_stage=failure_stage or name,
+        exc=exc,
+        context={
+            "project_name": ctx.project_name,
+            "project_path": str(ctx.project_path),
+            "args": args or {},
+        },
+    )
+    repair_note = format_auto_repair_note(repair_result)
+    if repair_result and repair_result.get("repaired") and retry is not None:
+        try:
+            result = await retry()
+            if result.get("is_error") is True:
+                retry_text = result.get("content", [{}])[0].get("text", "重试仍返回错误")
+                return tool_error(name, RuntimeError(str(retry_text)), [repair_note] if repair_note else None)
+            text = result.get("content", [{}])[0].get("text")
+            if isinstance(text, str):
+                notes = [text, repair_note, f"agent_ops 修复成功，已自动重试 {name} 并恢复主流程。"]
+                result["content"][0]["text"] = "\n\n".join(note for note in notes if note)
+            return result
+        except Exception as retry_exc:  # noqa: BLE001
+            notes = [
+                repair_note,
+                f"agent_ops 修复后自动重试仍失败: {retry_exc}",
+                f"原始错误: {exc}",
+            ]
+            return tool_error(name, retry_exc, [note for note in notes if note])
+    return tool_error(name, exc, [repair_note] if repair_note else None)
 
 
 async def fetch_video_caps(project: dict[str, Any]) -> tuple[int | None, list[int]]:

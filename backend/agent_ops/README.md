@@ -15,6 +15,8 @@
 
 插件后端也提供 `manju_api_run_agent_ops` 调用入口。该入口固定使用当前后端进程的 `sys.executable`，并以插件后端根目录作为运行目录启动 `agent_ops/scripts/agent_script_registry.py`；IPC 只开放 `validate`、`list`、`failure-examples` 和必须带 `dry_run=true` 的 `run` 预览，不开放 repair、rollback、snapshot 或 repair agent 启动能力，也不允许调用方传 Python 路径。
 
+运行时自动处理：关键 agent 工具失败时可由后端直接触发 `utils/agent_ops_autofix.py`，自动写入 `agent_ops/repair-runs` 修复任务并运行对应 registry 检查。默认会使用当前 Manju 后端的 Claude Agent SDK 凭据自动启动内置修复 agent；若运行环境配置了 `MANJU_AGENT_OPS_AGENT_COMMAND`，该命令仅作为开发/运维覆盖项。修复 agent 的写入范围按 registry 记录的 `repair_write_allowlist` 校验，越界修改会被恢复。可用 `MANJU_AGENT_OPS_AUTO_REPAIR=0` 临时关闭自动触发。
+
 校验命令：
 
 ```powershell

@@ -40,12 +40,13 @@ MCP 工具内部通过 `ScriptGenerator` 完成以下步骤：
 1. **加载 project.json** — 读取 content_mode、characters、scenes、props、overview、style
 2. **加载 Step 1 中间文件** — 根据 effective_mode 选择对应文件
 3. **构建 Prompt** — 由 `lib.prompt_builders_script` 或 `lib.prompt_builders_reference` 生成
-4. **调用 TextBackend** — 由 `TextGenerator` 按项目配置选择文本模型，传入 Pydantic schema 作为 `response_schema` 强约束 JSON 结构
+4. **调用 TextBackend** — 由 `TextGenerator` 按项目配置选择文本模型；优先用 Pydantic schema 作为 `response_schema` 进行 strict JSON Schema 约束，若 endpoint 未通过 strict capability probe，则工具会进入 `non_strict_validated` 兜底：不再发送 `response_schema`，但仍必须通过本地 Pydantic 校验和 Step 1 ID / 数量 / 顺序对齐后才写入文件
 5. **Pydantic 验证** — 按 effective_mode 选 schema：
    - reference_video → `ReferenceVideoScript`（含 `video_units[]`）
    - narration → `NarrationEpisodeScript`
    - drama → `DramaEpisodeScript`
 6. **补充元数据** — `episode`、`content_mode`、`generation_mode`、`novel`（项目 title + `第N集`）、统计信息（片段 / 场景 / unit 数、总时长）、时间戳。这些字段对 LLM 隐藏（SkipJsonSchema），由后端从 `project.json` 注入，避免 LLM 幻觉污染下游消费方（compose-video 的 mp4 文件名、剪映草稿等）。
+7. **失败自动处理** — 若 `generate_episode_script` 最终仍失败，后端会自动触发 `agent_ops`：写入运行时修复任务到 `agent_ops/repair-runs`，自动启动内置修复 agent，运行对应 registry 检查；修复成功后会自动重试原工具恢复主流程。
 
 ## 输出格式
 

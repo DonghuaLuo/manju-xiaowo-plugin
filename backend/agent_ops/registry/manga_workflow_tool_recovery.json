@@ -1,0 +1,74 @@
+{
+  "script_id": "manga_workflow_tool_recovery",
+  "version": "1.0.0",
+  "status": "default",
+  "owner": "manju-agent-tools",
+  "created_at": "2026-06-11",
+  "updated_at": "2026-06-11",
+  "summary": "覆盖 Manju agent 从分集拆分、Step1 规范化到分镜提示词生成的关键 MCP 工具失败恢复：非预期工具异常自动触发 agent_ops、启动内置修复 agent、通过 registry 检查后重试原工具。",
+  "working_directory": ".",
+  "entrypoints": [
+    "server/agent_runtime/sdk_tools/_context.py:auto_repair_tool_error",
+    "server/agent_runtime/sdk_tools/project_sources.py:split_episode_tool",
+    "server/agent_runtime/sdk_tools/text_generation.py:normalize_drama_script_tool",
+    "server/agent_runtime/sdk_tools/text_generation.py:generate_episode_script_tool",
+    "server/agent_runtime/sdk_tools/enqueue_storyboards.py:generate_storyboards_tool",
+    "server/agent_runtime/sdk_tools/enqueue_grid.py:generate_grid_tool",
+    "utils/agent_ops_autofix.py:auto_repair_runtime_failure"
+  ],
+  "source_files": [
+    "server/agent_runtime/sdk_tools/_context.py",
+    "server/agent_runtime/sdk_tools/project_sources.py",
+    "server/agent_runtime/sdk_tools/text_generation.py",
+    "server/agent_runtime/sdk_tools/enqueue_storyboards.py",
+    "server/agent_runtime/sdk_tools/enqueue_grid.py",
+    "utils/agent_ops_autofix.py",
+    "agent_runtime_profile/.claude/skills/manga-workflow/SKILL.drama.md",
+    "agent_runtime_profile/.claude/skills/generate-script/SKILL.md",
+    "agent_runtime_profile/.claude/skills/generate-storyboard/SKILL.md",
+    "agent_runtime_profile/.claude/skills/generate-grid/SKILL.md"
+  ],
+  "evidence": [
+    "agent_runtime_profile/.claude/skills/manga-workflow/SKILL.drama.md",
+    "agent_runtime_profile/.claude/skills/generate-script/SKILL.md",
+    "agent_runtime_profile/.claude/skills/generate-storyboard/SKILL.md",
+    "agent_runtime_profile/.claude/skills/generate-grid/SKILL.md"
+  ],
+  "validation_commands": [
+    "{python} -m pytest tests/server/agent_runtime/test_sdk_tools.py::test_normalize_drama_script_retries_after_agent_ops_repair tests/server/agent_runtime/test_sdk_tools.py::test_generate_episode_script_retries_after_agent_ops_repair -q",
+    "git diff --check"
+  ],
+  "tests": [
+    "tests/server/agent_runtime/test_sdk_tools.py",
+    "agent_ops/tests/test_agent_script_registry.py"
+  ],
+  "repair_write_allowlist": [
+    "server/agent_runtime/sdk_tools/_context.py",
+    "server/agent_runtime/sdk_tools/project_sources.py",
+    "server/agent_runtime/sdk_tools/text_generation.py",
+    "server/agent_runtime/sdk_tools/enqueue_storyboards.py",
+    "server/agent_runtime/sdk_tools/enqueue_grid.py",
+    "utils/agent_ops_autofix.py",
+    "tests/server/agent_runtime/test_sdk_tools.py",
+    "agent_ops",
+    "agent_runtime_profile/.claude/skills"
+  ],
+  "failure_examples": [
+    "agent_ops/registry/failure-examples/manga_workflow_tool_recovery_not_resuming.json"
+  ],
+  "known_failures": [
+    "tool_failure_not_routed: 关键 MCP 工具抛非预期异常后只返回 tool_error，未触发 agent_ops",
+    "tool_repair_not_resuming: agent_ops 修复成功后未自动重试原 MCP 工具，主流程仍需人工恢复",
+    "expected_user_error_misrouted: 源文件缺失、参数错误等用户/数据错误被误当代码修复启动 agent"
+  ],
+  "rollback": [
+    "移除新增 registry 记录或将 status 改为 deprecated",
+    "回滚 _context.py 的 auto_repair_tool_error helper 与相关工具接入",
+    "保留 test_sdk_tools.py 中的恢复回归测试，避免再次退回只诊断不恢复"
+  ],
+  "notes": [
+    "agent_ops 自动修复只处理非预期工具异常；FileNotFoundError、ValueError、PermissionError 默认按普通工具错误返回，避免把用户输入或项目数据问题当代码修。",
+    "修复 agent 默认由当前 Manju 后端的 Claude Agent SDK 启动，MANJU_AGENT_OPS_AGENT_COMMAND 只是开发/运维覆盖项。",
+    "修复成功必须同时满足 repair agent 成功和 registry 检查通过，随后才能自动重试原工具。"
+  ]
+}
