@@ -36,6 +36,8 @@
       "entry": "http://localhost:5174"
     },
     "backend": {
+      "runtime": "D:\\ProgramData\\miniconda3\\envs\\manju\\python.exe",
+      "use_local_runtime": false,
       "args": [
         "--dev"
       ]
