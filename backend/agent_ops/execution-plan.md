@@ -77,7 +77,7 @@ Agent 任务控制器
 
 ```text
 script_id: text_structured_output_probe
-version: 1.2.0
+version: 1.3.0
 owner: manju-agent-tools
 status: default
 created_at: 2026-06-10
@@ -87,6 +87,7 @@ evidence:
   - docs/provider-api-evidence/api-interface-matrix.md
   - docs/provider-api-evidence/call-paths-and-custom-providers.md
 tests:
+  - agent_ops/tests/text_structured_output_probe_smoke.py
   - tests/test_text_structured_probe.py
   - tests/test_openai_text_backend.py
 rollback:
@@ -153,7 +154,7 @@ Agent 应读取：
 - `tests/test_openai_text_backend.py`
 - `tests/test_text_backend_factory.py`
 - `tests/test_custom_provider_factory.py`
-- 涉及总览或剧本时补 `tests/test_script_generator.py`
+- 剧本生成兜底链路必须补 `agent_ops/tests/text_structured_output_probe_smoke.py`
 
 ### 6. 提升默认版本
 
@@ -166,7 +167,7 @@ Agent 应读取：
 1. 建立 `text_structured_output_probe` 版本记录。
 2. 记录当前修复原则：自定义 `openai-chat` 必须真实发送 `response_format.type=json_schema`。
 3. probe 必须使用对抗式 prompt，确认 endpoint 是否真的执行 schema。
-4. 脚本生成和项目总览生成前都必须经过 preflight。
+4. 项目总览生成前仍必须通过 strict preflight；剧本生成在 strict preflight 失败时进入 `non_strict_validated` 兜底，但只有通过本地 schema 和 Step 1 对齐校验后才允许写盘。
 5. 供应商能力应逐步沉淀为状态：`unknown`、`supported`、`unsupported`、`schema_not_enforced`。
 6. 后续每次遇到新供应商或新网关异常时，先新增失败样例，再修复 probe 或 endpoint 适配。
 
@@ -183,6 +184,7 @@ Agent 可以自动做：
 Agent 不应自动做：
 
 - 直接修改已安装插件目录中的 `plugins/manju` 运行副本。
+- 直接修改未被当前 registry 任务授权的源码范围。
 - 在未验证时替换默认脚本。
 - 把不支持 strict schema 的结果包装成 strict 成功。
 - 对供应商 API 字段做无证据猜测。

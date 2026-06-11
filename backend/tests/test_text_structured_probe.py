@@ -45,14 +45,82 @@ def _write_json(path: Path, payload: dict) -> None:
     _write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _write_basic_drama_project(project_path: Path) -> None:
+    _write_json(
+        project_path / "project.json",
+        {
+            "title": "项目",
+            "content_mode": "drama",
+            "overview": {},
+            "characters": {},
+            "scenes": {},
+            "props": {},
+            "style": "写实",
+            "style_description": "cinematic",
+            "_supported_durations": [4, 6, 8],
+        },
+    )
+    _write(
+        project_path / "drafts" / "episode_1" / "step1_normalized_script.md",
+        "| scene_id | scene_description | duration_seconds | segment_break |\n"
+        "| --- | --- | --- | --- |\n"
+        "| E1S01 | 场景 | 4 | 是 |\n",
+    )
+
+
+def _valid_drama_script_payload() -> dict:
+    return {
+        "title": "第一集",
+        "content_mode": "drama",
+        "scenes": [
+            {
+                "scene_id": "E1S01",
+                "duration_seconds": 4,
+                "segment_break": True,
+                "characters_in_scene": [],
+                "scenes": [],
+                "props": [],
+                "image_prompt": {
+                    "scene": "林清站在雨夜巷口，路灯从左侧打出冷白光，地面积水倒映她的身影。",
+                    "composition": {
+                        "shot_type": "Medium Shot",
+                        "lighting": "左侧冷白路灯照亮半身，背景保持暗部层次",
+                        "ambiance": "雨丝和薄雾在路灯下可见",
+                    },
+                },
+                "video_prompt": {
+                    "action": "林清缓慢抬头，手指收紧伞柄，雨水沿伞缘滴落。",
+                    "camera_motion": "Static",
+                    "ambiance_audio": "雨声和远处脚步声",
+                    "dialogue": [],
+                },
+            }
+        ],
+    }
+
+
 class _PreflightFailsGenerator:
     model = "fake-model"
+
+    def __init__(self, responses: list[str] | None = None) -> None:
+        self.requests = []
+        self._responses = responses or [json.dumps(_valid_drama_script_payload(), ensure_ascii=False)]
+
+    @property
+    def last_request(self):
+        return self.requests[-1] if self.requests else None
 
     async def ensure_structured_output_ready(self):
         raise ValueError("probe failed before script generation")
 
     async def generate(self, request, project_name=None):
-        raise AssertionError("generate must not run when preflight fails")
+        self.requests.append(request)
+        index = min(len(self.requests) - 1, len(self._responses) - 1)
+        return TextGenerationResult(
+            text=self._responses[index],
+            provider="fake",
+            model="fake-model",
+        )
 
 
 async def test_probe_skips_request_when_capability_missing() -> None:
@@ -112,27 +180,56 @@ async def test_ensure_raises_concise_failure() -> None:
     assert "endpoint=openai-chat" in message
 
 
-async def test_script_generator_runs_preflight_before_model_call(tmp_path: Path) -> None:
+async def test_script_generator_falls_back_when_preflight_fails(tmp_path: Path) -> None:
     project_path = tmp_path / "demo"
-    _write_json(
-        project_path / "project.json",
-        {
-            "title": "项目",
-            "content_mode": "drama",
-            "overview": {},
-            "characters": {},
-            "scenes": {},
-            "props": {},
-            "style": "写实",
-            "style_description": "cinematic",
-            "_supported_durations": [4, 6, 8],
-        },
-    )
-    _write(project_path / "drafts" / "episode_1" / "step1_normalized_script.md", "E1S01 | 场景")
+    _write_basic_drama_project(project_path)
 
-    generator = ScriptGenerator(project_path, generator=_PreflightFailsGenerator())
-    with pytest.raises(ValueError, match="probe failed before script generation"):
+    fake = _PreflightFailsGenerator()
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["scene_id"] == "E1S01"
+    assert payload["metadata"]["structured_output_mode"] == "non_strict_validated"
+    assert payload["metadata"]["structured_output_attempts"] == 1
+    assert fake.last_request is not None
+    assert fake.last_request.response_schema is None
+    assert "<json_schema>" in fake.last_request.prompt
+
+
+async def test_script_generator_retries_non_strict_until_local_validation_passes(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    fake = _PreflightFailsGenerator(
+        responses=[
+            "not json",
+            json.dumps(_valid_drama_script_payload(), ensure_ascii=False),
+        ]
+    )
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["scene_id"] == "E1S01"
+    assert payload["metadata"]["structured_output_attempts"] == 2
+    assert len(fake.requests) == 2
+    assert all(request.response_schema is None for request in fake.requests)
+    assert "上一次输出未通过本地校验" in fake.requests[1].prompt
+
+
+async def test_script_generator_does_not_write_invalid_non_strict_output(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    fake = _PreflightFailsGenerator(responses=["not json", "[]", '{"title":"bad","scenes":[]}'])
+    generator = ScriptGenerator(project_path, generator=fake)
+
+    with pytest.raises(ValueError, match="JSON 解析失败|剧本结构校验失败|剧本条目数与 Step 1 不一致"):
         await generator.generate(1)
+
+    assert len(fake.requests) == 3
+    assert not (project_path / "scripts" / "episode_1.json").exists()
 
 
 async def test_project_overview_runs_preflight_before_model_call(tmp_path: Path, monkeypatch) -> None:

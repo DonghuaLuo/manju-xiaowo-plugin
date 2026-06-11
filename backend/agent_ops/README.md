@@ -13,6 +13,8 @@
 
 `registry/*.json` 的验证命令可使用 `{python}` / `{python_executable}` 占位符。执行时 `agent_script_registry.py` 会把它替换为运行 registry 的 Python；由插件后端进程启动时，它就是当前插件后端使用的 Python。下面命令都从插件后端运行目录执行；手工调试时，用当前插件后端 Python 替换 `{python}`。
 
+插件后端也提供 `manju_api_run_agent_ops` 调用入口。该入口固定使用当前后端进程的 `sys.executable`，并以插件后端根目录作为运行目录启动 `agent_ops/scripts/agent_script_registry.py`；IPC 只开放 `validate`、`list`、`failure-examples` 和必须带 `dry_run=true` 的 `run` 预览，不开放 repair、rollback、snapshot 或 repair agent 启动能力，也不允许调用方传 Python 路径。
+
 校验命令：
 
 ```powershell

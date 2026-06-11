@@ -127,6 +127,7 @@ MANJU_API_COMMANDS = (
     "manju_api_replace_asset_image",
     "manju_api_replace_custom_provider_models",
     "manju_api_restore_version",
+    "manju_api_run_agent_ops",
     "manju_api_save_diagnostics_archive",
     "manju_api_save_draft",
     "manju_api_save_script_splitting_template",

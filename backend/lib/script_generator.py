@@ -30,7 +30,7 @@ from lib.script_models import (
     ReferenceVideoScript,
 )
 from lib.script_splitting_templates import current_hash, current_profile, ensure_project_script_splitting_snapshot
-from lib.text_backends.base import TextGenerationRequest, TextTaskType
+from lib.text_backends.base import TextGenerationRequest, TextTaskType, resolve_schema
 from lib.text_generator import TextGenerator
 from lib.text_metrics import count_reading_units
 
@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 # 大型 JSON 剧本输出上限：22+ 场景典型约 14K token，留 2× 安全边际。
 # 注意：受各模型硬上限约束（如 doubao-seed-1-8 ~8192），需选择支持 ≥16K 输出的模型。
 SCRIPT_MAX_OUTPUT_TOKENS = 32000
+_SCRIPT_NON_STRICT_MAX_ATTEMPTS = 3
+_SCRIPT_NON_STRICT_RESPONSE_EXCERPT_LIMIT = 4000
 
 # 集号前缀正则：仅匹配 `E{数字}` + 紧随 S/U（segment/scene 用 S，video_unit 用 U），
 # 保留后缀（如 `E1S03_2` → `E2S03_2`）。设计契约见 lib/script_models.py。
@@ -103,6 +105,56 @@ def _response_excerpt(text: str, limit: int = 240) -> str:
     if len(compact) > limit:
         return compact[:limit] + "..."
     return compact
+
+
+def _schema_for_prompt(schema: dict | type) -> str:
+    return json.dumps(resolve_schema(schema), ensure_ascii=False, indent=2)
+
+
+def _build_non_strict_script_prompt(
+    base_prompt: str,
+    schema: dict | type,
+    *,
+    preflight_error: Exception | None,
+    attempt: int,
+    previous_error: Exception | None = None,
+    previous_response: str | None = None,
+) -> str:
+    preflight_note = _response_excerpt(str(preflight_error), 600) if preflight_error else "未使用原生 strict schema"
+    repair_block = ""
+    if previous_error is not None:
+        previous_excerpt = _response_excerpt(previous_response or "", _SCRIPT_NON_STRICT_RESPONSE_EXCERPT_LIMIT)
+        repair_block = f"""
+
+# 上一次输出未通过本地校验
+
+错误：{_response_excerpt(str(previous_error), 900)}
+
+上一次输出片段：
+<previous_output>
+{previous_excerpt}
+</previous_output>
+
+请重新输出完整的修正后 JSON 对象，不要只输出差异。
+"""
+
+    return f"""{base_prompt}
+
+# 输出格式约束（非 strict JSON 兜底，第 {attempt} 次）
+
+当前文本 endpoint 未通过原生 strict JSON Schema 能力校验：{preflight_note}
+
+本次不会使用后端原生 response_schema 约束，但返回内容仍会被 Manju 本地校验。请严格遵守：
+
+- 只输出一个 JSON 对象，不要 Markdown，不要解释文字，不要代码块。
+- JSON 必须完全匹配下面 JSON Schema；缺字段、字段类型错误、enum 不合法都会被拒绝。
+- 条目数量、ID 和顺序必须与 Step 1 拆分表一致。
+- 顶层 episode、duration_seconds、novel、metadata、generation_mode 等运行时字段不要主动生成，后端会统一注入。
+
+<json_schema>
+{_schema_for_prompt(schema)}
+</json_schema>
+{repair_block}"""
 
 
 def _format_pydantic_error(exc: ValidationError, limit: int = 5) -> str:
@@ -468,31 +520,89 @@ class ScriptGenerator:
             )
             schema = DramaEpisodeScript
 
-        # 4. 生成剧本前先做真实 strict JSON Schema capability probe，避免完整 prompt
-        #    打出去后才发现 endpoint 没有执行原生 schema 约束。
+        # 4. 生成剧本前先做真实 strict JSON Schema capability probe。若 endpoint
+        #    不支持 native strict schema，进入显式非 strict 兜底路径，并继续用
+        #    本地 schema + Step 1 对齐校验守住写盘边界。
         project_name = self.project_path.name
+        response_schema = schema
+        strict_probe_error: Exception | None = None
         ensure_ready = getattr(self.generator, "ensure_structured_output_ready", None)
         if callable(ensure_ready):
-            await ensure_ready()
+            try:
+                await ensure_ready()
+            except Exception as exc:  # noqa: BLE001 - capability failure should not deadlock script generation
+                strict_probe_error = exc
+                response_schema = None
+                logger.warning(
+                    "strict JSON Schema preflight failed for episode %d; "
+                    "falling back to non-strict JSON generation with local validation: %s",
+                    episode,
+                    exc,
+                )
 
         # 5. 调用 TextBackend
         logger.info("正在生成第 %d 集剧本...", episode)
-        result = await self.generator.generate(
-            TextGenerationRequest(
-                prompt=prompt,
-                response_schema=schema,
-                max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
-            ),
-            project_name=project_name,
+        max_attempts = 1 if response_schema is not None else _SCRIPT_NON_STRICT_MAX_ATTEMPTS
+        generation_prompt = (
+            prompt
+            if response_schema is not None
+            else _build_non_strict_script_prompt(
+                prompt,
+                schema,
+                preflight_error=strict_probe_error,
+                attempt=1,
+            )
         )
-        response_text = result.text
+        script_data: dict | None = None
+        for attempt in range(1, max_attempts + 1):
+            result = await self.generator.generate(
+                TextGenerationRequest(
+                    prompt=generation_prompt,
+                    response_schema=response_schema,
+                    max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
+                ),
+                project_name=project_name,
+            )
+            response_text = result.text
 
-        # 6. 解析并验证响应
-        script_data = self._parse_response(response_text, episode)
+            try:
+                # 6. 解析并验证响应
+                candidate = self._parse_response(response_text, episode)
 
-        # 7. 补充元数据
-        script_data = self._add_metadata(script_data, episode)
-        self._validate_step1_alignment(script_data, step1_md, episode)
+                # 7. 补充元数据
+                candidate = self._add_metadata(candidate, episode)
+                self._validate_step1_alignment(candidate, step1_md, episode)
+                if response_schema is None:
+                    candidate.setdefault("metadata", {})
+                    candidate["metadata"]["structured_output_mode"] = "non_strict_validated"
+                    candidate["metadata"]["structured_output_attempts"] = attempt
+                    if strict_probe_error is not None:
+                        candidate["metadata"]["structured_output_probe_error"] = _response_excerpt(
+                            str(strict_probe_error),
+                            500,
+                        )
+                script_data = candidate
+                break
+            except ValueError as exc:
+                if response_schema is not None or attempt >= max_attempts:
+                    raise
+                logger.warning(
+                    "non-strict script generation attempt %d/%d failed local validation: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                generation_prompt = _build_non_strict_script_prompt(
+                    prompt,
+                    schema,
+                    preflight_error=strict_probe_error,
+                    attempt=attempt + 1,
+                    previous_error=exc,
+                    previous_response=response_text,
+                )
+
+        if script_data is None:
+            raise RuntimeError("剧本生成失败：未得到可写入的有效 JSON")
 
         # 8. 经写盘统一入口保存，继承结构校验、元数据同步、锁与路径围栏。
         filename = self._resolve_output_filename(output_path, episode)
