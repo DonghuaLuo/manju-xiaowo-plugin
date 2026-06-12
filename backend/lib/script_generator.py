@@ -39,8 +39,9 @@ logger = logging.getLogger(__name__)
 # 大型 JSON 剧本输出上限：22+ 场景典型约 14K token，留 2× 安全边际。
 # 注意：受各模型硬上限约束（如 doubao-seed-1-8 ~8192），需选择支持 ≥16K 输出的模型。
 SCRIPT_MAX_OUTPUT_TOKENS = 32000
-_SCRIPT_NON_STRICT_MAX_ATTEMPTS = 3
+_SCRIPT_LOCAL_VALIDATION_MAX_ATTEMPTS = 3
 _SCRIPT_NON_STRICT_RESPONSE_EXCERPT_LIMIT = 4000
+_SCRIPT_DIAGNOSTIC_RESPONSE_LIMIT = 12000
 
 # 集号前缀正则：仅匹配 `E{数字}` + 紧随 S/U（segment/scene 用 S，video_unit 用 U），
 # 保留后缀（如 `E1S03_2` → `E2S03_2`）。设计契约见 lib/script_models.py。
@@ -58,6 +59,7 @@ _ASSET_REF_LABEL_RE = re.compile(
 )
 _ASSET_REF_SPLIT_RE = re.compile(r"[、,，/;；\n]+")
 _ASSET_REF_EMPTY_VALUES = {"", "-", "无", "暂无", "none", "null", "空"}
+_STEP1_EMPTY_VALUES = {"", "-", "无", "暂无", "none", "null", "空"}
 _ASSET_REF_BUCKETS = {
     "角色": "characters",
     "人物": "characters",
@@ -84,6 +86,7 @@ _STEP1_HEADER_ALIASES = {
     "片段id": "segment_id",
     "片段编号": "segment_id",
     "片段": "segment_id",
+    "unit": "unit_id",
     "单元id": "unit_id",
     "单元编号": "unit_id",
     "视频单元id": "unit_id",
@@ -92,12 +95,16 @@ _STEP1_HEADER_ALIASES = {
     "duration": "duration_seconds",
     "segmentbreak": "segment_break",
 }
-
-
-def _normalize_episode_prefix_no_log(rid: object, ep: int) -> object:
-    if not isinstance(rid, str):
-        return rid
-    return _EID_PREFIX_RE.sub(f"E{ep}", rid)
+_STRICT_SCHEMA_RUNTIME_ERROR_MARKERS = (
+    "strict JSON Schema 结构化输出失败",
+    "结构化输出无效",
+    "模型返回 JSON 但不符合 schema",
+    "模型返回内容不是合法 JSON",
+    "response_format.json_schema",
+    "text.format.json_schema",
+    "接口拒绝 json_schema 请求",
+    "未发送原生",
+)
 
 
 def _response_excerpt(text: str, limit: int = 240) -> str:
@@ -105,6 +112,13 @@ def _response_excerpt(text: str, limit: int = 240) -> str:
     if len(compact) > limit:
         return compact[:limit] + "..."
     return compact
+
+
+def _response_log_excerpt(text: str, limit: int = _SCRIPT_DIAGNOSTIC_RESPONSE_LIMIT) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...[truncated]"
 
 
 def _schema_for_prompt(schema: dict | type) -> str:
@@ -115,12 +129,19 @@ def _build_non_strict_script_prompt(
     base_prompt: str,
     schema: dict | type,
     *,
+    native_schema_enabled: bool = False,
     preflight_error: Exception | None,
     attempt: int,
     previous_error: Exception | None = None,
     previous_response: str | None = None,
 ) -> str:
-    preflight_note = _response_excerpt(str(preflight_error), 600) if preflight_error else "未使用原生 strict schema"
+    if native_schema_enabled:
+        mode_title = f"strict JSON Schema，第 {attempt} 次"
+        capability_note = "当前文本 endpoint 已通过原生 strict JSON Schema 能力校验，本次仍会发送 response_schema。"
+    else:
+        mode_title = f"非 strict JSON 兜底，第 {attempt} 次"
+        preflight_note = _response_excerpt(str(preflight_error), 600) if preflight_error else "未使用原生 strict schema"
+        capability_note = f"当前文本 endpoint 未通过原生 strict JSON Schema 能力校验：{preflight_note}"
     repair_block = ""
     if previous_error is not None:
         previous_excerpt = _response_excerpt(previous_response or "", _SCRIPT_NON_STRICT_RESPONSE_EXCERPT_LIMIT)
@@ -140,15 +161,15 @@ def _build_non_strict_script_prompt(
 
     return f"""{base_prompt}
 
-# 输出格式约束（非 strict JSON 兜底，第 {attempt} 次）
+# 输出格式约束（{mode_title}）
 
-当前文本 endpoint 未通过原生 strict JSON Schema 能力校验：{preflight_note}
+{capability_note}
 
-本次不会使用后端原生 response_schema 约束，但返回内容仍会被 Manju 本地校验。请严格遵守：
+返回内容仍会被 Manju 本地校验。请严格遵守：
 
 - 只输出一个 JSON 对象，不要 Markdown，不要解释文字，不要代码块。
 - JSON 必须完全匹配下面 JSON Schema；缺字段、字段类型错误、enum 不合法都会被拒绝。
-- 条目数量、ID 和顺序必须与 Step 1 拆分表一致。
+- 条目数量、ID、顺序和 duration_seconds 必须与 Step 1 拆分表一致。
 - 顶层 episode、duration_seconds、novel、metadata、generation_mode 等运行时字段不要主动生成，后端会统一注入。
 
 <json_schema>
@@ -191,29 +212,88 @@ def _canonical_step1_header(value: str) -> str:
     return _STEP1_HEADER_ALIASES.get(normalized, normalized)
 
 
-def _extract_step1_ids(markdown: str, id_field: str, episode: int) -> list[str]:
+def _try_parse_step1_duration(value: object) -> int | None:
+    try:
+        return _parse_step1_duration(value)
+    except ValueError:
+        return None
+
+
+def _extract_legacy_step1_duration(cells: list[str]) -> str | None:
+    for cell in cells[1:]:
+        text = _strip_markdown_cell(cell)
+        matches = re.findall(r"(?<!\d)(\d+)\s*(?:秒|s)\b", text, flags=re.IGNORECASE)
+        if matches:
+            return str(sum(int(value) for value in matches))
+    if len(cells) >= 3 and _try_parse_step1_duration(cells[2]) is not None:
+        return _strip_markdown_cell(cells[2])
+    return None
+
+
+def _extract_step1_rows(markdown: str, id_field: str, _episode: int) -> list[dict[str, str]]:
     header: list[str] | None = None
-    id_index = -1
-    ids: list[str] = []
+    rows: list[dict[str, str]] = []
+    legacy_rows: list[dict[str, str]] = []
     for line in markdown.splitlines():
         cells = _split_markdown_row(line)
         if not cells:
             continue
         if header is None:
+            item_id = _strip_markdown_cell(cells[0]) if cells else ""
+            if re.fullmatch(r"[A-Za-z]\d+[A-Za-z]\d+", item_id):
+                row = {id_field: item_id}
+                duration = _extract_legacy_step1_duration(cells)
+                if duration is not None:
+                    row["duration_seconds"] = duration
+                legacy_rows.append(row)
+                continue
             normalized = [_canonical_step1_header(cell) for cell in cells]
             if id_field not in normalized:
                 continue
             header = normalized
-            id_index = header.index(id_field)
             continue
         if _is_markdown_separator(cells):
             continue
-        if id_index >= len(cells):
-            continue
-        item_id = _strip_markdown_cell(cells[id_index])
+        row = {
+            field: _strip_markdown_cell(cells[index]) if index < len(cells) else ""
+            for index, field in enumerate(header)
+        }
+        item_id = row.get(id_field, "")
         if item_id:
-            ids.append(str(_normalize_episode_prefix_no_log(item_id, episode)))
+            if id_field == "unit_id" and "duration_seconds" not in row:
+                duration = _extract_legacy_step1_duration(cells)
+                if duration is not None:
+                    row["duration_seconds"] = duration
+            rows.append(row)
+    return rows or legacy_rows
+
+
+def _extract_step1_ids(markdown: str, id_field: str, _episode: int) -> list[str]:
+    ids: list[str] = []
+    for row in _extract_step1_rows(markdown, id_field, _episode):
+        item_id = row.get(id_field, "")
+        if item_id:
+            ids.append(item_id)
     return ids
+
+
+def _parse_step1_duration(value: object) -> int | None:
+    raw = _strip_markdown_cell(value).lower()
+    if raw.endswith("秒"):
+        raw = raw.removesuffix("秒").strip()
+    if raw.endswith("s"):
+        raw = raw.removesuffix("s").strip()
+    if raw in _STEP1_EMPTY_VALUES:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Step 1 duration_seconds 不是整数: {value!r}") from exc
+
+
+def _is_strict_schema_runtime_failure(exc: BaseException) -> bool:
+    text = str(exc)
+    return any(marker in text for marker in _STRICT_SCHEMA_RUNTIME_ERROR_MARKERS)
 
 
 def _rewrite_episode_prefix(rid: object, ep: int) -> object:
@@ -540,38 +620,108 @@ class ScriptGenerator:
                     exc,
                 )
 
+        items_key, id_field = self._script_items_shape(episode)
+        expected_step1_ids = _extract_step1_ids(step1_md, id_field, episode)
+        diagnostics: dict[str, object] = {
+            "schema_version": 1,
+            "created_at": datetime.now(UTC).isoformat(),
+            "project": self.project_path.name,
+            "project_path": str(self.project_path),
+            "episode": episode,
+            "content_mode": self.content_mode,
+            "generation_mode": gen_mode,
+            "items_key": items_key,
+            "id_field": id_field,
+            "step1": {
+                "expected_count": len(expected_step1_ids),
+                "expected_ids_head": expected_step1_ids[:20],
+                "expected_ids_tail": expected_step1_ids[-20:] if len(expected_step1_ids) > 20 else [],
+            },
+            "strict_probe": {
+                "ok": response_schema is not None,
+                "error": str(strict_probe_error) if strict_probe_error is not None else None,
+            },
+            "attempts": [],
+        }
+
         # 5. 调用 TextBackend
         logger.info("正在生成第 %d 集剧本...", episode)
-        max_attempts = 1 if response_schema is not None else _SCRIPT_NON_STRICT_MAX_ATTEMPTS
+        max_attempts = _SCRIPT_LOCAL_VALIDATION_MAX_ATTEMPTS
         generation_prompt = (
             prompt
             if response_schema is not None
             else _build_non_strict_script_prompt(
                 prompt,
                 schema,
+                native_schema_enabled=False,
                 preflight_error=strict_probe_error,
                 attempt=1,
             )
         )
         script_data: dict | None = None
-        for attempt in range(1, max_attempts + 1):
-            result = await self.generator.generate(
-                TextGenerationRequest(
-                    prompt=generation_prompt,
-                    response_schema=response_schema,
-                    max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
-                ),
-                project_name=project_name,
-            )
+        attempt = 1
+        while attempt <= max_attempts:
+            attempt_record: dict[str, object] = {
+                "attempt": attempt,
+                "response_schema_sent": response_schema is not None,
+            }
+            diagnostics["attempts"].append(attempt_record)
+            try:
+                result = await self.generator.generate(
+                    TextGenerationRequest(
+                        prompt=generation_prompt,
+                        response_schema=response_schema,
+                        max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
+                    ),
+                    project_name=project_name,
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostics should capture provider/runtime failures too.
+                if response_schema is not None and _is_strict_schema_runtime_failure(exc):
+                    attempt_record["status"] = "fallback_to_non_strict"
+                    attempt_record["generation_error"] = str(exc)
+                    strict_probe_error = exc
+                    response_schema = None
+                    max_attempts = max(max_attempts, attempt + _SCRIPT_LOCAL_VALIDATION_MAX_ATTEMPTS)
+                    diagnostics["strict_probe"] = {
+                        "ok": False,
+                        "error": str(exc),
+                        "degraded_after": "script_schema_generation",
+                    }
+                    logger.warning(
+                        "strict JSON Schema script generation failed for episode %d; "
+                        "falling back to non-strict JSON generation with local validation: %s",
+                        episode,
+                        exc,
+                    )
+                    generation_prompt = _build_non_strict_script_prompt(
+                        prompt,
+                        schema,
+                        native_schema_enabled=False,
+                        preflight_error=exc,
+                        attempt=attempt + 1,
+                    )
+                    attempt += 1
+                    continue
+                attempt_record["status"] = "failed"
+                attempt_record["generation_error"] = str(exc)
+                diagnostics["final_error"] = str(exc)
+                diagnostic_path = self._write_generation_diagnostic(episode, diagnostics)
+                raise RuntimeError(f"文本模型生成失败: {exc}；诊断已写入: {diagnostic_path}") from exc
+
             response_text = result.text
+            attempt_record["response_length"] = len(str(response_text or ""))
+            attempt_record["response_excerpt"] = _response_log_excerpt(response_text)
 
             try:
                 # 6. 解析并验证响应
                 candidate = self._parse_response(response_text, episode)
+                attempt_record["parsed_keys"] = sorted(str(key) for key in candidate.keys())
+
+                self._validate_step1_alignment(candidate, step1_md, episode)
 
                 # 7. 补充元数据
                 candidate = self._add_metadata(candidate, episode)
-                self._validate_step1_alignment(candidate, step1_md, episode)
+                attempt_record["status"] = "passed"
                 if response_schema is None:
                     candidate.setdefault("metadata", {})
                     candidate["metadata"]["structured_output_mode"] = "non_strict_validated"
@@ -584,10 +734,14 @@ class ScriptGenerator:
                 script_data = candidate
                 break
             except ValueError as exc:
-                if response_schema is not None or attempt >= max_attempts:
-                    raise
+                attempt_record["status"] = "failed"
+                attempt_record["validation_error"] = str(exc)
+                if attempt >= max_attempts:
+                    diagnostics["final_error"] = str(exc)
+                    diagnostic_path = self._write_generation_diagnostic(episode, diagnostics)
+                    raise ValueError(f"{exc}；诊断已写入: {diagnostic_path}") from exc
                 logger.warning(
-                    "non-strict script generation attempt %d/%d failed local validation: %s",
+                    "script generation attempt %d/%d failed local validation: %s",
                     attempt,
                     max_attempts,
                     exc,
@@ -595,11 +749,13 @@ class ScriptGenerator:
                 generation_prompt = _build_non_strict_script_prompt(
                     prompt,
                     schema,
+                    native_schema_enabled=response_schema is not None,
                     preflight_error=strict_probe_error,
                     attempt=attempt + 1,
                     previous_error=exc,
                     previous_response=response_text,
                 )
+            attempt += 1
 
         if script_data is None:
             raise RuntimeError("剧本生成失败：未得到可写入的有效 JSON")
@@ -613,6 +769,25 @@ class ScriptGenerator:
 
         logger.info("剧本已保存至 %s", output_path)
         return output_path
+
+    def _script_items_shape(self, episode: int) -> tuple[str, str]:
+        gen_mode = self._effective_generation_mode(episode)
+        if gen_mode == "reference_video":
+            return "video_units", "unit_id"
+        if self.content_mode == "narration":
+            return "segments", "segment_id"
+        return "scenes", "scene_id"
+
+    def _write_generation_diagnostic(self, episode: int, diagnostics: dict[str, object]) -> Path:
+        drafts_dir = self.project_path / "drafts" / f"episode_{episode}"
+        path = drafts_dir / "generate_episode_script_diagnostics.json"
+        try:
+            drafts_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.warning("generate_episode_script diagnostics written: %s", path)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the original failure.
+            logger.warning("generate_episode_script diagnostics write failed: %s", exc)
+        return path
 
     def _resolve_output_filename(self, output_path: Path | str | None, episode: int) -> str:
         """把兼容参数收敛成 scripts/ 下纯文件名。"""
@@ -901,37 +1076,39 @@ class ScriptGenerator:
                 validated = NarrationEpisodeScript.model_validate(data)
             else:
                 validated = DramaEpisodeScript.model_validate(data)
-            return validated.model_dump()
+            payload = validated.model_dump()
+            if not str(payload.get("title") or "").strip():
+                raise ValueError("剧本结构校验失败: title 不能为空")
+            return payload
         except ValidationError as e:
             raise ValueError(f"剧本结构校验失败: {_format_pydantic_error(e)}") from e
 
     def _validate_step1_alignment(self, script_data: dict, step1_md: str, episode: int) -> None:
-        gen_mode = self._effective_generation_mode(episode)
-        if gen_mode == "reference_video":
-            items_key = "video_units"
-            id_field = "unit_id"
-        elif self.content_mode == "narration":
-            items_key = "segments"
-            id_field = "segment_id"
-        else:
-            items_key = "scenes"
-            id_field = "scene_id"
+        items_key, id_field = self._script_items_shape(episode)
 
-        expected_ids = _extract_step1_ids(step1_md, id_field, episode)
+        step1_rows = _extract_step1_rows(step1_md, id_field, episode)
+        expected_ids = [row[id_field] for row in step1_rows]
         if not expected_ids:
-            return
+            raise ValueError(f"Step 1 对齐校验失败: 未从 Step 1 表格提取到 {id_field}，拒绝生成半成品")
+        wrong_episode_ids = []
+        for item_id in expected_ids:
+            prefix_match = _EID_PREFIX_RE.match(item_id)
+            if prefix_match and prefix_match.group(0) != f"E{episode}":
+                wrong_episode_ids.append(item_id)
+        if wrong_episode_ids:
+            raise ValueError(
+                f"Step 1 ID 集号与当前 episode 不一致: 当前第 {episode} 集，"
+                f"异常 ID={wrong_episode_ids[:8]}"
+            )
 
         items = script_data.get(items_key)
         if not isinstance(items, list):
             raise ValueError(f"剧本结构校验失败: 缺少 {items_key} 列表")
         actual_ids = [
-            str(_normalize_episode_prefix_no_log(item.get(id_field), episode))
+            str(item.get(id_field))
             for item in items
             if isinstance(item, dict) and item.get(id_field)
         ]
-        if actual_ids == expected_ids:
-            return
-
         missing = [item_id for item_id in expected_ids if item_id not in actual_ids]
         extra = [item_id for item_id in actual_ids if item_id not in expected_ids]
         if len(actual_ids) != len(expected_ids):
@@ -939,10 +1116,24 @@ class ScriptGenerator:
                 f"剧本条目数与 Step 1 不一致: Step 1 有 {len(expected_ids)} 条，"
                 f"模型输出 {len(actual_ids)} 条；缺失={missing[:8]}，多余={extra[:8]}"
             )
-        raise ValueError(
-            "剧本条目顺序/ID 与 Step 1 不一致，拒绝写入以避免分镜偏移；"
-            f"Step 1 前几项={expected_ids[:8]}，模型输出前几项={actual_ids[:8]}"
-        )
+
+        if actual_ids != expected_ids:
+            raise ValueError(
+                "剧本条目顺序/ID 与 Step 1 不一致，拒绝写入以避免分镜偏移；"
+                f"Step 1 前几项={expected_ids[:8]}，模型输出前几项={actual_ids[:8]}"
+            )
+
+        for row, item in zip(step1_rows, items, strict=True):
+            expected_duration = _parse_step1_duration(row.get("duration_seconds", ""))
+            if expected_duration is None:
+                continue
+            actual_duration = int(item.get("duration_seconds", 0)) if isinstance(item, dict) else 0
+            if actual_duration != expected_duration:
+                item_id = row[id_field]
+                raise ValueError(
+                    f"剧本条目 {item_id} 时长与 Step 1 不一致: "
+                    f"Step 1={expected_duration} 秒，模型输出={actual_duration} 秒"
+                )
 
     def _add_metadata(self, script_data: dict, episode: int) -> dict:
         """

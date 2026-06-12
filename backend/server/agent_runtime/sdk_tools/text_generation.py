@@ -25,13 +25,11 @@ from lib.text_backends.base import TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from server.agent_runtime.sdk_tools._context import (
     ToolContext,
-    auto_repair_tool_error,
     fetch_video_caps,
     tool_error,
     tool_result_text,
 )
 from server.services.generation_route_resolver import GenerationRoute, resolve_generation_route
-from utils.agent_ops_autofix import auto_repair_runtime_failure, format_auto_repair_note
 
 logger = logging.getLogger(__name__)
 
@@ -439,36 +437,7 @@ def generate_episode_script_tool(ctx: ToolContext):
         except FileNotFoundError as exc:
             return {"content": [{"type": "text", "text": f"❌ 文件错误: {exc}"}], "is_error": True}
         except Exception as exc:  # noqa: BLE001
-            repair_result = await auto_repair_runtime_failure(
-                script_id="text_structured_output_probe",
-                tool_name="generate_episode_script",
-                failure_stage="episode_script_json_generation",
-                exc=exc,
-                context={
-                    "project_name": ctx.project_name,
-                    "project_path": str(ctx.project_path),
-                    "episode": episode,
-                    "step1_path": str(step1_path) if step1_path is not None else None,
-                    "dry_run": bool(args.get("dry_run")),
-                },
-            )
-            repair_note = format_auto_repair_note(repair_result)
-            if repair_result and repair_result.get("repaired") and episode is not None and not bool(args.get("dry_run")):
-                try:
-                    generator = await ScriptGenerator.create(ctx.project_path)
-                    result_path = await generator.generate(episode=episode)
-                    text = _episode_script_summary_text(result_path)
-                    notes = [repair_note, "agent_ops 修复成功，已自动重试 generate_episode_script 并恢复主流程。"]
-                    text = "\n\n".join(note for note in [text, *notes] if note)
-                    return {"content": [{"type": "text", "text": text}]}
-                except Exception as retry_exc:  # noqa: BLE001
-                    notes = [
-                        repair_note,
-                        f"agent_ops 修复后自动重试仍失败: {retry_exc}",
-                        f"原始错误: {exc}",
-                    ]
-                    return tool_error("generate_episode_script", retry_exc, [note for note in notes if note])
-            return tool_error("generate_episode_script", exc, [repair_note] if repair_note else None)
+            return tool_error("generate_episode_script", exc)
 
     return _handler
 
@@ -598,15 +567,7 @@ def normalize_drama_script_tool(ctx: ToolContext):
         try:
             return await _run()
         except Exception as exc:  # noqa: BLE001
-            return await auto_repair_tool_error(
-                "normalize_drama_script",
-                exc,
-                ctx=ctx,
-                args=args,
-                failure_stage="drama_step1_normalization",
-                retry=_run,
-                skip_expected_errors=True,
-            )
+            return tool_error("normalize_drama_script", exc)
 
     return _handler
 

@@ -1,6 +1,8 @@
 # Agent Ops
 
-本目录保存给 agent / 运维自动化执行的脚本、约束文档、registry、失败样例和稳定快照。目录位于 Manju 插件后端根目录内，默认从后端当前工作目录执行。
+本目录保存给开发 agent（Codex / Claude 等）和后端测试使用的脚本清单、约束文档、registry、失败样例和稳定快照。目录位于 Manju 插件后端根目录内，默认从后端当前工作目录执行。
+
+它不是业务生成链路里的自动创作 agent，也不再由 `generate_episode_script`、`normalize_drama_script` 等运行时 MCP tool 自动触发。业务生成失败时应由对应业务函数自己完成重试、校验和诊断写盘；`agent_ops` 只保留给开发/回归验证使用。
 
 每个 JSON 文件记录一个可由 agent 调用、修复和迭代的脚本或调用链。记录必须能回答：
 
@@ -11,11 +13,9 @@
 - 验证命令和回归测试是什么。
 - 如果新版本失败，如何回滚。
 
-`registry/*.json` 的验证命令可使用 `{python}` / `{python_executable}` 占位符。执行时 `agent_script_registry.py` 会把它替换为运行 registry 的 Python；由插件后端进程启动时，它就是当前插件后端使用的 Python。下面命令都从插件后端运行目录执行；手工调试时，用当前插件后端 Python 替换 `{python}`。
+`registry/*.json` 的验证命令可使用 `{python}` / `{python_executable}` 占位符。执行时 `agent_script_registry.py` 会把它替换为运行 registry 的 Python。下面命令都从插件后端运行目录执行；手工调试时，用当前插件后端 Python 替换 `{python}`。
 
-插件后端也提供 `manju_api_run_agent_ops` 调用入口。该入口固定使用当前后端进程的 `sys.executable`，并以插件后端根目录作为运行目录启动 `agent_ops/scripts/agent_script_registry.py`；IPC 只开放 `validate`、`list`、`failure-examples` 和必须带 `dry_run=true` 的 `run` 预览，不开放 repair、rollback、snapshot 或 repair agent 启动能力，也不允许调用方传 Python 路径。
-
-运行时自动处理：关键 agent 工具失败时可由后端直接触发 `utils/agent_ops_autofix.py`，自动写入 `agent_ops/repair-runs` 修复任务并运行对应 registry 检查。默认会使用当前 Manju 后端的 Claude Agent SDK 凭据自动启动内置修复 agent；若运行环境配置了 `MANJU_AGENT_OPS_AGENT_COMMAND`，该命令仅作为开发/运维覆盖项。修复 agent 的写入范围按 registry 记录的 `repair_write_allowlist` 校验，越界修改会被恢复。可用 `MANJU_AGENT_OPS_AUTO_REPAIR=0` 临时关闭自动触发。
+插件后端不再提供 `manju_api_run_agent_ops` 调用入口，也不再保留 `utils/agent_ops_autofix.py` 运行时自动修复链路。需要排查时，由开发 agent 或测试命令直接读取本目录的 registry、失败样例和验证命令。
 
 校验命令：
 
@@ -47,7 +47,7 @@
 {python} agent_ops\scripts\agent_script_registry.py run text_structured_output_probe --rollback-on-failure
 ```
 
-验证失败时生成修复任务并启动运维 agent 命令，agent 修复后自动复跑验证：
+开发期验证失败时，可以显式生成修复任务并启动外部 agent 命令，agent 修复后自动复跑验证：
 
 ```powershell
 {python} agent_ops\scripts\agent_script_registry.py run text_structured_output_probe --repair-on-failure --agent-command "<agent-command> {repair_task}"

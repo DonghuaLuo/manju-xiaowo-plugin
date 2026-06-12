@@ -123,6 +123,41 @@ class _PreflightFailsGenerator:
         )
 
 
+class _PreflightPassesGenerator(_PreflightFailsGenerator):
+    async def ensure_structured_output_ready(self):
+        return None
+
+
+class _StrictGenerationFailsThenSucceeds(_PreflightPassesGenerator):
+    async def generate(self, request, project_name=None):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise RuntimeError("fake strict JSON Schema 结构化输出失败：接口拒绝 json_schema 请求")
+        return TextGenerationResult(
+            text=json.dumps(_valid_drama_script_payload(), ensure_ascii=False),
+            provider="fake",
+            model="fake-model",
+        )
+
+
+class _StrictInvalidThenNonStrictRepairs(_PreflightPassesGenerator):
+    async def generate(self, request, project_name=None):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise ValueError("fake/fake 结构化输出无效：模型返回 JSON 但不符合 schema")
+        if len(self.requests) == 2:
+            text = "not json"
+        elif len(self.requests) == 3:
+            text = "[]"
+        else:
+            text = json.dumps(_valid_drama_script_payload(), ensure_ascii=False)
+        return TextGenerationResult(
+            text=text,
+            provider="fake",
+            model="fake-model",
+        )
+
+
 async def test_probe_skips_request_when_capability_missing() -> None:
     backend = _FakeBackend(capabilities={TextCapability.TEXT_GENERATION})
 
@@ -197,6 +232,57 @@ async def test_script_generator_falls_back_when_preflight_fails(tmp_path: Path) 
     assert "<json_schema>" in fake.last_request.prompt
 
 
+async def test_script_generator_falls_back_when_strict_schema_generation_fails(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    fake = _StrictGenerationFailsThenSucceeds()
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["scene_id"] == "E1S01"
+    assert payload["metadata"]["structured_output_mode"] == "non_strict_validated"
+    assert "接口拒绝 json_schema 请求" in payload["metadata"]["structured_output_probe_error"]
+    assert len(fake.requests) == 2
+    assert fake.requests[0].response_schema is not None
+    assert fake.requests[1].response_schema is None
+    assert "<json_schema>" in fake.requests[1].prompt
+
+
+async def test_script_generator_keeps_three_non_strict_repairs_after_strict_schema_invalid(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    fake = _StrictInvalidThenNonStrictRepairs()
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["scene_id"] == "E1S01"
+    assert payload["metadata"]["structured_output_mode"] == "non_strict_validated"
+    assert len(fake.requests) == 4
+    assert fake.requests[0].response_schema is not None
+    assert all(request.response_schema is None for request in fake.requests[1:])
+    assert "上一次输出未通过本地校验" in fake.requests[3].prompt
+
+
+async def test_script_generator_accepts_legacy_pipe_step1_rows(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+    _write(project_path / "drafts" / "episode_1" / "step1_normalized_script.md", "E1S01 | 场景 | 4")
+
+    fake = _PreflightFailsGenerator()
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["scene_id"] == "E1S01"
+    assert payload["scenes"][0]["duration_seconds"] == 4
+    assert fake.last_request is not None
+    assert fake.last_request.response_schema is None
+
+
 async def test_script_generator_retries_non_strict_until_local_validation_passes(tmp_path: Path) -> None:
     project_path = tmp_path / "demo"
     _write_basic_drama_project(project_path)
@@ -218,6 +304,104 @@ async def test_script_generator_retries_non_strict_until_local_validation_passes
     assert "上一次输出未通过本地校验" in fake.requests[1].prompt
 
 
+async def test_script_generator_retries_strict_until_local_validation_passes(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    bad_payload = _valid_drama_script_payload()
+    bad_payload["scenes"][0]["duration_seconds"] = 8
+    fake = _PreflightPassesGenerator(
+        responses=[
+            json.dumps(bad_payload, ensure_ascii=False),
+            json.dumps(_valid_drama_script_payload(), ensure_ascii=False),
+        ]
+    )
+    generator = ScriptGenerator(project_path, generator=fake)
+    output = await generator.generate(1)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["scenes"][0]["duration_seconds"] == 4
+    assert len(fake.requests) == 2
+    assert all(request.response_schema is not None for request in fake.requests)
+    assert "上一次输出未通过本地校验" in fake.requests[1].prompt
+
+
+async def test_script_generator_rejects_blank_title(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    bad_payload = _valid_drama_script_payload()
+    bad_payload["title"] = "  "
+    fake = _PreflightFailsGenerator(responses=[json.dumps(bad_payload, ensure_ascii=False)])
+    generator = ScriptGenerator(project_path, generator=fake)
+
+    with pytest.raises(ValueError, match="title 不能为空"):
+        await generator.generate(1)
+
+    assert len(fake.requests) == 3
+    assert not (project_path / "scripts" / "episode_1.json").exists()
+
+
+async def test_script_generator_rejects_step1_duration_mismatch(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    bad_payload = _valid_drama_script_payload()
+    bad_payload["scenes"][0]["duration_seconds"] = 8
+    fake = _PreflightFailsGenerator(responses=[json.dumps(bad_payload, ensure_ascii=False)])
+    generator = ScriptGenerator(project_path, generator=fake)
+
+    with pytest.raises(ValueError, match="时长与 Step 1 不一致"):
+        await generator.generate(1)
+
+    assert len(fake.requests) == 3
+    assert not (project_path / "scripts" / "episode_1.json").exists()
+    diagnostic_path = project_path / "drafts" / "episode_1" / "generate_episode_script_diagnostics.json"
+    diagnostics = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostics["attempts"][-1]["validation_error"].startswith("剧本条目 E1S01 时长与 Step 1 不一致")
+
+
+async def test_script_generator_rejects_step1_id_mismatch_before_metadata_rewrite(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+
+    bad_payload = _valid_drama_script_payload()
+    bad_payload["scenes"][0]["scene_id"] = "E2S01"
+    fake = _PreflightFailsGenerator(responses=[json.dumps(bad_payload, ensure_ascii=False)])
+    generator = ScriptGenerator(project_path, generator=fake)
+
+    with pytest.raises(ValueError, match="顺序/ID 与 Step 1 不一致"):
+        await generator.generate(1)
+
+    assert len(fake.requests) == 3
+    assert not (project_path / "scripts" / "episode_1.json").exists()
+    diagnostic_path = project_path / "drafts" / "episode_1" / "generate_episode_script_diagnostics.json"
+    diagnostics = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert "E2S01" in diagnostics["attempts"][-1]["validation_error"]
+
+
+async def test_script_generator_rejects_wrong_episode_id_even_when_model_matches_step1(tmp_path: Path) -> None:
+    project_path = tmp_path / "demo"
+    _write_basic_drama_project(project_path)
+    _write(
+        project_path / "drafts" / "episode_1" / "step1_normalized_script.md",
+        "| scene_id | scene_description | duration_seconds | segment_break |\n"
+        "| --- | --- | --- | --- |\n"
+        "| E2S01 | 场景 | 4 | 是 |\n",
+    )
+
+    bad_payload = _valid_drama_script_payload()
+    bad_payload["scenes"][0]["scene_id"] = "E2S01"
+    fake = _PreflightFailsGenerator(responses=[json.dumps(bad_payload, ensure_ascii=False)])
+    generator = ScriptGenerator(project_path, generator=fake)
+
+    with pytest.raises(ValueError, match="Step 1 ID 集号与当前 episode 不一致"):
+        await generator.generate(1)
+
+    assert len(fake.requests) == 3
+    assert not (project_path / "scripts" / "episode_1.json").exists()
+
+
 async def test_script_generator_does_not_write_invalid_non_strict_output(tmp_path: Path) -> None:
     project_path = tmp_path / "demo"
     _write_basic_drama_project(project_path)
@@ -225,11 +409,17 @@ async def test_script_generator_does_not_write_invalid_non_strict_output(tmp_pat
     fake = _PreflightFailsGenerator(responses=["not json", "[]", '{"title":"bad","scenes":[]}'])
     generator = ScriptGenerator(project_path, generator=fake)
 
-    with pytest.raises(ValueError, match="JSON 解析失败|剧本结构校验失败|剧本条目数与 Step 1 不一致"):
+    with pytest.raises(ValueError, match="诊断已写入"):
         await generator.generate(1)
 
     assert len(fake.requests) == 3
     assert not (project_path / "scripts" / "episode_1.json").exists()
+    diagnostic_path = project_path / "drafts" / "episode_1" / "generate_episode_script_diagnostics.json"
+    diagnostics = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostics["strict_probe"]["ok"] is False
+    assert diagnostics["step1"]["expected_count"] == 1
+    assert len(diagnostics["attempts"]) == 3
+    assert diagnostics["attempts"][-1]["validation_error"].startswith("剧本条目数与 Step 1 不一致")
 
 
 async def test_project_overview_runs_preflight_before_model_call(tmp_path: Path, monkeypatch) -> None:
@@ -290,111 +480,9 @@ async def test_ipc_dispatcher_maps_text_structured_output_probe(monkeypatch) -> 
     assert value["endpoint"] == "openai-chat"
 
 
-async def test_run_agent_ops_accepts_raw_ipc_payload(monkeypatch) -> None:
-    from utils import manju_agent_ops_ipc
-    from utils.manju_ipc_api import handle_manju_api_command
+def test_runtime_ipc_does_not_expose_agent_ops_command() -> None:
+    from utils.manju_ipc_api import MANJU_API_COMMANDS
+    from utils.manju_ipc_dispatcher import _COMMAND_ENDPOINTS
 
-    seen: list[dict] = []
-
-    async def fake_run_agent_ops(body):
-        seen.append(body)
-        return {"success": True, "action": body["action"]}
-
-    monkeypatch.setattr(manju_agent_ops_ipc, "run_agent_ops", fake_run_agent_ops)
-
-    result = await handle_manju_api_command("manju_api_run_agent_ops", {"action": "list"}, sdk=None)
-
-    assert result == {"success": True, "action": "list"}
-    assert seen == [{"action": "list"}]
-
-
-async def test_run_agent_ops_accepts_wrapped_json_body(monkeypatch) -> None:
-    from utils import manju_agent_ops_ipc
-    from utils.manju_ipc_api import handle_manju_api_command
-
-    seen: list[dict] = []
-
-    async def fake_run_agent_ops(body):
-        seen.append(body)
-        return {"success": True, "script_id": body["script_id"], "dry_run": body["dry_run"]}
-
-    monkeypatch.setattr(manju_agent_ops_ipc, "run_agent_ops", fake_run_agent_ops)
-
-    result = await handle_manju_api_command(
-        "manju_api_run_agent_ops",
-        {
-            "body": {
-                "kind": "json",
-                "value": {
-                    "action": "run",
-                    "script_id": "text_structured_output_probe",
-                    "dry_run": True,
-                },
-            }
-        },
-        sdk=None,
-    )
-
-    assert result == {"success": True, "script_id": "text_structured_output_probe", "dry_run": True}
-    assert seen == [
-        {
-            "action": "run",
-            "script_id": "text_structured_output_probe",
-            "dry_run": True,
-        }
-    ]
-
-
-async def test_agent_ops_autofix_writes_runtime_repair_task(tmp_path: Path, monkeypatch) -> None:
-    from utils import agent_ops_autofix
-
-    repair_dir = tmp_path / "repair-runs"
-    monkeypatch.setattr(agent_ops_autofix, "REPAIR_RUNS_DIR", repair_dir)
-    monkeypatch.delenv("MANJU_AGENT_OPS_AGENT_COMMAND", raising=False)
-    monkeypatch.setenv("MANJU_AGENT_OPS_AUTO_REPAIR", "1")
-    monkeypatch.setattr(
-        agent_ops_autofix,
-        "_run_default_sdk_agent_repair",
-        lambda **_kwargs: {
-            "success": True,
-            "returncode": 0,
-            "timed_out": False,
-            "mode": "default_sdk",
-            "command": "claude_agent_sdk.query",
-            "stdout": "repaired",
-            "stderr": "",
-            "error": None,
-        },
-    )
-    monkeypatch.setattr(
-        agent_ops_autofix,
-        "_run_registry_check",
-        lambda script_id, timeout_seconds: {
-            "success": True,
-            "returncode": 0,
-            "timed_out": False,
-            "stdout": "OK",
-            "stderr": "",
-            "error": None,
-        },
-    )
-
-    result = await agent_ops_autofix.auto_repair_runtime_failure(
-        script_id="text_structured_output_probe",
-        tool_name="generate_episode_script",
-        failure_stage="episode_script_json_generation",
-        exc=RuntimeError("strict schema blocked"),
-        context={"episode": 1},
-    )
-
-    assert result["enabled"] is True
-    assert result["agent_command_configured"] is False
-    assert result["agent_repair_attempted"] is True
-    assert result["agent_repair_mode"] == "default_sdk"
-    assert result["repaired"] is True
-    task_path = repair_dir / Path(result["repair_task"]).name
-    payload = json.loads(task_path.read_text(encoding="utf-8"))
-    assert payload["trigger"] == "runtime_failure"
-    assert payload["script_id"] == "text_structured_output_probe"
-    assert payload["tool_name"] == "generate_episode_script"
-    assert payload["context"]["episode"] == 1
+    assert "manju_api_run_agent_ops" not in MANJU_API_COMMANDS
+    assert "manju_api_run_agent_ops" not in _COMMAND_ENDPOINTS

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import subprocess
@@ -67,7 +66,7 @@ def test_agent_script_registry_tracks_failure_examples_and_stable_snapshots() ->
     assert records["text_structured_output_probe"].data["failure_examples"] == [
         "agent_ops/registry/failure-examples/text_structured_output_probe_schema_not_enforced.json"
     ]
-    assert (stable_snapshots_dir(root) / "text_structured_output_probe-1.3.0.json").exists()
+    assert (stable_snapshots_dir(root) / "text_structured_output_probe-1.4.0.json").exists()
 
 
 def test_agent_script_registry_run_dry_run_does_not_execute_commands(capsys) -> None:
@@ -77,162 +76,6 @@ def test_agent_script_registry_run_dry_run_does_not_execute_commands(capsys) -> 
     assert exit_code == 0
     assert "DRY-RUN:" in captured.out
     assert "tests/test_text_structured_probe.py" in captured.out
-
-
-def test_agent_ops_backend_ipc_uses_current_backend_python(monkeypatch) -> None:
-    from utils import manju_agent_ops_ipc
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = argv
-        captured["cwd"] = kwargs.get("cwd")
-        captured["shell"] = kwargs.get("shell")
-        captured["env"] = kwargs.get("env")
-        return subprocess.CompletedProcess(argv, 0, "OK: validate\n", "")
-
-    monkeypatch.setattr(manju_agent_ops_ipc.subprocess, "run", fake_run)
-
-    result = asyncio.run(
-        manju_agent_ops_ipc.run_agent_ops(manju_agent_ops_ipc.AgentOpsRunRequest(action="validate"))
-    )
-
-    argv = captured["argv"]
-    assert isinstance(argv, list)
-    assert argv[0] == sys.executable
-    assert argv[1] == manju_agent_ops_ipc.REGISTRY_SCRIPT_ARG
-    assert argv[2:] == ["validate"]
-    assert captured["cwd"] == manju_agent_ops_ipc.BACKEND_ROOT
-    assert captured["shell"] is False
-    assert result["success"] is True
-
-
-def test_agent_ops_backend_ipc_rejects_runtime_override_params() -> None:
-    from utils import manju_agent_ops_ipc
-
-    result = asyncio.run(
-        manju_agent_ops_ipc.run_agent_ops(
-            {
-                "action": "validate",
-                "python": "python.exe",
-                "agent_command": "codex {repair_task}",
-            }
-        )
-    )
-
-    assert result["success"] is False
-    assert "Unsupported IPC field" in result["error"]
-
-
-def test_agent_ops_backend_ipc_rejects_repair_action() -> None:
-    from utils import manju_agent_ops_ipc
-
-    result = asyncio.run(
-        manju_agent_ops_ipc.run_agent_ops(
-            {
-                "action": "repair",
-                "script_id": "text_structured_output_probe",
-            }
-        )
-    )
-
-    assert result["success"] is False
-    assert "repair" in result["error"]
-
-
-def test_agent_ops_backend_ipc_rejects_mutating_run_flags() -> None:
-    from utils import manju_agent_ops_ipc
-
-    for field in (
-        "rollback_on_failure",
-        "repair_on_failure",
-        "snapshot_on_success",
-        "force_snapshot",
-        "max_repair_attempts",
-    ):
-        result = asyncio.run(
-            manju_agent_ops_ipc.run_agent_ops(
-                {
-                    "action": "run",
-                    "script_id": "text_structured_output_probe",
-                    "dry_run": True,
-                    field: True,
-                }
-            )
-        )
-
-        assert result["success"] is False
-        assert "Unsupported IPC field" in result["error"]
-
-
-def test_agent_ops_backend_ipc_run_requires_dry_run() -> None:
-    from utils import manju_agent_ops_ipc
-
-    result = asyncio.run(
-        manju_agent_ops_ipc.run_agent_ops(
-            {
-                "action": "run",
-                "script_id": "text_structured_output_probe",
-            }
-        )
-    )
-
-    assert result["success"] is False
-    assert "dry_run=true" in result["error"]
-
-
-def test_agent_ops_backend_ipc_run_dry_run_builds_preview_args(monkeypatch) -> None:
-    from utils import manju_agent_ops_ipc
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, "DRY-RUN: pytest\n", "")
-
-    monkeypatch.setattr(manju_agent_ops_ipc.subprocess, "run", fake_run)
-
-    result = asyncio.run(
-        manju_agent_ops_ipc.run_agent_ops(
-            {
-                "action": "run",
-                "script_id": "text_structured_output_probe",
-                "dry_run": True,
-            }
-        )
-    )
-
-    assert result["success"] is True
-    assert captured["argv"] == [
-        sys.executable,
-        manju_agent_ops_ipc.REGISTRY_SCRIPT_ARG,
-        "run",
-        "text_structured_output_probe",
-        "--dry-run",
-    ]
-
-
-def test_ipc_dispatcher_maps_agent_ops_backend_command(monkeypatch) -> None:
-    from utils import manju_agent_ops_ipc
-    from utils.manju_ipc_api import MANJU_API_COMMANDS
-    from utils.manju_ipc_dispatcher import dispatch_ipc_command
-
-    async def fake_run_agent_ops(body):
-        assert body == {"action": "list"}
-        return {"success": True, "stdout": "text_structured_output_probe\t1.3.0\tdefault\n"}
-
-    monkeypatch.setattr(manju_agent_ops_ipc, "run_agent_ops", fake_run_agent_ops)
-
-    result = asyncio.run(
-        dispatch_ipc_command(
-            "manju_api_run_agent_ops",
-            {"body": {"kind": "json", "value": {"action": "list"}}},
-        )
-    )
-
-    assert "manju_api_run_agent_ops" in MANJU_API_COMMANDS
-    assert result["success"] is True
-    assert result["content"]["value"]["success"] is True
 
 
 def test_agent_ops_backend_smoke_script_runs_from_backend_cwd() -> None:

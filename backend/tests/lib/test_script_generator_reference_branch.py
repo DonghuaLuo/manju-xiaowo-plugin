@@ -130,7 +130,10 @@ async def test_script_generator_reference_branch_inherits_drama_content_mode(tmp
     )
     drafts = project_dir / "drafts" / "episode_1"
     drafts.mkdir(parents=True)
-    (drafts / "step1_reference_units.md").write_text("u", encoding="utf-8")
+    (drafts / "step1_reference_units.md").write_text(
+        "| unit | shots | refs |\n| E1U1 | Shot1(4s) | 主角 |\n",
+        encoding="utf-8",
+    )
 
     fake_generator = MagicMock()
     fake_generator.model = "mock"
@@ -155,6 +158,33 @@ async def test_script_generator_reference_branch_inherits_drama_content_mode(tmp
     data = _j.loads(out.read_text(encoding="utf-8"))
     assert data["content_mode"] == "drama"
     assert data["generation_mode"] == "reference_video"
+
+
+@pytest.mark.asyncio
+async def test_script_generator_reference_branch_validates_legacy_step1_shot_duration(reference_project: Path):
+    """legacy `unit/shots/refs` 表格必须从 shots 单元格抽取时长并约束最终 video_units。"""
+    fake_generator = MagicMock()
+    fake_generator.model = "mock"
+    fake_generator.ensure_structured_output_ready = AsyncMock(return_value=None)
+    fake_generator.generate = AsyncMock(
+        return_value=MagicMock(
+            text=(
+                '{"episode":1,"title":"t",'
+                '"summary":"s","novel":{"title":"t","chapter":"1"},'
+                '"video_units":[{"unit_id":"E1U1",'
+                '"shots":[{"duration":8,"text":"@主角 推门并环顾酒馆"}],'
+                '"references":[{"type":"character","name":"主角"}],'
+                '"duration_seconds":8,"duration_override":false,"transition_to_next":"cut"}]}'
+            )
+        )
+    )
+
+    gen = ScriptGenerator(reference_project, generator=fake_generator)
+
+    with pytest.raises(ValueError, match="时长与 Step 1 不一致"):
+        await gen.generate(episode=1)
+
+    assert not (reference_project / "scripts" / "episode_1.json").exists()
 
 
 @pytest.mark.parametrize(
