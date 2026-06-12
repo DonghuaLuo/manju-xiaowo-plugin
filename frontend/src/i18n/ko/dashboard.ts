@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "그리드 이미지",
   grid_preview_summary: "{{batches}}개 배치 · {{cells}}개 샷 · {{percent}}% 준비됨",
   grid_preview_batch_card_title: "배치 #{{index}} · {{cellCount}}칸 · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "배치 #{{index}} · {{shotCount}}개 샷 · {{batchCount}}개 배치 · {{chunks}}",
-  grid_preview_single_card_title: "배치 #{{index}} · 단일 샷 스토리보드",
   grid_preview_batch_generate: "이 그리드 생성",
   grid_preview_empty_episode: "이 에피소드에는 아직 샷이 없습니다. 먼저 「전처리」에서 대본을 분할하세요",
   batch_generate_storyboards: "스토리보드 이미지 일괄 생성",

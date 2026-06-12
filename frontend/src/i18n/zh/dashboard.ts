@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "宫格图",
   grid_preview_summary: "{{batches}} 批 · {{cells}} 镜头 · {{percent}}% 就绪",
   grid_preview_batch_card_title: "批 #{{index}} · {{cellCount}} 格 · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "批 #{{index}} · {{shotCount}} 镜头 · {{batchCount}} 批 · {{chunks}}",
-  grid_preview_single_card_title: "批 #{{index}} · 单镜头分镜",
   grid_preview_batch_generate: "生成宫格镜头板",
   grid_preview_empty_episode: "该集尚无分镜，先在「预处理」中拆分剧本",
   batch_generate_storyboards: "批量生成分镜图",

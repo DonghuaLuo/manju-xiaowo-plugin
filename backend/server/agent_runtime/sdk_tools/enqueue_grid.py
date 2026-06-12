@@ -8,7 +8,7 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
-from lib.generation_queue_client import TaskSpec, enqueue_task_only, wait_for_task
+from lib.generation_queue_client import enqueue_task_only, wait_for_task
 from lib.grid.layout import (
     calculate_grid_layout,
     plan_grid_chunk_sizes,
@@ -24,7 +24,6 @@ from server.agent_runtime.sdk_tools._context import ToolContext, tool_error, val
 
 @dataclass(frozen=True)
 class _PendingGeneration:
-    kind: str
     resource_id: str
     task_id: str
     scene_ids: list[str]
@@ -46,15 +45,12 @@ def _list_groups(project: dict, script: dict, scene_ids: list[str] | None = None
     lines = [f"共 {len(groups)} 个分组："]
     for i, group in enumerate(groups):
         ids = [item[id_field] for item in group]
-        if len(ids) == 1:
-            status = "普通分镜（单镜头）"
-        else:
-            parts = []
-            for size in plan_grid_chunk_sizes(len(ids)):
-                layout = calculate_grid_layout(size, aspect_ratio)
-                if layout:
-                    parts.append(f"{layout.grid_size} ({layout.rows}×{layout.cols})")
-            status = " + ".join(parts) if parts else "无宫格批次"
+        parts = []
+        for size in plan_grid_chunk_sizes(len(ids)):
+            layout = calculate_grid_layout(size, aspect_ratio)
+            if layout:
+                parts.append(f"{layout.grid_size} ({layout.rows}×{layout.cols}, {layout.placeholder_count} 空格)")
+        status = " + ".join(parts) if parts else "无宫格批次"
         lines.append(f"  组 {i + 1}: {ids[0]}..{ids[-1]} ({len(ids)} 场景) → {status}")
     return lines
 
@@ -63,7 +59,7 @@ def generate_grid_tool(ctx: ToolContext):
     @tool(
         "generate_grid",
         "为 grid 模式项目生成宫格分镜图（按 segment_break 分组）。"
-        "list_only=true 时只列出分组不执行生成。scene_ids 过滤包含这些场景的分组。",
+        "list_only=true 时只列出分组不执行生成。scene_ids 过滤包含这些场景的宫格批次。",
         {
             "type": "object",
             "properties": {
@@ -74,7 +70,7 @@ def generate_grid_tool(ctx: ToolContext):
                 "scene_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "只生成包含这些场景的分组",
+                    "description": "只生成包含这些场景的宫格批次",
                 },
                 "list_only": {"type": "boolean", "description": "仅列出分组信息，不入队"},
             },
@@ -115,6 +111,8 @@ def generate_grid_tool(ctx: ToolContext):
             if scene_ids is not None:
                 wanted = set(scene_ids)
                 groups = [g for g in groups if any(item[id_field] in wanted for item in g)]
+            else:
+                wanted = None
 
             if not groups:
                 # 显式传了 ``scene_ids`` 但全部不命中（或传了 []）→ 错误；
@@ -127,48 +125,17 @@ def generate_grid_tool(ctx: ToolContext):
 
             gm = GridManager(project_path)
             pending: list[_PendingGeneration] = []
-            enqueue_failures: list[tuple[str, str, list[str], str]] = []
+            enqueue_failures: list[tuple[str, list[str], str]] = []
 
             for group in groups:
                 group_ids = [item[id_field] for item in group]
-                if len(group_ids) == 1:
-                    try:
-                        spec = TaskSpec.from_request(
-                            task_type="storyboard",
-                            media_type="image",
-                            resource_id=str(group_ids[0]),
-                            prompt=group[0].get("image_prompt", ""),
-                            script_file=script_filename,
-                            source="skill",
-                            extra_payload={"quality": "draft"},
-                        )
-                        enqueue_result = await enqueue_task_only(
-                            project_name=ctx.project_name,
-                            task_type=spec.task_type,
-                            media_type=spec.media_type,
-                            resource_id=spec.resource_id,
-                            payload=spec.payload,
-                            script_file=spec.script_file,
-                            source=spec.source,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        enqueue_failures.append(("storyboard", str(group_ids[0]), group_ids, str(exc)))
-                        continue
-                    pending.append(
-                        _PendingGeneration(
-                            kind="storyboard",
-                            resource_id=spec.resource_id,
-                            task_id=enqueue_result["task_id"],
-                            scene_ids=group_ids,
-                        )
-                    )
-                    continue
-
                 offset = 0
                 for size in plan_grid_chunk_sizes(len(group_ids)):
                     chunk = group[offset : offset + size]
                     offset += size
                     chunk_ids = [item[id_field] for item in chunk]
+                    if wanted is not None and not any(scene_id in wanted for scene_id in chunk_ids):
+                        continue
                     layout = calculate_grid_layout(len(chunk_ids), aspect_ratio)
                     if layout is None:
                         continue
@@ -220,11 +187,10 @@ def generate_grid_tool(ctx: ToolContext):
                         )
                     except Exception as exc:  # noqa: BLE001
                         gm.delete(grid.id)
-                        enqueue_failures.append(("grid", grid.id, chunk_ids, str(exc)))
+                        enqueue_failures.append((grid.id, chunk_ids, str(exc)))
                         continue
                     pending.append(
                         _PendingGeneration(
-                            kind="grid",
                             resource_id=grid.id,
                             task_id=enqueue_result["task_id"],
                             scene_ids=chunk_ids,
@@ -232,8 +198,8 @@ def generate_grid_tool(ctx: ToolContext):
                     )
 
             details: list[str] = []
-            for kind, resource_id, group_ids, err in enqueue_failures:
-                label = "普通分镜" if kind == "storyboard" else "宫格"
+            for resource_id, group_ids, err in enqueue_failures:
+                label = "宫格"
                 range_text = group_ids[0] if len(group_ids) == 1 else f"{group_ids[0]}..{group_ids[-1]}"
                 details.append(f"  ✗ {resource_id}（{label}: {range_text}）入队失败: {err}")
 
@@ -260,7 +226,7 @@ def generate_grid_tool(ctx: ToolContext):
                     continue
                 if result.get("status") == "succeeded":
                     successes.append(item.resource_id)
-                    label = "普通分镜" if item.kind == "storyboard" else "宫格"
+                    label = "宫格"
                     range_text = (
                         item.scene_ids[0] if len(item.scene_ids) == 1 else f"{item.scene_ids[0]}..{item.scene_ids[-1]}"
                     )

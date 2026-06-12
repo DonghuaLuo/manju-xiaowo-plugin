@@ -72,7 +72,7 @@ describe("GridPreviewPanel", () => {
     render(
       <GridPreviewPanel
         projectName="demo"
-        gridIds={["grid-1"]}
+        gridId="grid-1"
         defaultExpanded
       />,
     );
@@ -103,7 +103,7 @@ describe("GridPreviewPanel", () => {
     render(
       <GridPreviewPanel
         projectName="demo"
-        gridIds={["grid-1"]}
+        gridId="grid-1"
         defaultExpanded
       />,
     );
@@ -117,5 +117,58 @@ describe("GridPreviewPanel", () => {
     expect(
       screen.getByRole("dialog", { name: "Hero 全屏预览" }),
     ).toBeInTheDocument();
+  });
+
+  it("renders legacy 3x1 grid records as a 2x2 storyboard mosaic", async () => {
+    vi.spyOn(API, "getGrid").mockResolvedValue({
+      ...gridFixture,
+      id: "grid-legacy",
+      scene_ids: ["S1", "S2", "S3"],
+      rows: 3,
+      cols: 1,
+      cell_count: 3,
+      frame_chain: [
+        {
+          index: 0,
+          row: 0,
+          col: 0,
+          frame_type: "first",
+          prev_scene_id: null,
+          next_scene_id: "S1",
+          image_path: "storyboards/scene_S1.png",
+        },
+        {
+          index: 1,
+          row: 1,
+          col: 0,
+          frame_type: "transition",
+          prev_scene_id: "S1",
+          next_scene_id: "S2",
+          image_path: "storyboards/scene_S2.png",
+        },
+        {
+          index: 2,
+          row: 2,
+          col: 0,
+          frame_type: "transition",
+          prev_scene_id: "S2",
+          next_scene_id: "S3",
+          image_path: "storyboards/scene_S3.png",
+        },
+      ],
+    });
+
+    render(
+      <GridPreviewPanel
+        projectName="demo"
+        gridId="grid-legacy"
+        defaultExpanded
+      />,
+    );
+
+    const mosaic = await screen.findByRole("group", { name: "宫格切片分镜预览" });
+    expect(mosaic).toHaveStyle("grid-template-columns: repeat(2, minmax(0, 1fr))");
+    expect(screen.getByTitle("第 4 格 · 占位")).toBeInTheDocument();
+    expect(screen.getByText(/4 格 · grid_4/)).toBeInTheDocument();
   });
 });

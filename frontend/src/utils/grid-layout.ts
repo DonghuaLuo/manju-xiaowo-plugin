@@ -1,5 +1,5 @@
 export interface GridLayout {
-  gridSize: "grid_2" | "grid_3" | "grid_4" | null;
+  gridSize: "grid_4" | null;
   rows: number;
   cols: number;
   cellCount: number;
@@ -12,6 +12,25 @@ interface GridMatchRecord {
   episode: number;
   scene_ids: string[];
   created_at: string;
+  status?: string;
+  grid_image_path?: string | null;
+  frame_chain?: Array<{ image_path?: string | null }>;
+}
+
+function hasRenderableGridImage(grid: GridMatchRecord): boolean {
+  if (grid.grid_image_path) return true;
+  return grid.frame_chain?.some((cell) => Boolean(cell.image_path)) ?? false;
+}
+
+function getGridDisplayPriority(grid: GridMatchRecord): number {
+  const hasImage = hasRenderableGridImage(grid);
+  if (grid.status === "completed" && hasImage) return 4;
+  if (grid.status === "completed") return 3;
+  if (hasImage) return 2;
+  if (grid.status === "pending" || grid.status === "generating" || grid.status === "splitting") {
+    return 1;
+  }
+  return 0;
 }
 
 /**
@@ -32,9 +51,11 @@ export function matchGridsForGroup<G extends GridMatchRecord>(
       g.scene_ids.every((id) => idSet.has(id)),
   );
 
-  const sorted = [...matched].sort((a, b) =>
-    b.created_at.localeCompare(a.created_at),
-  );
+  const sorted = [...matched].sort((a, b) => {
+    const priorityDelta = getGridDisplayPriority(b) - getGridDisplayPriority(a);
+    if (priorityDelta !== 0) return priorityDelta;
+    return b.created_at.localeCompare(a.created_at);
+  });
 
   const selected: G[] = [];
   const covered = new Set<string>();
@@ -66,29 +87,18 @@ export function groupBySegmentBreak<S extends { segment_break?: boolean }>(
 }
 
 export function planGridChunkSizes(count: number): number[] {
-  if (count <= 1) return [];
-  const terminal: Record<number, number[]> = {
-    2: [2],
-    3: [3],
-    4: [4],
-    5: [3, 2],
-    6: [3, 3],
-    7: [4, 3],
-    8: [4, 4],
-  };
-  if (terminal[count]) return terminal[count];
-
+  if (count <= 0) return [];
   const chunks: number[] = [];
   let remaining = count;
-  while (remaining > 8) {
-    chunks.push(4);
-    remaining -= 4;
+  while (remaining > 0) {
+    const size = Math.min(4, remaining);
+    chunks.push(size);
+    remaining -= size;
   }
-  chunks.push(...terminal[remaining]);
   return chunks;
 }
 
-export function computeGridSize(count: number, aspectRatio: string = "9:16"): GridLayout {
+export function computeGridSize(count: number, _aspectRatio: string = "9:16"): GridLayout {
   const empty: GridLayout = {
     gridSize: null,
     rows: 0,
@@ -100,23 +110,13 @@ export function computeGridSize(count: number, aspectRatio: string = "9:16"): Gr
   if (count < 1) return empty;
   const chunkSizes = planGridChunkSizes(count);
   if (chunkSizes.length === 0) return empty;
-  const [w, h] = aspectRatio.split(":").map(Number);
-  const isHorizontal = w > h;
-  const firstChunk = chunkSizes[0];
 
-  let gridSize: "grid_2" | "grid_3" | "grid_4";
-  let rows: number;
-  let cols: number;
-
-  if (firstChunk === 4) {
-    gridSize = "grid_4";
-    rows = 2;
-    cols = 2;
-  } else {
-    gridSize = firstChunk === 2 ? "grid_2" : "grid_3";
-    rows = isHorizontal ? firstChunk : 1;
-    cols = isHorizontal ? 1 : firstChunk;
-  }
-
-  return { gridSize, rows, cols, cellCount: count, batchCount: chunkSizes.length, chunkSizes };
+  return {
+    gridSize: "grid_4",
+    rows: 2,
+    cols: 2,
+    cellCount: 4,
+    batchCount: chunkSizes.length,
+    chunkSizes,
+  };
 }

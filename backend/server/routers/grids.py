@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from lib.app_data_dir import app_data_dir
-from lib.generation_queue import get_generation_queue
-from lib.generation_queue_client import TaskSpec, TaskSpecValidationError
+from lib.generation_queue import ACTIVE_TASK_STATUSES, get_generation_queue
 from lib.grid.layout import (
     calculate_grid_layout,
     plan_grid_chunk_sizes,
@@ -35,6 +35,10 @@ router = APIRouter(prefix="/projects/{project_name}", tags=["grids"])
 
 # 初始化管理器
 pm = ProjectManager(app_data_dir())
+
+IN_PROGRESS_GRID_STATUSES = {"pending", "generating", "splitting"}
+STALE_GRID_ERROR_MESSAGE = "生成任务已不存在，请重新生成宫格。"
+STALE_GRID_RECONCILE_GRACE = timedelta(seconds=30)
 
 
 def get_project_manager() -> ProjectManager:
@@ -70,15 +74,70 @@ def _build_grid_task_payload(
     }
 
 
-def _build_storyboard_task_payload(*, item: dict, id_field: str, script_file: str) -> TaskSpec:
-    return TaskSpec.from_request(
-        task_type="storyboard",
-        media_type="image",
-        resource_id=str(item[id_field]),
-        prompt=item.get("image_prompt", ""),
-        script_file=script_file,
-        extra_payload={"quality": "draft"},
-    )
+async def _list_active_grid_resource_ids(project_name: str) -> set[str]:
+    """Return active grid task resource ids for a project."""
+    queue = get_generation_queue()
+    resource_ids: set[str] = set()
+
+    for status in ACTIVE_TASK_STATUSES:
+        page = 1
+        page_size = 500
+        while True:
+            result = await queue.list_tasks(
+                project_name=project_name,
+                status=status,
+                task_type="grid",
+                page=page,
+                page_size=page_size,
+            )
+            items = result.get("items", [])
+            for item in items:
+                resource_id = item.get("resource_id")
+                if resource_id:
+                    resource_ids.add(str(resource_id))
+
+            total = int(result.get("total") or 0)
+            current_page_size = int(result.get("page_size") or page_size)
+            if page * current_page_size >= total:
+                break
+            page += 1
+
+    return resource_ids
+
+
+async def _reconcile_stale_grid_statuses(
+    project_name: str,
+    gm: GridManager,
+    grids: list[GridGeneration],
+) -> list[GridGeneration]:
+    """Mark in-progress grid records as failed when no active task owns them."""
+    in_progress_grids = [grid for grid in grids if grid.status in IN_PROGRESS_GRID_STATUSES]
+    if not in_progress_grids:
+        return grids
+
+    try:
+        active_resource_ids = await _list_active_grid_resource_ids(project_name)
+    except Exception:
+        logger.warning("跳过宫格状态校准：读取任务队列失败", exc_info=True)
+        return grids
+
+    for grid in in_progress_grids:
+        if grid.id in active_resource_ids:
+            continue
+        try:
+            created_at = datetime.fromisoformat(grid.created_at.replace("Z", "+00:00"))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            if datetime.now(UTC) - created_at < STALE_GRID_RECONCILE_GRACE:
+                continue
+        except ValueError:
+            pass
+        grid.status = "failed"
+        if not grid.error_message:
+            grid.error_message = STALE_GRID_ERROR_MESSAGE
+        gm.save(grid)
+
+    return grids
 
 
 # ==================== 请求/响应模型 ====================
@@ -109,7 +168,7 @@ async def generate_grid(
 ):
     """
     提交宫格图生成任务到队列，按 segment_break 分组。
-    单镜头组走普通分镜；多镜头组在连续段内拆成 2-4 格宫格。
+    1-4 镜头组统一生成 2×2 宫格；多镜头组在连续段内按最多 4 格拆批。
 
     立即返回 grid_ids 和 task_ids。生成由 GenerationWorker 异步执行。
     """
@@ -124,57 +183,27 @@ async def generate_grid(
 
         groups = group_scenes_by_segment_break(items, id_field)
 
-        # 若指定了 scene_ids，只保留包含这些 scene 的分组
-        if req.scene_ids:
-            sid_set = set(req.scene_ids)
-            groups = [g for g in groups if any(item[id_field] in sid_set for item in g)]
+        # 若指定了 scene_ids，只保留包含这些 scene 的分组，并在组内继续筛选实际 chunk。
+        wanted_scene_ids = set(req.scene_ids) if req.scene_ids is not None else None
+        if wanted_scene_ids is not None:
+            groups = [g for g in groups if any(item[id_field] in wanted_scene_ids for item in g)]
 
         grid_ids: list[str] = []
         task_ids: list[str] = []
-        storyboard_task_count = 0
         queue = get_generation_queue()
         gm = GridManager(project_path)
 
-        # Pre-load existing grids for cleanup
-        existing_grids = gm.list_all()
+        # Pre-load existing grids for cleanup, after marking orphaned in-progress records.
+        existing_grids = await _reconcile_stale_grid_statuses(project_name, gm, gm.list_all())
+        deleted_grid_ids: set[str] = set()
 
         for group in groups:
             all_scene_ids = [item[id_field] for item in group]
             n = len(all_scene_ids)
 
-            # 清理该组旧的 grid 记录（限定同脚本同集，scene_ids 是当前组子集的旧 grid）
-            # 跳过 pending/generating 状态的记录，避免 worker 执行时找不到资源
             group_id_set = set(all_scene_ids)
-            for old_grid in existing_grids:
-                if (
-                    old_grid.script_file == req.script_file
-                    and old_grid.episode == episode
-                    and old_grid.status not in ("pending", "generating")
-                    and old_grid.scene_ids
-                    and set(old_grid.scene_ids) <= group_id_set
-                ):
-                    gm.delete(old_grid.id)
 
-            if n == 1:
-                try:
-                    spec = _build_storyboard_task_payload(item=group[0], id_field=id_field, script_file=req.script_file)
-                except TaskSpecValidationError as e:
-                    raise HTTPException(status_code=400, detail=_t(e.code, **e.params))
-                task = await queue.enqueue_task(
-                    project_name=project_name,
-                    task_type=spec.task_type,
-                    media_type=spec.media_type,
-                    resource_id=spec.resource_id,
-                    payload=spec.payload,
-                    script_file=spec.script_file,
-                    source="webui",
-                    user_id=_user.id,
-                )
-                task_ids.append(task["task_id"])
-                storyboard_task_count += 1
-                continue
-
-            # 只在 segment_break 划出的连续组内拆批；每批 2-4 个真实镜头，不跨组拼接。
+            # 只在 segment_break 划出的连续组内拆批；每批最多 4 个真实镜头，不跨组拼接。
             chunks: list[list] = []
             offset = 0
             for size in plan_grid_chunk_sizes(n):
@@ -183,9 +212,28 @@ async def generate_grid(
 
             for chunk in chunks:
                 chunk_ids = [item[id_field] for item in chunk]
+                if wanted_scene_ids is not None and not any(scene_id in wanted_scene_ids for scene_id in chunk_ids):
+                    continue
+
                 chunk_layout = calculate_grid_layout(len(chunk_ids), aspect_ratio)
                 if chunk_layout is None:
                     continue
+
+                # 清理本次实际要替换的旧 grid。补生成单个缺失 chunk 时，只清理该 chunk，
+                # 避免把同组其它已完成宫格删掉；完整生成时仍按整组替换。
+                cleanup_scope_ids = group_id_set if wanted_scene_ids is None else set(chunk_ids)
+                for old_grid in existing_grids:
+                    if old_grid.id in deleted_grid_ids:
+                        continue
+                    if (
+                        old_grid.script_file == req.script_file
+                        and old_grid.episode == episode
+                        and old_grid.status not in IN_PROGRESS_GRID_STATUSES
+                        and old_grid.scene_ids
+                        and set(old_grid.scene_ids) <= cleanup_scope_ids
+                    ):
+                        if gm.delete(old_grid.id):
+                            deleted_grid_ids.add(old_grid.id)
 
                 # provider/model 由 execute_grid_task 在 _resolve_effective_image_backend
                 # 之后回填，因为只有 task 层能根据 reference_images 判断走 T2I 还是 I2I 槽
@@ -239,7 +287,7 @@ async def generate_grid(
             success=True,
             grid_ids=grid_ids,
             task_ids=task_ids,
-            message=f"已提交 {len(grid_ids)} 个宫格生成任务，{storyboard_task_count} 个普通分镜任务",
+            message=f"已提交 {len(grid_ids)} 个宫格生成任务",
         )
 
     except FileNotFoundError as e:
@@ -262,7 +310,8 @@ async def list_grids(project_name: str, _user: CurrentUser):
     try:
         project_path = get_project_manager().get_project_path(project_name)
         gm = GridManager(project_path)
-        return [g.to_dict() for g in gm.list_all()]
+        grids = await _reconcile_stale_grid_statuses(project_name, gm, gm.list_all())
+        return [g.to_dict() for g in grids]
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -282,6 +331,7 @@ async def get_grid(project_name: str, grid_id: str, _user: CurrentUser):
         grid = gm.get(grid_id)
         if grid is None:
             raise HTTPException(status_code=404, detail=f"Grid {grid_id} 不存在")
+        await _reconcile_stale_grid_statuses(project_name, gm, [grid])
         return grid.to_dict()
     except HTTPException:
         raise
@@ -309,7 +359,7 @@ async def regenerate_grid(project_name: str, grid_id: str, _user: CurrentUser):
         aspect_ratio = resolve_storyboard_aspect_ratio(project)
         layout = calculate_grid_layout(len(grid.scene_ids), aspect_ratio)
         if layout is None:
-            raise HTTPException(status_code=400, detail="该记录不是 2-4 镜头宫格，请使用普通分镜或重新按分组生成")
+            raise HTTPException(status_code=400, detail="该记录不是 1-4 镜头宫格，请重新按分组生成")
 
         script = get_project_manager().load_script(project_name, grid.script_file)
         items, id_field, _, _, _ = get_storyboard_items(script)

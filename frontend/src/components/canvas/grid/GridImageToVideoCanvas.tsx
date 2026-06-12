@@ -366,7 +366,6 @@ export function GridImageToVideoCanvas({
             contentMode={contentMode}
             aspectRatio={aspectRatio}
             onGenerateGrid={onGenerateGrid}
-            onGenerateStoryboard={handleGenSb}
           />
         ) : episodeScript && segments.length > 0 ? (
           <ShotSplitView

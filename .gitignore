@@ -30,6 +30,12 @@ backend/compile/
 !/backend/tests/test_custom_provider_factory.py
 !/backend/tests/test_duration_presets.py
 !/backend/tests/test_alembic_supported_durations_backfill.py
+!/backend/tests/test_grid_executor.py
+!/backend/tests/test_grid_layout.py
+!/backend/tests/test_grid_manager.py
+!/backend/tests/test_grid_prompt_builder.py
+!/backend/tests/test_grid_router.py
+!/backend/tests/test_grid_splitter.py
 !/backend/tests/test_model_discovery.py
 !/backend/tests/test_openai_text_backend.py
 !/backend/tests/test_text_backend_factory.py
@@ -39,3 +45,6 @@ backend/compile/
 /backend/tests/test_text_backends/*
 !/backend/tests/test_text_backends/test_ark.py
 !/backend/tests/test_text_backends/test_factory.py
+!/backend/tests/server/agent_runtime/
+/backend/tests/server/agent_runtime/*
+!/backend/tests/server/agent_runtime/test_sdk_tools.py

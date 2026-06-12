@@ -6,6 +6,9 @@ interface FakeGrid {
   episode: number;
   scene_ids: string[];
   created_at: string;
+  status?: "pending" | "generating" | "splitting" | "completed" | "failed";
+  grid_image_path?: string | null;
+  frame_chain?: Array<{ image_path?: string | null }>;
 }
 
 function grid(
@@ -13,8 +16,9 @@ function grid(
   scene_ids: string[],
   created_at: string,
   episode = 1,
+  patch: Partial<FakeGrid> = {},
 ): FakeGrid {
-  return { id, episode, scene_ids, created_at };
+  return { id, episode, scene_ids, created_at, ...patch };
 }
 
 describe("matchGridsForGroup", () => {
@@ -81,41 +85,60 @@ describe("matchGridsForGroup", () => {
     const result = matchGridsForGroup(grids, ["s1", "s2", "s3", "s4", "s5"], 1);
     expect(result.map((g) => g.id)).toEqual(["new_chunk_1", "new_chunk_2"]);
   });
+
+  it("keeps an older completed image visible while a newer duplicate is still empty", () => {
+    const grids = [
+      grid("completed_with_image", ["s1", "s2"], "2026-05-01T00:00:00Z", 1, {
+        status: "completed",
+        grid_image_path: "grids/completed.png",
+        frame_chain: [{ image_path: "storyboards/s1.png" }],
+      }),
+      grid("new_empty_generating", ["s1", "s2"], "2026-05-02T00:00:00Z", 1, {
+        status: "generating",
+        grid_image_path: null,
+        frame_chain: [],
+      }),
+    ];
+
+    const result = matchGridsForGroup(grids, ["s1", "s2"], 1);
+    expect(result.map((g) => g.id)).toEqual(["completed_with_image"]);
+  });
 });
 
 describe("planGridChunkSizes", () => {
-  it("keeps grid batches within 2-4 cells and avoids singletons", () => {
-    expect(planGridChunkSizes(1)).toEqual([]);
-    expect(planGridChunkSizes(5)).toEqual([3, 2]);
-    expect(planGridChunkSizes(9)).toEqual([4, 3, 2]);
+  it("keeps grid batches within 1-4 shots and packs fours first", () => {
+    expect(planGridChunkSizes(1)).toEqual([1]);
+    expect(planGridChunkSizes(5)).toEqual([4, 1]);
+    expect(planGridChunkSizes(9)).toEqual([4, 4, 1]);
     expect(planGridChunkSizes(12)).toEqual([4, 4, 4]);
   });
 });
 
 describe("computeGridSize", () => {
-  it("treats a single scene as non-grid", () => {
+  it("treats a single scene as a 2x2 grid with placeholders", () => {
     expect(computeGridSize(1, "9:16")).toMatchObject({
-      gridSize: null,
-      rows: 0,
-      cols: 0,
-      batchCount: 0,
-    });
-  });
-
-  it("stacks horizontal 3-cell grids vertically to avoid over-wide source images", () => {
-    expect(computeGridSize(3, "16:9")).toMatchObject({
-      gridSize: "grid_3",
-      rows: 3,
-      cols: 1,
+      gridSize: "grid_4",
+      rows: 2,
+      cols: 2,
+      cellCount: 4,
       batchCount: 1,
     });
   });
 
-  it("places vertical 3-cell grids in one row", () => {
+  it("uses a 2x2 grid for horizontal 3-shot batches", () => {
+    expect(computeGridSize(3, "16:9")).toMatchObject({
+      gridSize: "grid_4",
+      rows: 2,
+      cols: 2,
+      batchCount: 1,
+    });
+  });
+
+  it("uses a 2x2 grid for vertical 3-shot batches", () => {
     expect(computeGridSize(3, "9:16")).toMatchObject({
-      gridSize: "grid_3",
-      rows: 1,
-      cols: 3,
+      gridSize: "grid_4",
+      rows: 2,
+      cols: 2,
       batchCount: 1,
     });
   });

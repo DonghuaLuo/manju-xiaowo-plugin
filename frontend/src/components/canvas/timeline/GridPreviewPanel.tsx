@@ -28,7 +28,7 @@ import type { GridGeneration, ReferenceImage } from "@/types/grid";
 
 export interface GridPreviewPanelProps {
   projectName: string;
-  gridIds: string[];
+  gridId?: string | null;
   /** Called after a regeneration is submitted (for parent to refresh grids list). */
   onRegenerated?: () => void;
   /** Changed when grids list is refreshed, triggers re-fetch of panel data. */
@@ -165,13 +165,12 @@ function ReferenceImageStrip({
 
 export function GridPreviewPanel({
   projectName,
-  gridIds,
+  gridId,
   onRegenerated,
   refreshKey = 0,
   defaultExpanded = false,
 }: GridPreviewPanelProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [selectedIdx, setSelectedIdx] = useState(0);
   const [grid, setGrid] = useState<GridGeneration | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,26 +178,22 @@ export function GridPreviewPanel({
   const [previewImage, setPreviewImage] = useState<{ src: string; path: string; alt: string } | null>(null);
   const { t } = useTranslation("dashboard");
 
-  const hasGrids = gridIds.length > 0;
-  const multipleGrids = gridIds.length > 1;
-  const safeIdx = Math.min(selectedIdx, Math.max(0, gridIds.length - 1));
-  const selectedGridId = gridIds[safeIdx] ?? null;
+  const hasGrid = Boolean(gridId);
+  const selectedGridId = gridId ?? null;
 
   // 直接订阅全局 grid 变更信号作为唯一 refetch 触发源；
   // parent 透传的 refreshKey 是同一事件流（gridsRevision → listGrids → setRefreshKey）
   // 的下游产物，加入 deps 会导致每次事件多发一次冗余 GET /grids/{id}。
   const gridsRevision = useAppStore((s) => s.gridsRevision);
 
-  // safeIdx already clamps selectedIdx to valid range; no effect needed
-
   // Fetch grid data when expanded and selectedGridId is available
   useEffect(() => {
     if (!expanded || !selectedGridId) return;
 
     let cancelled = false;
-    // Clear stale data and show spinner when switching batches
+    // Clear stale data and show spinner when switching grids.
     if (!grid || grid.id !== selectedGridId) {
-      // 切换批次时清空旧数据并展示加载状态，再触发异步 fetch
+      // 切换宫格时清空旧数据并展示加载状态，再触发异步 fetch
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(true);
       setGrid(null);
@@ -237,15 +232,22 @@ export function GridPreviewPanel({
       ? API.getFileUrl(projectName, grid.grid_image_path, gridFp ?? refreshKey)
       : null;
   const displayedGridError = summarizeUserFacingError(t, grid?.error_message);
+  const shouldUseFourCellPreview =
+    grid ? grid.scene_ids.length >= 1 && grid.scene_ids.length <= 4 : false;
+  const previewRows = shouldUseFourCellPreview ? 2 : (grid?.rows ?? 0);
+  const previewCols = shouldUseFourCellPreview ? 2 : (grid?.cols ?? 0);
+  const previewCellCount = previewRows * previewCols;
+  const displayCellCount = shouldUseFourCellPreview ? previewCellCount : (grid?.cell_count ?? 0);
+  const displayGridSize = shouldUseFourCellPreview ? "grid_4" : (grid?.grid_size ?? "");
 
   const refs = grid?.reference_images ?? [];
   const mosaicCells = grid
-    ? Array.from({ length: Math.max(grid.rows * grid.cols, grid.cell_count, grid.frame_chain.length) }, (_, idx) => {
+    ? Array.from({ length: Math.max(previewCellCount, grid.rows * grid.cols, grid.cell_count, grid.frame_chain.length) }, (_, idx) => {
         const byIndex = grid.frame_chain.find((cell) => cell.index === idx);
         return byIndex ?? {
           index: idx,
-          row: Math.floor(idx / Math.max(1, grid.cols)),
-          col: idx % Math.max(1, grid.cols),
+          row: Math.floor(idx / Math.max(1, previewCols)),
+          col: idx % Math.max(1, previewCols),
           frame_type: "placeholder" as const,
           prev_scene_id: null,
           next_scene_id: null,
@@ -276,14 +278,8 @@ export function GridPreviewPanel({
 
         <span className="text-xs font-medium text-amber-400/70">{t("grid_preview_title")}</span>
 
-        {!hasGrids && (
+        {!hasGrid && (
           <span className="ml-1 text-[10px] text-gray-600">{t("grid_not_generated")}</span>
-        )}
-
-        {multipleGrids && !expanded && (
-          <span className="ml-1 text-[10px] text-gray-600">
-            {t("grid_batch_unit", { count: gridIds.length })}
-          </span>
         )}
       </button>
 
@@ -300,7 +296,7 @@ export function GridPreviewPanel({
           >
             <div className="px-4 pb-3 pt-2">
               {/* No grid yet */}
-              {!hasGrids ? (
+              {!hasGrid ? (
                 <div className="flex flex-col items-center gap-2 py-6 text-center">
                   <Grid2x2 className="h-8 w-8 text-gray-700" />
                   <p className="text-xs text-gray-600">{t("grid_no_grids_yet")}</p>
@@ -323,27 +319,8 @@ export function GridPreviewPanel({
               ) : grid ? (
                 /* Grid loaded */
                 <div className="flex flex-col gap-3">
-                  {/* Top bar: batch pills + status + regen */}
+                  {/* Top bar: status + regen */}
                   <div className="flex items-center gap-2">
-                    {multipleGrids && (
-                      <div className="flex items-center gap-0.5 rounded-md bg-gray-900/50 p-0.5">
-                        {gridIds.map((_, idx) => (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => setSelectedIdx(idx)}
-                            className={`inline-flex h-5 min-w-[1.375rem] items-center justify-center rounded px-1 text-[10px] font-medium tabular-nums transition-all duration-150 ${
-                              idx === safeIdx
-                                ? "bg-amber-700/50 text-amber-200 shadow-sm"
-                                : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/60"
-                            }`}
-                          >
-                            {idx + 1}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
                     <StatusBadge status={grid.status} t={t} />
 
                     <span className="text-[10px] text-gray-600">
@@ -391,7 +368,7 @@ export function GridPreviewPanel({
                       <div
                         className="grid gap-1.5 p-1.5"
                         style={{
-                          gridTemplateColumns: `repeat(${Math.max(1, grid.cols)}, minmax(0, 1fr))`,
+                          gridTemplateColumns: `repeat(${Math.max(1, previewCols)}, minmax(0, 1fr))`,
                         }}
                         role="group"
                         aria-label={t("grid_storyboard_mosaic_alt", {
@@ -446,10 +423,10 @@ export function GridPreviewPanel({
                       </div>
                       <div className="flex items-center gap-2 border-t border-gray-800/50 px-2.5 py-1.5">
                         <span className="font-mono text-[10px] text-gray-500">
-                          {t("grid_cell_info", { count: grid.cell_count, size: grid.grid_size })}
+                          {t("grid_cell_info", { count: displayCellCount, size: displayGridSize })}
                         </span>
                         <span className="text-[10px] text-gray-700">
-                          {grid.rows}×{grid.cols}
+                          {previewRows}×{previewCols}
                         </span>
                         {imageUrl && grid.grid_image_path && (
                           <button
@@ -492,10 +469,10 @@ export function GridPreviewPanel({
                       </button>
                       <div className="flex items-center gap-2 border-t border-gray-800/50 px-2.5 py-1.5">
                         <span className="font-mono text-[10px] text-gray-500">
-                          {t("grid_cell_info", { count: grid.cell_count, size: grid.grid_size })}
+                          {t("grid_cell_info", { count: displayCellCount, size: displayGridSize })}
                         </span>
                         <span className="text-[10px] text-gray-700">
-                          {grid.rows}×{grid.cols}
+                          {previewRows}×{previewCols}
                         </span>
                       </div>
                     </div>

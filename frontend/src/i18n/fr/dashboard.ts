@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "Grilles",
   grid_preview_summary: "Lots {{batches}} · Plans {{cells}} · {{percent}}% prêt",
   grid_preview_batch_card_title: "Lot #{{index}} · Cellules {{cellCount}} · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "Lot #{{index}} · Plans {{shotCount}} · Lots {{batchCount}} · {{chunks}}",
-  grid_preview_single_card_title: "Lot #{{index}} · storyboard unique",
   grid_preview_batch_generate: "Générer une grille",
   grid_preview_empty_episode: "Aucun plan dans cet épisode – divisez d'abord le script dans le prétraitement",
   batch_generate_storyboards: "Générer par lots des storyboards",

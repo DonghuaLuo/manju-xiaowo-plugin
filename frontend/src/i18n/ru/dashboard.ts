@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "Сетки",
   grid_preview_summary: "{{batches}} пакетов · {{cells}} кадров · {{percent}}% готово",
   grid_preview_batch_card_title: "Пакет #{{index}} · {{cellCount}} ячеек · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "Пакет #{{index}} · {{shotCount}} кадров · {{batchCount}} пакетов · {{chunks}}",
-  grid_preview_single_card_title: "Пакет #{{index}} · одиночная раскадровка",
   grid_preview_batch_generate: "Создать эту сетку",
   grid_preview_empty_episode: "В этой серии пока нет кадров; сначала разделите сценарий в «Предобработке»",
   batch_generate_storyboards: "Пакетно создать раскадровки",

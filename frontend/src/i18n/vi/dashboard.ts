@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "Lưới ảnh",
   grid_preview_summary: "{{batches}} đợt · {{cells}} cảnh · {{percent}}% sẵn sàng",
   grid_preview_batch_card_title: "Đợt #{{index}} · {{cellCount}} ô · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "Đợt #{{index}} · {{shotCount}} cảnh · {{batchCount}} đợt · {{chunks}}",
-  grid_preview_single_card_title: "Đợt #{{index}} · phân cảnh đơn",
   grid_preview_batch_generate: "Tạo lưới này",
   grid_preview_empty_episode: "Tập này chưa có phân cảnh — hãy chia kịch bản trong Tiền xử lý trước",
   batch_generate_storyboards: "Tạo phân cảnh hàng loạt",

@@ -2729,17 +2729,17 @@ async def execute_grid_task(
         grid_image = Image.open(image_path)
         video_aspect_ratio = get_aspect_ratio(project, "videos")
         cells = split_grid_image(grid_image, grid.rows, grid.cols, video_aspect_ratio)
-        expected_cells = len(grid.scene_ids)
-        if grid.rows * grid.cols != expected_cells:
+        expected_cells = grid.rows * grid.cols
+        if len(grid.scene_ids) > expected_cells:
             raise ValueError(
-                f"grid {resource_id} layout mismatch: rows*cols={grid.rows * grid.cols}, scene_ids={expected_cells}"
+                f"grid {resource_id} layout mismatch: rows*cols={expected_cells}, scene_ids={len(grid.scene_ids)}"
             )
         if len(grid.frame_chain) != expected_cells:
             raise ValueError(
-                f"grid {resource_id} frame_chain mismatch: frames={len(grid.frame_chain)}, scene_ids={expected_cells}"
+                f"grid {resource_id} frame_chain mismatch: frames={len(grid.frame_chain)}, cells={expected_cells}"
             )
         if len(cells) != expected_cells:
-            raise ValueError(f"grid {resource_id} split mismatch: cells={len(cells)}, scene_ids={expected_cells}")
+            raise ValueError(f"grid {resource_id} split mismatch: cells={len(cells)}, expected={expected_cells}")
 
         # g) Assign cells to scenes
         storyboards_dir = project_path / "storyboards"
@@ -2761,7 +2761,7 @@ async def execute_grid_task(
             # next_scene_id 的起始分镜图，文件名与普通分镜对齐为 scene_{id}.png。
             for cell, frame in zip(cells, grid.frame_chain, strict=True):
                 if frame.frame_type == "placeholder":
-                    raise ValueError(f"grid {resource_id} contains legacy placeholder cell {frame.index}")
+                    continue
                 if frame.frame_type not in ("first", "transition"):
                     continue
                 if not frame.next_scene_id:

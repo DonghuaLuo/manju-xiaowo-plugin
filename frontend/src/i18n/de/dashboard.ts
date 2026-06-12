@@ -901,8 +901,6 @@ export default {
   tab_grid_preview: "Gitter",
   grid_preview_summary: "{{batches}}-Batches · {{cells}} Shots · {{percent}}% bereit",
   grid_preview_batch_card_title: "Batch #{{index}} · {{cellCount}} Zellen · {{rows}}×{{cols}}",
-  grid_preview_batch_card_title_split: "Batch #{{index}} · {{shotCount}} Shots · {{batchCount}} Batches · {{chunks}}",
-  grid_preview_single_card_title: "Batch #{{index}} · Einzel-Storyboard",
   grid_preview_batch_generate: "Raster erzeugen",
   grid_preview_empty_episode: "In dieser Episode gibt es keine Aufnahmen – teilen Sie das Drehbuch zuerst in der Vorverarbeitung auf",
   batch_generate_storyboards: "Erstellen Sie Storyboards im Stapel",
