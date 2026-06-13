@@ -16,20 +16,36 @@ from __future__ import annotations
 # 内部常量：防崩 / 反向 / 布局 / 风格前缀
 # ---------------------------------------------------------------------------
 
-# 角色图采用 issue #353 的四视图 16:9 布局。
+# 角色图采用 issue #353 的四视图 16:9 角色设定集布局。
 _CHARACTER_LAYOUT = (
-    "横版 16:9 四格布局，纯白 (#FFFFFF) 背景：左侧约 40% 宽为胸像特写（清晰展示面部、发型、配饰、上装），"
-    "右侧三个等宽面板分别为正面 / 四分之三侧面 / 背面的 A-Pose 全身视图。"
+    "横版 16:9 构图，纯白 (#FFFFFF) 背景，干净高级的角色设定集版式。\n\n"
+    "版式要求：左侧约 40% 宽为大幅胸像特写，清晰展示角色面部、发型、眼神、气质、配饰与上装细节；"
+    "左上角设置简洁角色信息区，可包含角色名、身份、年龄、身高、气质关键词等短标签，作为设定集排版元素；"
+    "右侧约 60% 宽分为三个等宽全身视图面板，依次展示正面 / 四分之三侧面 / 背面的 A-Pose 全身视图。"
+)
+_CHARACTER_PROP_RULE = (
+    "道具规则：如果角色描述中提到明确的关键道具、武器、容器、饰品、法器、标志性物件，"
+    "则在左下角增加一个独立道具特写框，展示该道具的细节、材质、纹路、磨损或发光效果，并配少量设定说明；"
+    "如果角色描述中没有明确关键道具，则不要添加道具特写框，左下角保持简洁留白或作为轻量说明区。"
 )
 _SCENE_LAYOUT = "主画面占四分之三区域展示环境整体外观与氛围，右下角嵌入关键细节小图。"
 _PROP_LAYOUT = "三视图水平排列于纯净浅灰背景：左侧正面全视图、中间 45° 侧视图体现立体感、右侧关键细节特写。"
 
 # 正向防崩（按资产类型差异化）。
-_CHARACTER_GUARD = "四个面板中角色面部、发型、服装、配饰完全一致；五官对称、手指完整为五指、肢体比例协调。"
+_CHARACTER_GUARD = (
+    "一致性要求：四个角色视图必须是同一人物，同一张脸，同一发型，同一五官，同一身材比例、"
+    "同一服装设计、同一配饰设定；正面、侧面、背面服装结构要能互相对应，"
+    "不能出现不同衣服、不同发型、不同脸型；五官对称，手指完整为五指，肢体比例协调，站姿自然。"
+)
+_CHARACTER_PRESENTATION_GUIDE = "展示要求：突出角色设定图质感，白底，无复杂背景，无场景，无战斗动作。"
 _SCENE_GUARD = "空间透视正常，陈设固定，光影统一。"
 _PROP_GUARD = "外观结构完整，焦点清晰。"
 
 # 反向提示词：精简到核心 4 项，避免 CFG 权重稀释。
+_NEGATIVE_TAIL_CHARACTER = (
+    "画面避免：水印、乱码文字、过多文字、低分辨率、手指畸形、脸部崩坏、"
+    "左右服装不一致、三视图人物不一致、多余角色、复杂背景、风格偏离项目设定。"
+)
 _NEGATIVE_TAIL_ASSET = "画面避免：水印、多余文字、低分辨率、手指畸形。"
 _NEGATIVE_TAIL_VIDEO = "禁止出现：BGM、文字字幕、水印。"
 
@@ -56,11 +72,13 @@ def build_character_prompt(name: str, description: str, style: str = "", style_d
     style_block = _style_prefix(style, style_description)
     return (
         f"{style_block}"
-        f"角色「{name}」的设计参考图。\n\n"
+        f"角色「{name}」的设计参考图 / character reference sheet / turnaround sheet。\n\n"
         f"{description}\n\n"
         f"{_CHARACTER_LAYOUT}\n\n"
+        f"{_CHARACTER_PROP_RULE}\n\n"
         f"{_CHARACTER_GUARD}\n\n"
-        f"{_NEGATIVE_TAIL_ASSET}"
+        f"{_CHARACTER_PRESENTATION_GUIDE}\n\n"
+        f"{_NEGATIVE_TAIL_CHARACTER}"
     )
 
 

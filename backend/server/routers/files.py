@@ -40,6 +40,7 @@ from lib.style_templates import (
     new_favorite_style_template_id,
 )
 from lib.upload_utils import local_upload_path, read_upload_bytes
+from lib.version_manager import VersionManager
 from server.auth import CurrentUser
 
 router = APIRouter()
@@ -66,6 +67,12 @@ ALLOWED_EXTENSIONS = {
     "scene": [".png", ".jpg", ".jpeg", ".webp"],
     "prop": [".png", ".jpg", ".jpeg", ".webp"],
     "storyboard": [".png", ".jpg", ".jpeg", ".webp"],
+}
+
+_DESIGN_UPLOAD_VERSION_TYPES = {
+    "character": ("characters", "角色", "characters"),
+    "scene": ("scenes", "场景", "scenes"),
+    "prop": ("props", "道具", "props"),
 }
 
 
@@ -213,18 +220,43 @@ async def upload_file(
             target_dir.mkdir(parents=True, exist_ok=True)
 
             target_path = target_dir / filename
+            design_version_type = _DESIGN_UPLOAD_VERSION_TYPES.get(upload_type) if name else None
+            version_manager = VersionManager(project_dir) if design_version_type else None
+            design_asset_exists = False
+            if design_version_type:
+                _resource_type, _label, bucket_key = design_version_type
+                project_payload = get_project_manager().load_project(project_name)
+                bucket = project_payload.get(bucket_key) or {}
+                design_asset_exists = isinstance(bucket, dict) and name in bucket
 
             # 项目资产图片统一保存为真实 PNG；供应商传输另走临时转换入口。
             if upload_type in ("character", "character_ref", "scene", "prop", "storyboard"):
+                pending_image_dir: Path | None = None
                 try:
+                    # 先规范化到临时文件，确认上传有效后再备份旧当前图并覆盖。
+                    pending_image_dir = Path(tempfile.mkdtemp(prefix="manju-upload-image-"))
+                    pending_target = pending_image_dir / target_path.name
                     source_path = local_upload_path(file)
                     if source_path is not None:
-                        target_path = save_project_image(source_path, target_path)
+                        pending_image = save_project_image(source_path, pending_target)
                     else:
                         content = read_upload_bytes(file)
-                        target_path = save_project_image(content, target_path)
+                        pending_image = save_project_image(content, pending_target)
+                    if design_version_type and version_manager and design_asset_exists and target_path.exists():
+                        resource_type, label, _bucket_key = design_version_type
+                        version_manager.ensure_current_tracked(
+                            resource_type=resource_type,
+                            resource_id=name,
+                            current_file=target_path,
+                            prompt=f"手动上传前的当前{label}设计图：{name}",
+                            source="manual_upload_existing",
+                        )
+                    shutil.copy2(pending_image, target_path)
                 except ValueError:
                     raise HTTPException(status_code=400, detail=_t("invalid_image_file"))
+                finally:
+                    if pending_image_dir is not None:
+                        shutil.rmtree(pending_image_dir, ignore_errors=True)
                 filename = target_path.name
             else:
                 content = read_upload_bytes(file)
@@ -247,12 +279,15 @@ async def upload_file(
             else:
                 relative_path = f"{upload_type}/{filename}"
 
+            design_version: dict[str, object] = {}
+            metadata_updated = False
             if upload_type == "character" and name:
                 try:
                     with project_change_source("webui"):
                         get_project_manager().update_project_character_sheet(
                             project_name, name, f"characters/{filename}"
                         )
+                    metadata_updated = True
                 except KeyError:
                     pass  # 角色不存在，忽略
 
@@ -273,6 +308,7 @@ async def upload_file(
                             name,
                             f"scenes/{filename}",
                         )
+                    metadata_updated = True
                 except KeyError:
                     pass  # 场景不存在，忽略
 
@@ -284,14 +320,34 @@ async def upload_file(
                             name,
                             f"props/{filename}",
                         )
+                    metadata_updated = True
                 except KeyError:
                     pass  # 道具不存在，忽略
+
+            if design_version_type and version_manager and design_asset_exists and metadata_updated:
+                resource_type, label, _bucket_key = design_version_type
+                version = version_manager.add_version(
+                    resource_type=resource_type,
+                    resource_id=name,
+                    prompt=f"手动上传{label}设计图：{name}",
+                    source_file=target_path,
+                    source="manual_upload",
+                    original_filename=original_filename,
+                )
+                versions = version_manager.get_versions(resource_type, name)["versions"]
+                design_version = {
+                    "resource_type": resource_type,
+                    "resource_id": name,
+                    "version": version,
+                    "created_at": versions[-1]["created_at"] if versions else None,
+                }
 
             return {
                 "success": True,
                 "filename": filename,
                 "path": relative_path,
                 "url": f"/api/v1/files/{project_name}/{relative_path}",
+                **design_version,
             }
 
         return await asyncio.to_thread(_sync)
