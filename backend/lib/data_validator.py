@@ -174,7 +174,12 @@ class DataValidator:
         elif content_mode not in self.VALID_CONTENT_MODES:
             errors.append(f"content_mode 值无效: '{content_mode}'，必须是 {self.VALID_CONTENT_MODES}")
 
-        if not project.get("style"):
+        style_sources = (
+            project.get("style"),
+            project.get("style_description"),
+            project.get("style_template_id"),
+        )
+        if not any(isinstance(value, str) and value.strip() for value in style_sources):
             errors.append("缺少必填字段: style")
 
         episodes = project.get("episodes", [])
