@@ -46,7 +46,10 @@ async def test_active_credential_returns_full_dict(monkeypatch: pytest.MonkeyPat
     assert result["ANTHROPIC_MODEL"] == "claude-opus-4-7"
 
 
-@pytest.mark.parametrize("preset_id", ["glm-cn", "glm-intl", "deepseek", "minimax-intl", "minimax-cn"])
+@pytest.mark.parametrize(
+    "preset_id",
+    ["glm-cn", "glm-intl", "deepseek", "minimax-intl", "minimax-cn", "ark-coding-plan", "ark-agent-plan"],
+)
 @pytest.mark.asyncio
 async def test_gateway_active_credential_uses_auth_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -82,6 +85,43 @@ async def test_gateway_active_credential_uses_auth_token(
     result = await build_anthropic_env_dict(session)
     assert result["ANTHROPIC_API_KEY"] == ""
     assert result["ANTHROPIC_AUTH_TOKEN"] == "sk-gateway"
+
+
+@pytest.mark.asyncio
+async def test_ark_active_credential_uses_preset_default_model_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock()
+    repo_mock = AsyncMock()
+    cred = type(
+        "Cred",
+        (),
+        dict(
+            api_key="ark-gateway",
+            preset_id="ark-agent-plan",
+            base_url="https://ark.cn-beijing.volces.com/api/plan",
+            model="",
+            haiku_model=None,
+            sonnet_model=None,
+            opus_model=None,
+            subagent_model=None,
+        ),
+    )()
+    repo_mock.get_active = AsyncMock(return_value=cred)
+
+    setting_repo = AsyncMock()
+    setting_repo.get_all = AsyncMock(return_value={})
+
+    monkeypatch.setattr(
+        "lib.db.repositories.agent_credential_repo.AgentCredentialRepository",
+        lambda _s: repo_mock,
+    )
+    monkeypatch.setattr("lib.config.service.SystemSettingRepository", lambda _s: setting_repo)
+
+    result = await build_anthropic_env_dict(session)
+    assert result["ANTHROPIC_API_KEY"] == ""
+    assert result["ANTHROPIC_AUTH_TOKEN"] == "ark-gateway"
+    assert result["ANTHROPIC_MODEL"] == "ark-code-latest"
 
 
 @pytest.mark.asyncio
@@ -254,6 +294,8 @@ async def test_no_active_credential_falls_back_to_system_settings(monkeypatch: p
         "https://api.minimaxi.com/anthropic",
         "https://api.moonshot.ai/anthropic",
         "https://api.moonshot.cn/anthropic",
+        "https://ark.cn-beijing.volces.com/api/coding",
+        "https://ark.cn-beijing.volces.com/api/plan",
     ],
 )
 @pytest.mark.asyncio

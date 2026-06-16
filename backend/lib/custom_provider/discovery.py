@@ -8,7 +8,7 @@ import logging
 from google import genai
 from openai import OpenAI
 
-from lib.config.anthropic_url import derive_anthropic_endpoints
+from lib.config.anthropic_url import derive_anthropic_endpoints, looks_like_auth_token_gateway
 from lib.custom_provider.endpoints import endpoint_to_media_type, infer_endpoint
 from lib.httpx_shared import get_http_client
 
@@ -82,12 +82,14 @@ async def _discover_anthropic(base_url: str | None, api_key: str) -> list[dict]:
     """
     ep = derive_anthropic_endpoints(base_url or "https://api.anthropic.com")
     normalized = ep.discovery_root or "https://api.anthropic.com"
+    headers = {"anthropic-version": "2023-06-01"}
+    if looks_like_auth_token_gateway(base_url):
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        headers["x-api-key"] = api_key
     resp = await get_http_client().get(
         f"{normalized}/v1/models",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
+        headers=headers,
         timeout=15.0,
     )
     resp.raise_for_status()

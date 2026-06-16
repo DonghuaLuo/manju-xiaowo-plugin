@@ -82,8 +82,8 @@ def test_default_models_match_table() -> None:
         "minimax-cn": "MiniMax-M3",
         "minimax-intl": "MiniMax-M3",
         "kimi": "kimi-for-coding",
-        "ark-coding-plan": "",
-        "ark-agent-plan": "",
+        "ark-coding-plan": "ark-code-latest",
+        "ark-agent-plan": "ark-code-latest",
     }
     actual = {p.id: p.default_model for p in list_presets()}
     assert actual == expected
@@ -91,10 +91,27 @@ def test_default_models_match_table() -> None:
 
 def test_claude_code_gateway_presets_use_bearer_auth_token() -> None:
     """Claude Code 第三方 Anthropic 兼容网关应通过 ANTHROPIC_AUTH_TOKEN 传密钥。"""
-    for preset_id in ("glm-cn", "glm-intl", "deepseek", "minimax-cn", "minimax-intl"):
+    for preset_id in (
+        "glm-cn",
+        "glm-intl",
+        "deepseek",
+        "minimax-cn",
+        "minimax-intl",
+        "ark-coding-plan",
+        "ark-agent-plan",
+    ):
         p = get_preset(preset_id)
         assert p is not None
         assert p.auth_env_mode == "auth_token"
+
+
+def test_ark_plan_presets_skip_model_discovery_probe() -> None:
+    """火山 Plan 套餐固定使用目录模型，不应探测根域名 /v1/models。"""
+    for preset_id in ("ark-coding-plan", "ark-agent-plan"):
+        p = get_preset(preset_id)
+        assert p is not None
+        assert p.supports_discovery is False
+        assert p.suggested_models == ("ark-code-latest",)
 
 
 def test_kimi_code_preset_uses_anthropic_api_key() -> None:

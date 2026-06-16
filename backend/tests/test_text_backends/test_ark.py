@@ -7,6 +7,7 @@ import pytest
 
 from lib.text_backends.ark import ArkTextBackend
 from lib.text_backends.base import TextCapability, TextGenerationRequest, TextGenerationResult
+from lib.text_backends.structured_probe import probe_text_structured_output_backend
 
 
 @pytest.fixture
@@ -29,6 +30,7 @@ class TestProperties:
         b = ArkTextBackend(api_key="k")
         assert b.capabilities == {
             TextCapability.TEXT_GENERATION,
+            TextCapability.STRUCTURED_OUTPUT,
             TextCapability.VISION,
         }
 
@@ -122,23 +124,34 @@ class TestCapabilityAwareStructured:
     def backend_no_structured(self, mock_ark):
         """创建一个模型不支持原生 structured_output 的 backend。"""
         _, mock_client = mock_ark
-        # 使用默认模型 doubao-seed-2-0-lite-260215，registry 中已移除 structured_output
-        b = ArkTextBackend(api_key="k")
+        b = ArkTextBackend(api_key="k", model="unknown-model-xyz")
         b._test_client = mock_client
         return b
 
     @pytest.fixture
     def backend_with_structured(self, mock_ark):
-        """创建一个模型支持原生 structured_output 的 backend（模拟）。"""
+        """创建一个模型支持原生 structured_output 的 backend。"""
         _, mock_client = mock_ark
-        b = ArkTextBackend(api_key="k", model="mock-model-with-structured")
+        b = ArkTextBackend(api_key="k", model="doubao-seed-2-0-pro-260215")
         b._test_client = mock_client
-        # 手动添加原生结构化输出能力
-        b._capabilities.add(TextCapability.STRUCTURED_OUTPUT)
         return b
 
-    async def test_default_model_does_not_support_native_structured(self, backend_no_structured):
-        """默认豆包模型不支持原生结构化输出。"""
+    async def test_default_model_supports_native_structured(self, mock_ark):
+        """默认豆包 Seed 2.0 模型声明原生结构化输出。"""
+        b = ArkTextBackend(api_key="k")
+        assert TextCapability.STRUCTURED_OUTPUT in b.capabilities
+
+    async def test_seed_2_pro_supports_native_structured(self, backend_with_structured):
+        """用户常用的 doubao-seed-2-0-pro-260215 可进入 strict schema probe。"""
+        assert TextCapability.STRUCTURED_OUTPUT in backend_with_structured.capabilities
+
+    async def test_agent_plan_seed_2_pro_supports_native_structured(self, mock_ark):
+        """Agent Plan 命名格式的 Seed 2.0 Pro 同样声明 strict schema 能力。"""
+        b = ArkTextBackend(api_key="k", model="doubao-seed-2.0-pro")
+        assert TextCapability.STRUCTURED_OUTPUT in b.capabilities
+
+    async def test_unknown_model_does_not_support_native_structured(self, backend_no_structured):
+        """未知模型不声明原生结构化输出。"""
         assert TextCapability.STRUCTURED_OUTPUT not in backend_no_structured.capabilities
 
     async def test_without_native_structured_raises(self, backend_no_structured):
@@ -168,6 +181,20 @@ class TestCapabilityAwareStructured:
         call_args = backend_with_structured._test_client.chat.completions.create.call_args
         assert "response_format" in call_args.kwargs
         assert call_args.kwargs["response_format"]["json_schema"]["strict"] is True
+
+    async def test_structured_probe_sends_request_for_seed_2_pro(self, backend_with_structured, sync_to_thread):
+        """Seed 2.0 Pro 不再在 capabilities 阶段被 probe 拦截。"""
+        mock_resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"title":"probe","scenes":[]}'))],
+            usage=SimpleNamespace(prompt_tokens=8, completion_tokens=6),
+        )
+        backend_with_structured._test_client.chat.completions.create = MagicMock(return_value=mock_resp)
+
+        result = await probe_text_structured_output_backend(backend_with_structured)
+
+        assert result.ok is True
+        assert result.status == "supported"
+        backend_with_structured._test_client.chat.completions.create.assert_called_once()
 
     async def test_unknown_model_does_not_claim_structured(self, mock_ark):
         """未注册模型不声明 strict schema 能力。"""

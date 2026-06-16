@@ -74,17 +74,23 @@ export function useCredentialForm(
     opusModel !== (init?.opus_model ?? "") ||
     subagentModel !== (init?.subagent_model ?? "");
 
-  const buildRequest = (): CreateAgentCredentialRequest => ({
-    preset_id: presetId,
-    api_key: apiKey,
-    display_name: displayName || undefined,
-    base_url: baseUrl || undefined,
-    model: model || undefined,
-    haiku_model: haikuModel || undefined,
-    sonnet_model: sonnetModel || undefined,
-    opus_model: opusModel || undefined,
-    subagent_model: subagentModel || undefined,
-  });
+  const buildRequest = (): CreateAgentCredentialRequest => {
+    const trimmedApiKey = apiKey.trim();
+    const request: CreateAgentCredentialRequest = {
+      preset_id: presetId,
+      display_name: displayName || undefined,
+      base_url: baseUrl || undefined,
+      model: model || undefined,
+      haiku_model: haikuModel || undefined,
+      sonnet_model: sonnetModel || undefined,
+      opus_model: opusModel || undefined,
+      subagent_model: subagentModel || undefined,
+    };
+    if (trimmedApiKey) {
+      request.api_key = trimmedApiKey;
+    }
+    return request;
+  };
 
   return {
     presetId,

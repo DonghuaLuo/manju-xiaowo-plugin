@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from lib.app_data_dir import app_data_dir
-from lib.config.registry import PROVIDER_REGISTRY
+from lib.config.registry import STANDARD_PROVIDER_REGISTRY
 from lib.config.repository import mask_secret
 from lib.config.service import ConfigService
 from lib.config.url_utils import normalize_base_url
@@ -173,7 +173,7 @@ class UpdateCredentialRequest(BaseModel):
 
 def _validate_provider(provider_id: str, _t: Callable[..., str]) -> None:
     """验证供应商 ID 是否存在，不存在则抛 404。"""
-    if provider_id not in PROVIDER_REGISTRY:
+    if provider_id not in STANDARD_PROVIDER_REGISTRY:
         raise HTTPException(status_code=404, detail=_t("unknown_provider", provider_id=provider_id))
 
 
@@ -271,6 +271,7 @@ async def list_providers(
             models={mid: ModelInfoResponse(**minfo) for mid, minfo in (s.models or {}).items()},
         )
         for s in statuses
+        if s.name in STANDARD_PROVIDER_REGISTRY
     ]
     return ProvidersListResponse(providers=providers)
 
@@ -284,7 +285,7 @@ async def get_provider_config(
     """返回单个供应商的配置字段（registry 元数据与 DB 值合并）。"""
     _validate_provider(provider_id, _t)
 
-    meta = PROVIDER_REGISTRY[provider_id]
+    meta = STANDARD_PROVIDER_REGISTRY[provider_id]
     svc = ConfigService(session)
     db_values = await svc.get_provider_config_masked(provider_id)
 
@@ -680,7 +681,6 @@ _TEST_DISPATCH: dict[str, Callable[[dict[str, str], Any], ConnectionTestResponse
     "gemini-aistudio": _test_gemini_aistudio,
     "gemini-vertex": _test_gemini_vertex,
     "ark": _test_ark,
-    "ark-agent-plan": _test_ark,
     "grok": _test_grok,
     "openai": _test_openai,
     "vidu": _test_vidu,
@@ -718,7 +718,7 @@ async def test_provider_connection(
     # 与 generation_tasks._fill_simple_provider_kwargs 对称：用户未显式配 base_url
     # 时，注入 ProviderMeta.default_base_url，使连接测试命中正确 endpoint。
     if not config.get("base_url"):
-        meta = PROVIDER_REGISTRY.get(provider_id)
+        meta = STANDARD_PROVIDER_REGISTRY.get(provider_id)
         if meta and meta.default_base_url:
             config["base_url"] = meta.default_base_url
 

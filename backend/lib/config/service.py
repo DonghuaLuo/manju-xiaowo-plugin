@@ -3,11 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lib.agent_provider_catalog import get_preset
+from lib.config.anthropic_url import looks_like_auth_token_gateway
 from lib.config.env_keys import ANTHROPIC_ENV_KEYS
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.repository import ProviderConfigRepository, SystemSettingRepository
@@ -33,35 +33,6 @@ assert {env_key for _, env_key in _ANTHROPIC_ENV_MAP} == set(ANTHROPIC_ENV_KEYS)
     "_ANTHROPIC_ENV_MAP 与 lib.config.env_keys.ANTHROPIC_ENV_KEYS 漂移"
 )
 
-_AUTH_TOKEN_GATEWAY_PATHS: dict[str, tuple[str, ...]] = {
-    "api.deepseek.com": ("/anthropic",),
-    "open.bigmodel.cn": ("/api/anthropic",),
-    "api.z.ai": ("/api/anthropic",),
-    "api.minimax.io": ("/anthropic",),
-    "api.minimaxi.com": ("/anthropic",),
-    "api.moonshot.ai": ("/anthropic",),
-    "api.moonshot.cn": ("/anthropic",),
-}
-
-
-def _looks_like_auth_token_gateway(base_url: str | None) -> bool:
-    """Infer Claude Code gateway auth mode for custom/legacy Anthropic-compatible URLs."""
-    raw = (base_url or "").strip()
-    if not raw:
-        return False
-    parsed = urlparse(raw)
-    host = (parsed.hostname or "").lower()
-    if host == "api.anthropic.com":
-        return False
-
-    expected_paths = _AUTH_TOKEN_GATEWAY_PATHS.get(host)
-    if expected_paths is None:
-        return False
-
-    path = "/" + (parsed.path or "").strip("/")
-    return any(path == expected or path.startswith(f"{expected}/") for expected in expected_paths)
-
-
 def _build_anthropic_auth_env(
     api_key: str,
     preset_id: str | None,
@@ -71,7 +42,7 @@ def _build_anthropic_auth_env(
     preset = get_preset(preset_id or "")
     if preset is not None:
         auth_env_mode = preset.auth_env_mode
-    elif _looks_like_auth_token_gateway(base_url):
+    elif looks_like_auth_token_gateway(base_url):
         auth_env_mode = "auth_token"
     else:
         auth_env_mode = "api_key"
@@ -97,6 +68,7 @@ async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
 
     if cred is not None:
         settings = await SystemSettingRepository(session).get_all()
+        preset = get_preset(getattr(cred, "preset_id", "") or "")
         auth_env = _build_anthropic_auth_env(
             cred.api_key or "",
             getattr(cred, "preset_id", None),
@@ -105,7 +77,9 @@ async def build_anthropic_env_dict(session: AsyncSession) -> dict[str, str]:
         return {
             **auth_env,
             "ANTHROPIC_BASE_URL": cred.base_url or "",
-            "ANTHROPIC_MODEL": cred.model or settings.get("anthropic_model", "").strip(),
+            "ANTHROPIC_MODEL": cred.model
+            or settings.get("anthropic_model", "").strip()
+            or (preset.default_model if preset else ""),
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": cred.haiku_model
             or settings.get("anthropic_default_haiku_model", "").strip(),
             "ANTHROPIC_DEFAULT_SONNET_MODEL": cred.sonnet_model

@@ -171,6 +171,17 @@ export function AddCredentialModal({
     setDiscovering(true);
     setDiscoverError(null);
     try {
+      const presetModelOptions =
+        selected && selected.supports_discovery === false
+          ? Array.from(new Set([selected.default_model, ...selected.suggested_models].filter(Boolean)))
+          : [];
+      if (presetModelOptions.length > 0) {
+        setModelOptions(presetModelOptions);
+        useAppStore
+          .getState()
+          .pushToast(t("discover_models_success", { count: presetModelOptions.length }), "success");
+        return;
+      }
       // 优先使用表单里的 base_url：用户改了 URL 但发现仍走预设默认端点会选到
       // 当前 endpoint 不支持的模型。无 base_url 时回退到预设的 discovery/messages URL。
       const discoverBase =

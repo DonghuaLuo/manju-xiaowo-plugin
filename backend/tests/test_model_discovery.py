@@ -37,13 +37,42 @@ class TestInferEndpointSmoke:
 
 
 def test_unproven_json_schema_text_models_do_not_advertise_structured_output():
-    """DashScope/Ark 当前证据不足，不能进入 strict schema 文本生成候选。"""
+    """未完成 strict schema 验证的文本模型不能进入结构化输出候选。"""
     from lib.config.registry import PROVIDER_REGISTRY
 
-    for provider_id in ("dashscope", "ark"):
-        for model_id, model in PROVIDER_REGISTRY[provider_id].models.items():
-            if model.media_type == "text":
-                assert "structured_output" not in model.capabilities, f"{provider_id}/{model_id}"
+    verified_ark_models = {
+        "doubao-seed-2-0-pro-260215",
+        "doubao-seed-2-0-lite-260215",
+        "doubao-seed-2-0-mini-260215",
+    }
+    for model_id, model in PROVIDER_REGISTRY["dashscope"].models.items():
+        if model.media_type == "text":
+            assert "structured_output" not in model.capabilities, f"dashscope/{model_id}"
+    for model_id, model in PROVIDER_REGISTRY["ark"].models.items():
+        if model.media_type == "text" and model_id not in verified_ark_models:
+            assert "structured_output" not in model.capabilities, f"ark/{model_id}"
+
+
+def test_verified_ark_seed_2_text_models_advertise_structured_output():
+    """Ark Seed 2.0 已通过 strict schema 探测，项目分析可直接进入能力 probe。"""
+    from lib.config.registry import PROVIDER_REGISTRY
+
+    for provider_id, model_ids in {
+        "ark": (
+            "doubao-seed-2-0-pro-260215",
+            "doubao-seed-2-0-lite-260215",
+            "doubao-seed-2-0-mini-260215",
+        ),
+        "ark-agent-plan": (
+            "doubao-seed-2.0-pro",
+            "doubao-seed-2.0-lite",
+            "doubao-seed-2.0-mini",
+        ),
+    }.items():
+        for model_id in model_ids:
+            model = PROVIDER_REGISTRY[provider_id].models[model_id]
+            assert model.media_type == "text"
+            assert "structured_output" in model.capabilities
 
 
 def test_openai_sora2_durations_match_video_api():

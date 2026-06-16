@@ -37,6 +37,7 @@ backend/compile/
 !/backend/tests/test_grid_router.py
 !/backend/tests/test_grid_splitter.py
 !/backend/tests/test_model_discovery.py
+!/backend/tests/test_ark_image_backend.py
 !/backend/tests/test_openai_text_backend.py
 !/backend/tests/test_text_backend_factory.py
 !/backend/tests/test_text_structured_probe.py

@@ -155,6 +155,7 @@ MESSAGES = {
     "video_start_image_unreadable": "模型 {model} 的首帧图无法读取，已中止生成：{name}；请检查首帧图路径",
     # Agent credentials
     "agent_preset_unknown": "未知预设供应商: {preset_id}",
+    "agent_api_key_required": "请在智能体供应商中填写 API Key",
     "agent_base_url_required_custom": "自定义配置需要填写 base_url",
     "agent_no_fields_to_update": "没有需要更新的字段",
     "agent_credential_not_found": "凭证不存在",

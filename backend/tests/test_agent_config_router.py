@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from lib.config.repository import mask_secret
 from lib.db import get_async_session
 from lib.db.base import Base
 from server.auth import CurrentUserInfo, get_current_user
@@ -77,6 +78,9 @@ async def test_list_preset_providers_returns_catalog(authed_client) -> None:
     arcreel = next(p for p in data["providers"] if p["id"] == "arcreel")
     assert arcreel["is_recommended"] is True
     assert arcreel["api_key_url"] == "https://api.arc-reel.com/"
+    assert deepseek["supports_discovery"] is True
+    ark_agent = next(p for p in data["providers"] if p["id"] == "ark-agent-plan")
+    assert ark_agent["supports_discovery"] is False
 
 
 @pytest.mark.asyncio
@@ -109,6 +113,17 @@ async def test_create_with_preset(authed_client) -> None:
     assert cred["icon_key"] == "DeepSeek"
     # 第一条凭证应自动 active
     assert cred["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_ark_agent_plan_requires_agent_api_key(authed_client) -> None:
+    """火山智能体供应商必须使用智能体页自己的 key，不复用普通供应商凭据。"""
+    resp = await authed_client.post(
+        "/api/v1/agent/credentials",
+        json={"preset_id": "ark-agent-plan", "api_key": ""},
+    )
+
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -157,6 +172,27 @@ async def test_patch_credential(authed_client) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["display_name"] == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_patch_credential_blank_api_key_preserves_existing_secret(authed_client) -> None:
+    created = (
+        await authed_client.post(
+            "/api/v1/agent/credentials",
+            json={"preset_id": "deepseek", "api_key": "sk-original-secret"},
+        )
+    ).json()
+    cid = created["id"]
+
+    resp = await authed_client.patch(
+        f"/api/v1/agent/credentials/{cid}",
+        json={"display_name": "Renamed", "api_key": "  "},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["display_name"] == "Renamed"
+    assert data["api_key_masked"] == mask_secret("sk-original-secret")
 
 
 @pytest.mark.asyncio
@@ -260,6 +296,110 @@ async def test_test_connection_draft_calls_run_test(authed_client, monkeypatch) 
     assert body["messages_probe"]["success"] is True
     assert body["derived_messages_root"] == "https://api.deepseek.com/anthropic"
     fake.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_ark_agent_plan_requires_agent_api_key(authed_client, monkeypatch) -> None:
+    """测试连接时空 key 直接拒绝，不回退到普通供应商凭据。"""
+    from unittest.mock import AsyncMock
+
+    fake = AsyncMock()
+    monkeypatch.setattr("server.routers.agent_config.run_test", fake)
+
+    resp = await authed_client.post(
+        "/api/v1/agent/test-connection",
+        json={"preset_id": "ark-agent-plan", "api_key": ""},
+    )
+
+    assert resp.status_code == 422
+    fake.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_ark_agent_plan_uses_bearer_and_default_model(authed_client, monkeypatch) -> None:
+    """火山方舟 Agent Plan 走 Bearer + 固定模型，不探测 /v1/models。"""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    async def fake_post(*, url, headers, payload, **_kw):
+        captured["messages_url"] = url
+        captured["messages_headers"] = headers
+        captured["messages_payload"] = payload
+        return httpx.Response(200, json={"id": "msg_1", "type": "message", "content": []})
+
+    monkeypatch.setattr("lib.config.anthropic_probe._post", AsyncMock(side_effect=fake_post))
+    mocked_get = AsyncMock(side_effect=AssertionError("Ark Agent Plan should skip model discovery"))
+    monkeypatch.setattr("lib.config.anthropic_probe._get", mocked_get)
+
+    resp = await authed_client.post(
+        "/api/v1/agent/test-connection",
+        json={"preset_id": "ark-agent-plan", "api_key": "ark-test"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overall"] == "ok"
+    assert body["derived_messages_root"] == "https://ark.cn-beijing.volces.com/api/plan"
+    assert body["derived_discovery_root"] == ""
+    assert body["discovery_probe"] is None
+    assert captured["messages_url"] == "https://ark.cn-beijing.volces.com/api/plan/v1/messages"
+    assert captured["messages_payload"] == {
+        "model": "ark-code-latest",
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "ping"}],
+    }
+    headers = captured["messages_headers"]
+    assert isinstance(headers, dict)
+    assert headers["Authorization"] == "Bearer ark-test"
+    assert "x-api-key" not in headers
+    mocked_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_custom_ark_plan_infers_bearer_auth(authed_client, monkeypatch) -> None:
+    """自定义填写火山 Agent Plan URL 时，测试连接也应推断 Bearer 鉴权。"""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    async def fake_post(*, url, headers, payload, **_kw):
+        captured["messages_url"] = url
+        captured["messages_headers"] = headers
+        captured["messages_payload"] = payload
+        return httpx.Response(200, json={"id": "msg_1", "type": "message", "content": []})
+
+    async def fake_get(*, url, headers, **_kw):
+        captured["discovery_url"] = url
+        captured["discovery_headers"] = headers
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr("lib.config.anthropic_probe._post", AsyncMock(side_effect=fake_post))
+    monkeypatch.setattr("lib.config.anthropic_probe._get", AsyncMock(side_effect=fake_get))
+
+    resp = await authed_client.post(
+        "/api/v1/agent/test-connection",
+        json={
+            "preset_id": "__custom__",
+            "base_url": "https://ark.cn-beijing.volces.com/api/plan",
+            "api_key": "ark-test",
+            "model": "ark-code-latest",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["overall"] == "ok"
+    assert captured["messages_url"] == "https://ark.cn-beijing.volces.com/api/plan/v1/messages"
+    assert captured["discovery_url"] == "https://ark.cn-beijing.volces.com/v1/models"
+    for key in ("messages_headers", "discovery_headers"):
+        headers = captured[key]
+        assert isinstance(headers, dict)
+        assert headers["Authorization"] == "Bearer ark-test"
+        assert "x-api-key" not in headers
 
 
 @pytest.mark.asyncio

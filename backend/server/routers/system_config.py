@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lib.config.registry import PROVIDER_REGISTRY
+from lib.config.registry import STANDARD_PROVIDER_REGISTRY
 from lib.config.repository import mask_secret
 from lib.config.resolver import ConfigResolver
 from lib.config.service import ConfigService
@@ -51,7 +51,7 @@ async def _build_options(svc: ConfigService, session: AsyncSession) -> _OptionsD
     provider_names: dict[str, str] = {}
     _MEDIA_TO_BUCKET = {"video": "video_backends", "image": "image_backends", "text": "text_backends"}
 
-    for provider_id, meta in PROVIDER_REGISTRY.items():
+    for provider_id, meta in STANDARD_PROVIDER_REGISTRY.items():
         if provider_id not in ready_providers:
             continue
         for model_id, model_info in meta.models.items():

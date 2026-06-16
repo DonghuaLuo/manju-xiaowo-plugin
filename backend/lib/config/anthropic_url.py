@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from lib.config.url_utils import ensure_anthropic_base_url
 
@@ -37,6 +38,17 @@ _SUFFIX_PATTERNS: list[tuple[re.Pattern[str], int]] = [
     # 其余已知子路径 — 整体剥掉（保留 0 字符）
     (re.compile(r"/(?:apps/anthropic|plan/anthropic|coding/anthropic|api/coding|api/plan|anthropic)/?$"), 0),
 ]
+
+_AUTH_TOKEN_GATEWAY_PATHS: dict[str, tuple[str, ...]] = {
+    "api.deepseek.com": ("/anthropic",),
+    "open.bigmodel.cn": ("/api/anthropic",),
+    "api.z.ai": ("/api/anthropic",),
+    "api.minimax.io": ("/anthropic",),
+    "api.minimaxi.com": ("/anthropic",),
+    "api.moonshot.ai": ("/anthropic",),
+    "api.moonshot.cn": ("/anthropic",),
+    "ark.cn-beijing.volces.com": ("/api/coding", "/api/plan"),
+}
 
 
 @dataclass(frozen=True)
@@ -74,3 +86,21 @@ def derive_anthropic_endpoints(user_url: str) -> AnthropicEndpoints:
             )
             return AnthropicEndpoints(messages_root, discovery_root, has_explicit_suffix=True)
     return AnthropicEndpoints(cleaned, cleaned, has_explicit_suffix=False)
+
+
+def looks_like_auth_token_gateway(base_url: str | None) -> bool:
+    """Infer Claude Code gateway auth mode for custom/legacy Anthropic-compatible URLs."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if host == "api.anthropic.com":
+        return False
+
+    expected_paths = _AUTH_TOKEN_GATEWAY_PATHS.get(host)
+    if expected_paths is None:
+        return False
+
+    path = "/" + (parsed.path or "").strip("/")
+    return any(path == expected or path.startswith(f"{expected}/") for expected in expected_paths)

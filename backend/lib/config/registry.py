@@ -355,20 +355,20 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "doubao-seed-2-0-pro-260215": ModelInfo(
                 display_name="豆包 Seed 2.0 Pro",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
 
                 pricing=_ark_text_pricing("doubao-seed-2-0-pro-260215", 3.20, 16.00),),
             "doubao-seed-2-0-lite-260215": ModelInfo(
                 display_name="豆包 Seed 2.0 Lite",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
                 default=True,
 
                 pricing=_ark_text_pricing("doubao-seed-2-0-lite-260215", 0.60, 3.60),),
             "doubao-seed-2-0-mini-260215": ModelInfo(
                 display_name="豆包 Seed 2.0 Mini",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
 
                 pricing=_ark_text_pricing("doubao-seed-2-0-mini-260215", 0.20, 2.00),),
             "doubao-seed-1-8-251228": ModelInfo(
@@ -384,6 +384,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
+                resolutions=["2K", "3K", "4K"],
 
                 pricing=_ark_image_pricing("doubao-seedream-5-0-lite-260128", 0.22),),
             "doubao-seedream-5-0-260128": ModelInfo(
@@ -391,6 +392,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
+                resolutions=["2K", "3K", "4K"],
 
                 pricing=_ark_image_pricing("doubao-seedream-5-0-260128", 0.22),),
             "doubao-seedream-4-5-251128": ModelInfo(
@@ -398,6 +400,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
+                resolutions=["2K", "4K"],
 
                 pricing=_ark_image_pricing("doubao-seedream-4-5-251128", 0.25),),
             "doubao-seedream-4-0-250828": ModelInfo(
@@ -405,6 +408,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="image",
                 capabilities=["text_to_image", "image_to_image"],
                 max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
+                resolutions=["1K", "2K", "4K"],
 
                 pricing=_ark_image_pricing("doubao-seedream-4-0-250828", 0.20),),
             # --- video ---
@@ -498,18 +502,18 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
             "doubao-seed-2.0-mini": ModelInfo(
                 display_name="豆包 Seed 2.0 Mini",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
             ),
             "doubao-seed-2.0-lite": ModelInfo(
                 display_name="豆包 Seed 2.0 Lite",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
                 default=True,
             ),
             "doubao-seed-2.0-pro": ModelInfo(
                 display_name="豆包 Seed 2.0 Pro",
                 media_type="text",
-                capabilities=["text_generation", "vision"],
+                capabilities=["text_generation", "structured_output", "vision"],
             ),
             "doubao-seed-2.0-code": ModelInfo(
                 display_name="豆包 Seed 2.0 Code",
@@ -548,6 +552,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 max_reference_images=ARK_SEEDREAM_MAX_REFERENCE_IMAGES,
+                resolutions=["2K", "3K", "4K"],
             ),
             # --- video ---
             "doubao-seedance-1.5-pro": ModelInfo(
@@ -945,6 +950,14 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
         },
         default_base_url=DASHSCOPE_BASE_URL,
     ),
+}
+
+
+# 这些 provider 保留在底层 registry 里用于旧项目/内部 backend 兼容，但不属于
+# 「全局设置 → 供应商」的普通模型供应商列表；它们只能在「智能体」页管理。
+AGENT_ONLY_PROVIDER_IDS = frozenset({"ark-agent-plan"})
+STANDARD_PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
+    provider_id: meta for provider_id, meta in PROVIDER_REGISTRY.items() if provider_id not in AGENT_ONLY_PROVIDER_IDS
 }
 
 

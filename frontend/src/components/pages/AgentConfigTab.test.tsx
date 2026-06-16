@@ -58,6 +58,7 @@ function makePreset(overrides?: Partial<PresetProvider>): PresetProvider {
     notes: null,
     api_key_pattern: null,
     is_recommended: true,
+    supports_discovery: true,
     ...overrides,
   };
 }

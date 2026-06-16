@@ -25,6 +25,7 @@ const presets: PresetProvider[] = [
     notes: null,
     api_key_pattern: null,
     is_recommended: true,
+    supports_discovery: true,
   },
 ];
 
@@ -43,6 +44,25 @@ const presetsWithSecond: PresetProvider[] = [
     notes: null,
     api_key_pattern: null,
     is_recommended: false,
+    supports_discovery: true,
+  },
+];
+
+const arkPresets: PresetProvider[] = [
+  {
+    id: "ark-agent-plan",
+    display_name: "Ark Agent Plan",
+    icon_key: "Volcengine",
+    messages_url: "https://ark.cn-beijing.volces.com/api/plan",
+    discovery_url: "https://ark.cn-beijing.volces.com",
+    default_model: "ark-code-latest",
+    suggested_models: ["ark-code-latest"],
+    docs_url: null,
+    api_key_url: "https://console.volcengine.com/ark/region:ark+cn-beijing/agent",
+    notes: null,
+    api_key_pattern: null,
+    is_recommended: true,
+    supports_discovery: false,
   },
 ];
 
@@ -238,7 +258,7 @@ describe("AddCredentialModal", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not require apiKey in edit mode and submits with empty key", async () => {
+  it("does not require apiKey in edit mode and omits blank key", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(
       <AddCredentialModal
@@ -256,7 +276,7 @@ describe("AddCredentialModal", () => {
         onClose={vi.fn()}
       />,
     );
-    // 改一个非 api_key 字段触发 dirty,api_key 留空提交
+    // 改一个非 api_key 字段触发 dirty，api_key 留空表示保留现有密钥
     fireEvent.change(
       screen.getByLabelText(/display[_ ]name|显示名/i),
       { target: { value: "DS Prod 2" } },
@@ -269,9 +289,7 @@ describe("AddCredentialModal", () => {
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalled();
     });
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ api_key: "" }),
-    );
+    expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty("api_key");
   });
 
   it("disables submit in edit mode when no field changed", () => {
@@ -461,6 +479,80 @@ describe("AddCredentialModal", () => {
       });
       // TestResultPanel headline 渲染（test_ok 文案三语 OR-match）
       await screen.findByText(/test[_ ]ok|连通正常|Kết nối/i);
+    });
+
+    it("uses remote discovery for presets that support it even with suggested models", async () => {
+      const spy = vi.spyOn(API, "discoverAnthropicModels").mockResolvedValue({
+        models: [
+          {
+            model_id: "deepseek-live",
+            display_name: "deepseek-live",
+            endpoint: "",
+            is_default: false,
+            is_enabled: true,
+          },
+        ],
+      });
+      render(
+        <AddCredentialModal
+          open
+          presets={presets}
+          customSentinelId="__custom__"
+          onSubmit={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /DeepSeek/i }));
+      fireEvent.change(
+        screen.getByLabelText(/anthropic[_ ]?api[_ ]?key|Anthropic API 密钥/i),
+        { target: { value: "sk-test" } },
+      );
+      fireEvent.click(screen.getByRole("button", { name: /discover|获取模型列表/i }));
+
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalledWith({
+          base_url: "https://api.deepseek.com/anthropic",
+          api_key: "sk-test",
+        });
+      });
+    });
+
+    it("keeps Ark Agent Plan test disabled until an agent api key is filled", () => {
+      render(
+        <AddCredentialModal
+          open
+          presets={arkPresets}
+          customSentinelId="__custom__"
+          onSubmit={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Ark Agent Plan/i }));
+
+      const btn = screen.getByTestId("test-connection");
+      expect(btn).toBeDisabled();
+    });
+
+    it("uses Ark Agent Plan preset models without remote discovery", async () => {
+      const spy = vi.spyOn(API, "discoverAnthropicModels").mockRejectedValue(new Error("should not call"));
+      render(
+        <AddCredentialModal
+          open
+          presets={arkPresets}
+          customSentinelId="__custom__"
+          onSubmit={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Ark Agent Plan/i }));
+      fireEvent.click(screen.getByRole("button", { name: /discover|获取模型列表/i }));
+
+      expect(spy).not.toHaveBeenCalled();
+      fireEvent.click(screen.getAllByRole("button", { name: /toggle[_ ]options|切换选项/i })[0]);
+      expect(await screen.findByText("ark-code-latest")).toBeInTheDocument();
     });
   });
 

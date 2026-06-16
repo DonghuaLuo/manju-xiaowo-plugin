@@ -155,6 +155,7 @@ MESSAGES = {
     "video_start_image_unreadable": "The first-frame image for model {model} is unreadable; generation aborted: {name}; check the first-frame image path",
     # Agent credentials
     "agent_preset_unknown": "Unknown preset provider: {preset_id}",
+    "agent_api_key_required": "Enter an API Key for the agent provider",
     "agent_base_url_required_custom": "base_url is required for custom configuration",
     "agent_no_fields_to_update": "No fields to update",
     "agent_credential_not_found": "Credential not found",

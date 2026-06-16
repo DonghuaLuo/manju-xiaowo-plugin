@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lib.app_data_dir import app_data_dir
-from lib.config.registry import PROVIDER_REGISTRY, is_retired_provider_model
+from lib.config.registry import PROVIDER_REGISTRY, STANDARD_PROVIDER_REGISTRY, is_retired_provider_model
 from lib.config.service import (
     _DEFAULT_IMAGE_BACKEND,
     _DEFAULT_TEXT_BACKEND,
@@ -888,11 +888,11 @@ class ConfigResolver:
         session: AsyncSession,
         media_type: str,
     ) -> tuple[str, str]:
-        """遍历 PROVIDER_REGISTRY（按注册顺序），找到第一个 ready 且支持该 media_type 的供应商。"""
+        """遍历普通供应商 registry（按注册顺序），找到第一个 ready 且支持该 media_type 的供应商。"""
         statuses = await svc.get_all_providers_status()
         ready = {s.name for s in statuses if s.status == "ready"}
 
-        for provider_id, meta in PROVIDER_REGISTRY.items():
+        for provider_id, meta in STANDARD_PROVIDER_REGISTRY.items():
             if provider_id not in ready:
                 continue
             for model_id, model_info in meta.models.items():

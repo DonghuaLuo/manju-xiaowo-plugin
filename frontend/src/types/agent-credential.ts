@@ -17,6 +17,7 @@ export interface PresetProvider {
   notes: string | null;
   api_key_pattern: string | null;
   is_recommended: boolean;
+  supports_discovery: boolean;
 }
 
 export interface PresetProvidersResponse {
@@ -44,7 +45,7 @@ export interface CreateAgentCredentialRequest {
   preset_id: string;
   display_name?: string | null;
   base_url?: string | null;
-  api_key: string;
+  api_key?: string | null;
   model?: string | null;
   haiku_model?: string | null;
   sonnet_model?: string | null;
@@ -91,6 +92,6 @@ export interface TestConnectionResponse {
 export interface TestConnectionRequest {
   preset_id?: string | null;
   base_url?: string | null;
-  api_key: string;
+  api_key?: string | null;
   model?: string | null;
 }

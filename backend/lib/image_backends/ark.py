@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from lib.ark_shared import create_ark_client
@@ -48,16 +49,69 @@ _SEEDREAM_1K_SIZE_MAP: dict[str, str] = {
     "21:9": "1512x648",
 }
 
+_SIZE_PRESET_RE = re.compile(r"^\s*([1-4])\s*[kK]\s*$")
+_WIDTH_HEIGHT_RE = re.compile(r"^\s*(\d+)\s*[xX×*]\s*(\d+)\s*$")
+
+
+def _seedream_size_presets(model_id: str) -> tuple[str, ...]:
+    mid = (model_id or "").lower()
+    if "seedream-3" in mid:
+        return ("1k",)
+    if "seedream-4-0" in mid or "seedream-4.0" in mid:
+        return ("1k", "2k", "4k")
+    if "seedream-4-5" in mid or "seedream-4.5" in mid:
+        return ("2k", "4k")
+    if "seedream-5" in mid or "seedream-5.0" in mid:
+        return ("2k", "3k", "4k")
+    return ("2k", "4k")
+
+
+def _coerce_seedream_size_preset(model_id: str, preset: str) -> str:
+    supported = _seedream_size_presets(model_id)
+    if preset in supported:
+        return preset
+
+    requested_rank = int(preset.removesuffix("k"))
+    ranked = [(int(item.removesuffix("k")), item) for item in supported]
+    lower_or_equal = [item for item in ranked if item[0] <= requested_rank]
+    if lower_or_equal:
+        coerced = lower_or_equal[-1][1]
+    else:
+        coerced = ranked[0][1]
+
+    logger.warning("Ark Seedream size=%s 不被 model=%s 支持，已改用 %s", preset, model_id, coerced)
+    return coerced
+
+
+def _normalize_seedream_size(model_id: str, size: str) -> str:
+    """Normalize profile-style image sizes to the values Ark images.generate accepts."""
+    raw = (size or "").strip()
+    if not raw:
+        return _resolve_seedream_size(model_id, "9:16")
+
+    wh = _WIDTH_HEIGHT_RE.match(raw)
+    if wh:
+        return f"{int(wh.group(1))}x{int(wh.group(2))}"
+
+    preset = _SIZE_PRESET_RE.match(raw)
+    if preset:
+        return _coerce_seedream_size_preset(model_id, f"{preset.group(1)}k")
+
+    if raw.lower() == "512px":
+        return _coerce_seedream_size_preset(model_id, "1k")
+
+    return raw
+
 
 def _resolve_seedream_size(model_id: str, aspect_ratio: str) -> str:
     """按模型族选尺寸表；未识别比例时回退到分辨率 keyword（方式 1，由模型按 prompt 自适应）。"""
     mid = (model_id or "").lower()
     if "seedream-3" in mid:
         size = _SEEDREAM_1K_SIZE_MAP.get(aspect_ratio)
-        return size or "1K"
+        return size or "1k"
     # 默认按 4.x/5.x 处理（含 lite 与未来兼容版本）
     size = _SEEDREAM_2K_SIZE_MAP.get(aspect_ratio)
-    return size or "2K"
+    return size or _coerce_seedream_size_preset(model_id, "2k")
 
 
 class ArkImageBackend:
@@ -103,7 +157,11 @@ class ArkImageBackend:
         # Seedream 不显式传 size 时默认输出 1:1（4.x/5.x: 2048x2048；3.0-t2i: 1024x1024），
         # 项目设置的 aspect_ratio 会被静默忽略。优先使用 caller 显式传入的 image_size
         # （如 grid 路径会传 "2K"/"4K"），否则按官方推荐表从 aspect_ratio 推导宽高。
-        kwargs["size"] = request.image_size or _resolve_seedream_size(self._model, request.aspect_ratio)
+        kwargs["size"] = (
+            _normalize_seedream_size(self._model, request.image_size)
+            if request.image_size
+            else _resolve_seedream_size(self._model, request.aspect_ratio)
+        )
 
         # I2I: 读取参考图并转为 base64 data URI
         if request.reference_images:

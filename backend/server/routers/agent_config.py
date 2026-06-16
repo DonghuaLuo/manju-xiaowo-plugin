@@ -44,6 +44,7 @@ class PresetProviderResponse(BaseModel):
     notes: str | None
     api_key_pattern: str | None
     is_recommended: bool
+    supports_discovery: bool
 
 
 class PresetProvidersResponse(BaseModel):
@@ -71,6 +72,7 @@ async def list_preset_providers(_user: CurrentUser, _t: Translator) -> PresetPro
                 notes=_t(p.notes_i18n_key) if p.notes_i18n_key else None,
                 api_key_pattern=p.api_key_pattern,
                 is_recommended=p.is_recommended,
+                supports_discovery=p.supports_discovery,
             )
             for p in list_presets()
         ],
@@ -105,7 +107,7 @@ class CreateCredentialRequest(BaseModel):
     preset_id: str
     display_name: str | None = None
     base_url: str | None = None
-    api_key: str
+    api_key: str | None = None
     model: str | None = None
     haiku_model: str | None = None
     sonnet_model: str | None = None
@@ -165,6 +167,10 @@ async def create_credential(
     _t: Translator,
     session: AsyncSession = Depends(get_async_session),
 ) -> CredentialResponse:
+    api_key = (body.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=422, detail=_t("agent_api_key_required"))
+
     if body.preset_id != CUSTOM_SENTINEL_ID:
         preset = get_preset(body.preset_id)
         if preset is None:
@@ -184,7 +190,7 @@ async def create_credential(
         preset_id=body.preset_id,
         display_name=display_name,
         base_url=base_url,
-        api_key=body.api_key,
+        api_key=api_key,
         model=model,
         haiku_model=body.haiku_model,
         sonnet_model=body.sonnet_model,
@@ -219,6 +225,13 @@ async def update_credential(
     for required in ("display_name", "base_url", "api_key"):
         if fields.get(required) is None:
             fields.pop(required, None)
+    api_key = fields.get("api_key")
+    if isinstance(api_key, str):
+        trimmed_api_key = api_key.strip()
+        if trimmed_api_key:
+            fields["api_key"] = trimmed_api_key
+        else:
+            fields.pop("api_key", None)
     if not fields:
         raise HTTPException(status_code=400, detail=_t("agent_no_fields_to_update"))
     cred = await repo.update(cred_id, **fields)
@@ -296,7 +309,7 @@ class TestConnectionResponseModel(BaseModel):
 class TestConnectionRequest(BaseModel):
     preset_id: str | None = None
     base_url: str | None = None
-    api_key: str
+    api_key: str | None = None
     model: str | None = None
 
 
@@ -324,12 +337,15 @@ async def _run_and_serialize(
     *,
     preset_id: str | None,
     base_url: str | None,
-    api_key: str,
+    api_key: str | None,
     model: str | None,
     _t: Translator,
 ) -> TestConnectionResponseModel:
+    resolved_api_key = (api_key or "").strip()
+    if not resolved_api_key:
+        raise HTTPException(status_code=422, detail=_t("agent_api_key_required"))
     try:
-        result = await run_test(preset_id=preset_id, base_url=base_url, api_key=api_key, model=model)
+        result = await run_test(preset_id=preset_id, base_url=base_url, api_key=resolved_api_key, model=model)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=_t("agent_test_validation_error", error=str(exc))) from exc
     return _serialize_test_response(result)

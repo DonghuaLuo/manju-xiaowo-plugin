@@ -155,6 +155,7 @@ MESSAGES = {
     "video_start_image_unreadable": "Ảnh khung hình đầu của mô hình {model} không đọc được; đã hủy tạo: {name}; hãy kiểm tra đường dẫn ảnh khung hình đầu",
     # Agent credentials
     "agent_preset_unknown": "Nhà cung cấp đặt sẵn không xác định: {preset_id}",
+    "agent_api_key_required": "Nhập API Key cho nhà cung cấp tác nhân",
     "agent_base_url_required_custom": "Cấu hình tuỳ chỉnh yêu cầu base_url",
     "agent_no_fields_to_update": "Không có trường nào để cập nhật",
     "agent_credential_not_found": "Không tìm thấy xác thực",

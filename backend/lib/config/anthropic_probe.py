@@ -19,12 +19,13 @@ from typing import Any, Literal
 import httpx
 
 from lib.agent_provider_catalog import CUSTOM_SENTINEL_ID, get_preset
-from lib.config.anthropic_url import AnthropicEndpoints, derive_anthropic_endpoints
+from lib.config.anthropic_url import AnthropicEndpoints, derive_anthropic_endpoints, looks_like_auth_token_gateway
 from lib.httpx_shared import get_http_client
 
 logger = logging.getLogger(__name__)
 
 _ERR_TRUNCATE = 200
+AuthEnvMode = Literal["api_key", "auth_token"]
 
 
 class DiagnosisCode(StrEnum):
@@ -57,6 +58,15 @@ async def _post(
     return await client.post(url, headers=headers, json=payload, timeout=timeout_s)
 
 
+def _auth_headers(api_key: str, auth_env_mode: AuthEnvMode) -> dict[str, str]:
+    headers = {"anthropic-version": "2023-06-01"}
+    if auth_env_mode == "auth_token":
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 def _truncate(s: str | None) -> str | None:
     if s is None:
         return None
@@ -68,6 +78,7 @@ async def probe_messages(
     messages_root: str,
     api_key: str,
     model: str,
+    auth_env_mode: AuthEnvMode = "api_key",
     timeout_s: float = 10.0,
 ) -> ProbeResult:
     """POST {messages_root}/v1/messages 发最小请求 (max_tokens=1)。
@@ -84,11 +95,7 @@ async def probe_messages(
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "ping"}],
     }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
+    headers = {**_auth_headers(api_key, auth_env_mode), "content-type": "application/json"}
     started = time.perf_counter()
     try:
         resp = await _post(url=url, headers=headers, payload=payload, timeout_s=timeout_s)
@@ -163,13 +170,14 @@ async def probe_discovery(
     *,
     discovery_root: str | None,
     api_key: str,
+    auth_env_mode: AuthEnvMode = "api_key",
     timeout_s: float = 5.0,
 ) -> ProbeResult | None:
     """GET {discovery_root}/v1/models 体检模型发现端点 (warn 级，仅供参考)。"""
     if not discovery_root:
         return None
     url = f"{discovery_root.rstrip('/')}/v1/models"
-    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    headers = _auth_headers(api_key, auth_env_mode)
     started = time.perf_counter()
     try:
         resp = await _get(url=url, headers=headers, timeout_s=timeout_s)
@@ -224,10 +232,13 @@ async def run_test(
 ) -> TestConnectionResponse:
     """完整端到端测试：派生 → messages + discovery 并发 → 自定义模式自愈 → 诊断。"""
     # 1. 派生 endpoints
+    supports_discovery = True
     if preset_id and preset_id != CUSTOM_SENTINEL_ID:
         preset = get_preset(preset_id)
         if preset is None:
             raise ValueError(f"unknown preset: {preset_id!r}")
+        auth_env_mode = preset.auth_env_mode
+        supports_discovery = preset.supports_discovery
         if base_url:
             # 凭证覆盖了 preset.messages_url（如内部代理）：用 base_url 同时派生 messages
             # 和 discovery 两个 root，保持与运行时 build_anthropic_env_dict 一致。
@@ -235,13 +246,13 @@ async def run_test(
             derived = derive_anthropic_endpoints(base_url)
             ep = AnthropicEndpoints(
                 messages_root=derived.messages_root,
-                discovery_root=derived.discovery_root,
+                discovery_root=derived.discovery_root if supports_discovery else "",
                 has_explicit_suffix=True,
             )
         else:
             ep = AnthropicEndpoints(
                 messages_root=preset.messages_url,
-                discovery_root=preset.discovery_url or "",
+                discovery_root=(preset.discovery_url or "") if supports_discovery else "",
                 has_explicit_suffix=True,
             )
         effective_model = model or preset.default_model
@@ -250,11 +261,21 @@ async def run_test(
             raise ValueError("base_url required for __custom__ mode")
         ep = derive_anthropic_endpoints(base_url)
         effective_model = model or _DEFAULT_TEST_MODEL
+        auth_env_mode = "auth_token" if looks_like_auth_token_gateway(base_url) else "api_key"
 
     # 2. messages + discovery 并发首轮：discovery 是 warn 级独立信号，串行只浪费墙钟时间
     msg, disc = await asyncio.gather(
-        probe_messages(messages_root=ep.messages_root, api_key=api_key, model=effective_model),
-        probe_discovery(discovery_root=ep.discovery_root or None, api_key=api_key),
+        probe_messages(
+            messages_root=ep.messages_root,
+            api_key=api_key,
+            model=effective_model,
+            auth_env_mode=auth_env_mode,
+        ),
+        probe_discovery(
+            discovery_root=ep.discovery_root or None,
+            api_key=api_key,
+            auth_env_mode=auth_env_mode,
+        ),
     )
 
     # 3. 自定义模式 + 失败 + 没显式 anthropic 后缀 + status 命中 retryable → 串行自愈
@@ -268,7 +289,12 @@ async def run_test(
         and msg.status_code in _RETRYABLE_STATUS_FOR_SELF_HEAL
     ):
         retry_root = ep.messages_root.rstrip("/") + "/anthropic"
-        retry = await probe_messages(messages_root=retry_root, api_key=api_key, model=effective_model)
+        retry = await probe_messages(
+            messages_root=retry_root,
+            api_key=api_key,
+            model=effective_model,
+            auth_env_mode=auth_env_mode,
+        )
         if retry.success:
             msg = retry
             final_messages_root = retry_root

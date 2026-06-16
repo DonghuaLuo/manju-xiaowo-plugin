@@ -30,6 +30,7 @@ class PresetProvider:
     api_key_pattern: str | None
     is_recommended: bool
     auth_env_mode: Literal["api_key", "auth_token"] = "api_key"
+    supports_discovery: bool = True
 
 
 PRESET_PROVIDERS: dict[str, PresetProvider] = {
@@ -170,13 +171,15 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="Volcengine",
         messages_url="https://ark.cn-beijing.volces.com/api/coding",
         discovery_url="https://ark.cn-beijing.volces.com",
-        default_model="",
-        suggested_models=(),
+        default_model="ark-code-latest",
+        suggested_models=("ark-code-latest",),
         docs_url="https://www.volcengine.com/docs/82379/1928262",
         api_key_url="https://console.volcengine.com/ark",
         notes_i18n_key="preset_notes_ark_coding_plan",
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
+        supports_discovery=False,
     ),
     "ark-agent-plan": PresetProvider(
         id="ark-agent-plan",
@@ -184,13 +187,15 @@ PRESET_PROVIDERS: dict[str, PresetProvider] = {
         icon_key="Volcengine",
         messages_url="https://ark.cn-beijing.volces.com/api/plan",
         discovery_url="https://ark.cn-beijing.volces.com",
-        default_model="",
-        suggested_models=(),
+        default_model="ark-code-latest",
+        suggested_models=("ark-code-latest",),
         docs_url="https://www.volcengine.com/docs/82379/2375486",
         api_key_url="https://console.volcengine.com/ark",
         notes_i18n_key="preset_notes_ark_agent_plan",
         api_key_pattern=None,
         is_recommended=False,
+        auth_env_mode="auth_token",
+        supports_discovery=False,
     ),
 }
 
