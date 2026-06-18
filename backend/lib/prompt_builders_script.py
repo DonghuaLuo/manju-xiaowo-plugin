@@ -9,9 +9,16 @@
 - 节奏建议由 lib.prompt_rules.episode_pacing 注入，跨 subagent 与 builder 共享。
 """
 
+import re
+
 from lib.prompt_rules import is_v2_enabled
 from lib.prompt_rules.episode_pacing import render_pacing_section
 from lib.script_splitting_templates import render_profile_prompt_section
+
+_NARRATION_STEP1_ID_RE = re.compile(
+    r"^(?:E\d+S\d+(?:_\d+)?|G\d+(?:_\d+)?)$",
+    re.IGNORECASE,
+)
 
 
 def _format_names(items: dict) -> str:
@@ -29,6 +36,54 @@ def _profile_output_fields(profile: dict | None) -> list[str]:
 def _prompt_fragments(profile: dict | None) -> dict:
     fragments = profile.get("prompt_fragments") if isinstance(profile, dict) else None
     return fragments if isinstance(fragments, dict) else {}
+
+
+def _extract_narration_step1_ids(segments_md: str) -> list[str]:
+    ids: list[str] = []
+    for raw_line in str(segments_md or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        cells = [cell.strip().strip("`").strip() for cell in line.strip().strip("|").split("|")]
+        if not cells:
+            continue
+        item_id = cells[0]
+        if _NARRATION_STEP1_ID_RE.fullmatch(item_id):
+            ids.append(item_id)
+    return ids
+
+
+def _format_step1_id_sample(ids: list[str], fallback: str) -> str:
+    sample = [item_id for item_id in ids[:3] if item_id]
+    return "、".join(sample) if sample else fallback
+
+
+def _narration_step1_id_contract(segments_md: str, episode: int) -> tuple[str, str]:
+    ids = _extract_narration_step1_ids(segments_md)
+    first_id = ids[0].upper() if ids else ""
+    if first_id.startswith("G"):
+        sample = _format_step1_id_sample(ids, "G01、G02")
+        mapped_sample = "、".join(
+            f"E{episode}S{item_id[1:]}" for item_id in ids[:3] if item_id.upper().startswith("G")
+        )
+        mapped_sample = mapped_sample or f"E{episode}S01、E{episode}S02"
+        table_id_hint = (
+            f"片段 ID（旧 Step 1 第一列为 {sample} 时，"
+            f"JSON segment_id 统一写为 {mapped_sample}）"
+        )
+        episode_constraints = f"""<episode_constraints>
+当前正在生成第 {episode} 集。Step 1 若仍含旧版旁白 G 编号（例如 {sample}），JSON 输出必须迁移为统一 `E{episode}S{{两位序号}}` 格式（例如 {mapped_sample}）。
+不得在 JSON 的 segment_id 中继续输出 G01/G02；不得新增、跳号或重排。
+</episode_constraints>"""
+        return table_id_hint, episode_constraints
+
+    table_id_hint = f"片段 ID（E{episode}S{{序号}}，当前为第 {episode} 集）"
+    episode_constraints = f"""<episode_constraints>
+当前正在生成第 {episode} 集。本集所有 segment_id 必须严格使用 `E{episode}S{{两位序号}}` 格式（如 E{episode}S01、E{episode}S02）。
+不得使用其他集号前缀。
+若 segments 表里出现非 `E{episode}` 前缀（如 E1S..），视为脏数据，请按当前集号 `E{episode}` 重写。
+</episode_constraints>"""
+    return table_id_hint, episode_constraints
 
 
 def _format_prompt_fragment(text: str, **values) -> str:
@@ -300,6 +355,7 @@ def build_narration_prompt(
     profile_section = f"{profile_block}\n" if profile_block else ""
     step1_bridge = _render_narration_step1_to_json_bridge(script_splitting_profile)
     step1_bridge_section = step1_bridge if step1_bridge else ""
+    step1_id_hint, episode_constraints = _narration_step1_id_contract(segments_md, episode)
 
     return f"""# 角色与任务
 
@@ -341,12 +397,9 @@ def build_narration_prompt(
 {segments_md}
 </segments>
 
-segments 表每行是一个待生成的片段，包含：片段 ID（E{episode}S{{序号}}，当前为第 {episode} 集）、小说原文、{_format_duration_constraint(supported_durations, default_duration)}、是否含对话、是否为 segment_break。
+segments 表每行是一个待生成的片段，包含：{step1_id_hint}、小说原文、{_format_duration_constraint(supported_durations, default_duration)}、是否含对话、是否为 segment_break。
 
-<episode_constraints>
-当前正在生成第 {episode} 集。本集所有 segment_id 必须严格使用 `E{episode}S{{两位序号}}` 格式（如 E{episode}S01、E{episode}S02），不得使用其他集号前缀。
-若 segments 表里出现非 `E{episode}` 前缀（如 E1S..），视为脏数据，请按当前集号 `E{episode}` 重写。
-</episode_constraints>
+{episode_constraints}
 
 # 字段写作指引
 

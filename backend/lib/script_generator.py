@@ -46,6 +46,15 @@ _SCRIPT_DIAGNOSTIC_RESPONSE_LIMIT = 12000
 # 集号前缀正则：仅匹配 `E{数字}` + 紧随 S/U（segment/scene 用 S，video_unit 用 U），
 # 保留后缀（如 `E1S03_2` → `E2S03_2`）。设计契约见 lib/script_models.py。
 _EID_PREFIX_RE = re.compile(r"^E\d+(?=[SU])")
+_LEGACY_G_ID_RE = re.compile(r"^G(?P<index>\d+)(?P<suffix>_\d+)?$", re.IGNORECASE)
+_LEGACY_G_ROW_PREFIX_RE = re.compile(
+    r"^(?P<prefix>\s*\|?\s*)G(?P<index>\d+)(?P<suffix>_\d+)?(?=\s*\|)",
+    re.IGNORECASE,
+)
+_STEP1_LEGACY_ITEM_ID_RE = re.compile(
+    r"^(?:[A-Za-z]\d+[A-Za-z]\d+(?:_\d+)?|G\d+(?:_\d+)?)$",
+    re.IGNORECASE,
+)
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 # 质量探针阈值：仅捕极端短样本，正常完整描述应远超这些值。
@@ -240,7 +249,7 @@ def _extract_step1_rows(markdown: str, id_field: str, _episode: int) -> list[dic
             continue
         if header is None:
             item_id = _strip_markdown_cell(cells[0]) if cells else ""
-            if re.fullmatch(r"[A-Za-z]\d+[A-Za-z]\d+", item_id):
+            if _STEP1_LEGACY_ITEM_ID_RE.fullmatch(item_id):
                 row = {id_field: item_id}
                 duration = _extract_legacy_step1_duration(cells)
                 if duration is not None:
@@ -275,6 +284,28 @@ def _extract_step1_ids(markdown: str, id_field: str, _episode: int) -> list[str]
         if item_id:
             ids.append(item_id)
     return ids
+
+
+def _legacy_g_to_episode_segment_id(item_id: str, episode: int) -> str:
+    match = _LEGACY_G_ID_RE.fullmatch(str(item_id or "").strip())
+    if not match:
+        return item_id
+    return f"E{episode}S{match.group('index')}{match.group('suffix') or ''}"
+
+
+def _normalize_legacy_step1_g_ids(markdown: str, episode: int) -> tuple[str, bool]:
+    changed = False
+    normalized_lines: list[str] = []
+    for line in str(markdown or "").splitlines():
+        def _replace(match: re.Match[str]) -> str:
+            nonlocal changed
+            changed = True
+            legacy_id = f"G{match.group('index')}{match.group('suffix') or ''}"
+            return f"{match.group('prefix')}{_legacy_g_to_episode_segment_id(legacy_id, episode)}"
+
+        normalized_lines.append(_LEGACY_G_ROW_PREFIX_RE.sub(_replace, line, count=1))
+    trailing_newline = "\n" if str(markdown or "").endswith(("\n", "\r")) else ""
+    return "\n".join(normalized_lines) + trailing_newline, changed
 
 
 def _parse_step1_duration(value: object) -> int | None:
@@ -1038,7 +1069,17 @@ class ScriptGenerator:
                 raise FileNotFoundError(f"未找到 Step 1 文件: {primary_path}")
 
         with open(primary_path, encoding="utf-8") as f:
-            return f.read()
+            step1_md = f.read()
+        if self.content_mode == "narration" and gen_mode != "reference_video":
+            normalized, changed = _normalize_legacy_step1_g_ids(step1_md, episode)
+            if changed:
+                logger.info("legacy narration Step 1 IDs normalized to E%dSxx in %s", episode, primary_path)
+                try:
+                    primary_path.write_text(normalized, encoding="utf-8")
+                except OSError as exc:
+                    logger.warning("legacy narration Step 1 ID normalization writeback failed: %s", exc)
+                return normalized
+        return step1_md
 
     def _parse_response(self, response_text: str, episode: int) -> dict:
         """

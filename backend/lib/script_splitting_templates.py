@@ -217,14 +217,14 @@ _NARRATION_LEGACY_CONTRACT = {
     "unit_name": "segment",
     "display_unit_name": "片段",
     "required_fields": [
-        "segment_label",
+        "segment_id",
         "novel_text",
         "character_count",
         "duration_seconds",
         "has_dialogue",
         "segment_break",
     ],
-    "id_format": "G{two_digit_index}",
+    "id_format": "E{episode}S{two_digit_index}",
     "allowed_variables": [
         "project_overview",
         "episode",
@@ -382,7 +382,7 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         preferred_capabilities=["first_frame"],
         locked_contract=_NARRATION_LEGACY_CONTRACT,
         output_fields=[
-            "segment_label",
+            "segment_id",
             "novel_text",
             "character_count",
             "duration_seconds",
@@ -390,7 +390,7 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
             "segment_break",
         ],
         split_rules=[
-            "片段编号从 G01 开始按顺序递增。",
+            "片段 ID 统一使用 E{episode}S01、E{episode}S02 格式，从当前集第 1 个片段开始按顺序递增。",
             "默认单片段时长 = 项目的 default_duration（按朗读速度每秒约 5-6 字估算字数上限）。",
             "长句、情绪铺陈、关键对话可选用 supported_durations 中更长的值（如 2× / 3× default_duration）。",
             "保持语义完整性，不拆断完整的语义单元。",
@@ -407,7 +407,7 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         few_shot_examples=[
             {
                 "source": "裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。\n我站在府门口，看着信使远去的背影，心中五味杂陈。\n“夫人，这是侯爷的亲笔信。”老管家递上一封火漆封印的书信。\n三年过去了。",
-                "good": "G01 | “裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。” | 25 | <default_duration>s | 否 | -\nG02 | “我站在府门口，看着信使远去的背影，心中五味杂陈。” | 21 | <default_duration>s | 否 | -\nG03 | “夫人，这是侯爷的亲笔信。”老管家递上一封火漆封印的书信。 | 24 | <default_duration>s | 是 | -\nG04 | “三年过去了。” | 6 | <default_duration>s | 否 | 是",
+                "good": "E1S01 | “裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。” | 25 | <default_duration>s | 否 | -\nE1S02 | “我站在府门口，看着信使远去的背影，心中五味杂陈。” | 21 | <default_duration>s | 否 | -\nE1S03 | “夫人，这是侯爷的亲笔信。”老管家递上一封火漆封印的书信。 | 24 | <default_duration>s | 是 | -\nE1S04 | “三年过去了。” | 6 | <default_duration>s | 否 | 是",
             }
         ],
         quality_gates=[
@@ -418,12 +418,12 @@ BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
         prompt_fragments={
             "agent_output_table": """## 片段拆分结果
 
-| 片段 | 原文 | 字数 | 时长 | 有对话 | segment_break |
+| 片段 ID | 原文 | 字数 | 时长 | 有对话 | segment_break |
 |------|------|------|------|--------|---------------|
-| G01 | "裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。" | 25 | <default_duration>s | 否 | - |
-| G02 | "我站在府门口，看着信使远去的背影，心中五味杂陈。" | 21 | <default_duration>s | 否 | - |
-| G03 | ""夫人，这是侯爷的亲笔信。"老管家递上一封火漆封印的书信。" | 24 | <default_duration>s | 是 | - |
-| G04 | "三年过去了。" | 6 | <default_duration>s | 否 | 是 |""",
+| E1S01 | "裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。" | 25 | <default_duration>s | 否 | - |
+| E1S02 | "我站在府门口，看着信使远去的背影，心中五味杂陈。" | 21 | <default_duration>s | 否 | - |
+| E1S03 | ""夫人，这是侯爷的亲笔信。"老管家递上一封火漆封印的书信。" | 24 | <default_duration>s | 是 | - |
+| E1S04 | "三年过去了。" | 6 | <default_duration>s | 否 | 是 |""",
         },
     ),
     "narration_storytelling_classic": _template(
@@ -1730,6 +1730,36 @@ def _copy_snapshot_runtime_state(source: Any, target: dict[str, Any]) -> None:
             target[key] = copy.deepcopy(value)
 
 
+def _is_stale_legacy_narration_profile(profile: dict[str, Any]) -> bool:
+    if profile.get("id") != "narration_legacy_reading_default":
+        return False
+    if str(profile.get("source") or "builtin") != "builtin":
+        return False
+    locked_contract = profile.get("locked_contract") if isinstance(profile.get("locked_contract"), dict) else {}
+    required_fields = locked_contract.get("required_fields") if isinstance(locked_contract, dict) else []
+    output_fields = profile.get("output_fields") if isinstance(profile.get("output_fields"), list) else []
+    prompt_fragments = profile.get("prompt_fragments") if isinstance(profile.get("prompt_fragments"), dict) else {}
+    agent_output_table = str(prompt_fragments.get("agent_output_table") or "")
+    split_rules = "\n".join(str(rule) for rule in profile.get("split_rules") or [])
+    return (
+        locked_contract.get("id_format") == "G{two_digit_index}"
+        or "segment_label" in required_fields
+        or "segment_label" in output_fields
+        or "片段编号从 G01" in split_rules
+        or "| G01 |" in agent_output_table
+    )
+
+
+def _normalize_cached_builtin_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    if not _is_stale_legacy_narration_profile(profile):
+        return profile
+    normalized = copy.deepcopy(BUILTIN_TEMPLATES["narration_legacy_reading_default"])
+    user_overlay = profile.get("user_overlay")
+    if isinstance(user_overlay, dict):
+        normalized["user_overlay"] = copy.deepcopy(user_overlay)
+    return normalized
+
+
 def script_splitting_asset_metadata(project: dict[str, Any] | None) -> dict[str, Any]:
     """Return stable script-splitting metadata for downstream generated assets."""
     if not isinstance(project, dict):
@@ -1764,6 +1794,7 @@ def ensure_project_script_splitting_snapshot(
     existing_profile = existing.get("resolved_profile") if isinstance(existing, dict) else None
     if isinstance(existing_profile, dict) and existing_profile.get("id"):
         profile = copy.deepcopy(existing_profile)
+        profile = _normalize_cached_builtin_profile(profile)
         profile = _ensure_generation_mode_fields(profile)
         profile["hash"] = _normalize_script_splitting_hash(profile.get("hash")) or script_splitting_hash(profile)
         profile["generation_mode_compatibility"] = _generation_mode_compatibility(

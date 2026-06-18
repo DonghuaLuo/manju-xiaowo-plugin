@@ -51,9 +51,9 @@ mcp__arcreel__get_video_capabilities({})
 使用 Read 工具读取 `project.json`（相对 session cwd），了解项目概述和已有角色/场景/道具。
 同时读取 `script_splitting_template_id`、`script_splitting.resolved_profile_hash` 和
 `script_splitting.resolved_profile`。如果 `resolved_profile.legacy_passthrough=true`，
-继续使用本文下方的旧版说书片段拆分规则和 Markdown 表头，不要把其中的
-`output_fields` 改写成新的列；只把模板 ID 和 hash 写入文件头。如果不是 legacy
-passthrough，则拆分时必须优先遵守 resolved_profile 中的 `split_rules`、
+继续使用本文下方的说书片段拆分规则和 Markdown 表头，但片段 ID 必须统一写为
+`E{N}S01`、`E{N}S02`，不要使用旧版 `G01/G02`；同时把模板 ID 和 hash 写入文件头。
+如果不是 legacy passthrough，则拆分时必须优先遵守 resolved_profile 中的 `split_rules`、
 `forbidden_patterns`、`output_fields` 和 `quality_gates`。如果项目缺少
 `script_splitting`，先报告主 agent 需要重新打开/刷新项目以补默认快照，不要自行发明模板。
 
@@ -88,12 +88,12 @@ passthrough，则拆分时必须优先遵守 resolved_profile 中的 `split_rule
 ```markdown
 ## 片段拆分结果
 
-| 片段 | 原文 | 字数 | 时长 | 有对话 | segment_break |
+| 片段 ID | 原文 | 字数 | 时长 | 有对话 | segment_break |
 |------|------|------|------|--------|---------------|
-| G01 | "裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。" | 25 | <default_duration>s | 否 | - |
-| G02 | "我站在府门口，看着信使远去的背影，心中五味杂陈。" | 21 | <default_duration>s | 否 | - |
-| G03 | ""夫人，这是侯爷的亲笔信。"老管家递上一封火漆封印的书信。" | 24 | <default_duration>s | 是 | - |
-| G04 | "三年过去了。" | 6 | <default_duration>s | 否 | 是 |
+| E{N}S01 | "裴与出征后的第二年，千里加急给我送回一个襁褓中的婴儿。" | 25 | <default_duration>s | 否 | - |
+| E{N}S02 | "我站在府门口，看着信使远去的背影，心中五味杂陈。" | 21 | <default_duration>s | 否 | - |
+| E{N}S03 | ""夫人，这是侯爷的亲笔信。"老管家递上一封火漆封印的书信。" | 24 | <default_duration>s | 是 | - |
+| E{N}S04 | "三年过去了。" | 6 | <default_duration>s | 否 | 是 |
 ```
 
 使用 Write 工具写入文件。
@@ -127,7 +127,7 @@ passthrough，则拆分时必须优先遵守 resolved_profile 中的 `split_rule
 
 ## 注意事项
 
-- 片段编号从 G01 开始按顺序递增
+- 片段 ID 统一使用 `E{N}S01`、`E{N}S02` 格式，其中 `{N}` 是当前集号；不要使用旧版 `G01/G02`
 - 原文字段保留完整的标点符号
 - 对话片段的原文包含完整的说话内容和引导语（如"他说道"）
 - segment_break 不要滥用，只在真正的场景切换处标记
