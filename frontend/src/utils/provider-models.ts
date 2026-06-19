@@ -107,7 +107,7 @@ export function lookupSupportedDurations(
 // Resolution lookup
 // ---------------------------------------------------------------------------
 
-export const IMAGE_STANDARD_RESOLUTIONS = ["512px", "1K", "2K", "4K"];
+export const IMAGE_STANDARD_RESOLUTIONS = ["1K", "2K", "3K", "4K"];
 export const VIDEO_STANDARD_RESOLUTIONS = ["480p", "720p", "1080p", "4K"];
 
 export type ImageOutputFormat = "png" | "jpg" | "webp";
@@ -159,9 +159,9 @@ export function lookupResolutions(
     const media = endpointToMediaType?.[model.endpoint];
     const standard =
       media === "image"
-        ? IMAGE_STANDARD_RESOLUTIONS
+        ? [...IMAGE_STANDARD_RESOLUTIONS]
         : media === "video"
-          ? VIDEO_STANDARD_RESOLUTIONS
+          ? [...VIDEO_STANDARD_RESOLUTIONS]
           : [];
     return { options: standard, isCustom: true };
   }

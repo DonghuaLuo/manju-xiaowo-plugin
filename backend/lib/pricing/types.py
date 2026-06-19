@@ -38,7 +38,7 @@ class PerImageFlat:
 class PerImageByResolution:
     """按张计费，单价随分辨率档位变化。``rates`` 形如 ``{model: {分辨率: 每张价}}``。
 
-    分辨率键以大写形态存储（``1K`` / ``2K`` / ``4K`` / ``512PX``），查表前对入参 ``.upper()``。
+    分辨率键以大写形态存储（``1K`` / ``2K`` / ``4K``），查表前对入参 ``.upper()``。
     """
 
     rates: dict[str, dict[str, float]]

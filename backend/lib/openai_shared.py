@@ -23,6 +23,7 @@ OPENAI_IMAGE_QUALITY_MAP: dict[str, str] = {
     "512px": "low",
     "1K": "medium",
     "2K": "high",
+    "3K": "high",
     "4K": "high",
 }
 

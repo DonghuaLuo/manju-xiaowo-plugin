@@ -1,6 +1,6 @@
 import type { GenerationProfiles } from "@/types";
 
-export const IMAGE_PROFILE_RESOLUTIONS = ["512px", "1K", "2K", "4K"] as const;
+export const IMAGE_PROFILE_RESOLUTIONS = ["1K", "2K", "3K", "4K"] as const;
 export const VIDEO_PROFILE_RESOLUTIONS = ["480p", "720p", "1080p", "4K"] as const;
 
 interface DefaultProfileInput {

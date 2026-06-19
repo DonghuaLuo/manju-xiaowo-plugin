@@ -32,8 +32,10 @@ DEFAULT_MODEL = "sora-2"
 
 _SORA_SIZES_720P: tuple[str, ...] = ("720x1280", "1280x720")
 _SORA_SIZES_1024P: tuple[str, ...] = ("1024x1792", "1792x1024")
-_SORA_LEGAL_SIZES: tuple[str, ...] = _SORA_SIZES_720P + _SORA_SIZES_1024P
+_SORA_SIZES_1080P: tuple[str, ...] = ("1080x1920", "1920x1080")
+_SORA_LEGAL_SIZES: tuple[str, ...] = _SORA_SIZES_720P + _SORA_SIZES_1024P + _SORA_SIZES_1080P
 _SORA_1024P_MIN_SHORT = 1024
+_SORA_1080P_MIN_SHORT = 1080
 
 
 def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
@@ -42,9 +44,14 @@ def _resolve_size(model: str, resolution: str | None, aspect_ratio: str) -> str:
     target = aw / ah
     is_pro = "pro" in model.lower()
     short = resolution_to_short_edge(resolution, tier_map=VIDEO_TIER_SHORT_EDGE)
-    supported_shorts = [720, _SORA_1024P_MIN_SHORT] if is_pro else [720]
+    supported_shorts = [720, _SORA_1024P_MIN_SHORT, _SORA_1080P_MIN_SHORT] if is_pro else [720]
     achieved_short = min(supported_shorts, key=lambda s: (abs(s - short), -s))
-    legal = _SORA_SIZES_1024P if achieved_short == _SORA_1024P_MIN_SHORT else _SORA_SIZES_720P
+    if achieved_short == _SORA_1080P_MIN_SHORT:
+        legal = _SORA_SIZES_1080P
+    elif achieved_short == _SORA_1024P_MIN_SHORT:
+        legal = _SORA_SIZES_1024P
+    else:
+        legal = _SORA_SIZES_720P
     if short > achieved_short:
         logger.warning(
             "OpenAI video: model=%s 无法满足分辨率请求 %s（短边 %d），输出封顶到 %dp 档",

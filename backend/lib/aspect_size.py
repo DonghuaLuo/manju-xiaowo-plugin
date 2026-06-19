@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SHORT_EDGE = 720
 
-IMAGE_TIER_SHORT_EDGE: dict[str, int] = {"512px": 512, "1K": 1024, "2K": 1440, "4K": 2160}
+IMAGE_TIER_SHORT_EDGE: dict[str, int] = {"512px": 512, "1K": 1024, "2K": 1440, "3K": 1728, "4K": 2160}
 VIDEO_TIER_SHORT_EDGE: dict[str, int] = {"480p": 480, "720p": 720, "1024p": 1024, "1080p": 1080, "4K": 2160}
 
 _DEFAULT_ASPECT: tuple[int, int] = (9, 16)

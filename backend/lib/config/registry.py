@@ -66,6 +66,9 @@ def _gemini_image_pricing(model_id: str, rates: dict[str, float]) -> PerImageByR
     return PerImageByResolution(rates={model_id: rates}, default_model=model_id, currency="USD")
 
 
+_GEMINI_FLASH_IMAGE_RATES = {"1K": 0.067, "2K": 0.101, "4K": 0.151}
+
+
 # Veo 视频费率（美元/秒），按 (分辨率, 是否生成音频)。
 def _veo_video_pricing(model_id: str, rates: dict[tuple[str, bool | None], float]) -> PerSecondMatrix:
     return PerSecondMatrix(
@@ -238,7 +241,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
 
                 pricing=_gemini_image_pricing(
                     "gemini-3.1-flash-image-preview",
-                    {"512PX": 0.045, "1K": 0.067, "2K": 0.101, "4K": 0.151},
+                    _GEMINI_FLASH_IMAGE_RATES,
                 ),),
             # --- video ---
             "veo-3.1-generate-preview": ModelInfo(
@@ -318,7 +321,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
 
                 pricing=_gemini_image_pricing(
                     "gemini-3.1-flash-image-preview",
-                    {"512PX": 0.045, "1K": 0.067, "2K": 0.101, "4K": 0.151},
+                    _GEMINI_FLASH_IMAGE_RATES,
                 ),),
             # --- video ---
             "veo-3.1-generate-001": ModelInfo(
@@ -690,7 +693,7 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 capabilities=["text_to_image", "image_to_image"],
                 default=True,
                 image_output_formats=["png", "jpg", "webp"],
-                resolutions=["512px", "1K", "2K"],
+                resolutions=["1K", "2K", "3K", "4K"],
                 max_reference_images=16,
 
                 pricing=_openai_image_pricing(
@@ -731,10 +734,13 @@ PROVIDER_REGISTRY: dict[str, ProviderMeta] = {
                 media_type="video",
                 capabilities=["text_to_video", "image_to_video", "generate_audio"],
                 supported_durations=[4, 8, 12, 16, 20],
-                resolutions=["720p", "1024p"],
+                resolutions=["720p", "1024p", "1080p"],
                 max_reference_images=1,
 
-                pricing=_sora_video_pricing("sora-2-pro", {"720p": 0.30, "1024p": 0.50}),),
+                pricing=_sora_video_pricing(
+                    "sora-2-pro",
+                    {"720p": 0.30, "1024p": 0.50, "1080p": 0.70},
+                ),),
         },
     ),
     "vidu": ProviderMeta(

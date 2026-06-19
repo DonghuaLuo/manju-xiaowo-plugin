@@ -36,6 +36,7 @@ _MAX_REFERENCE_IMAGES = 16
 ImageBackendMode = Literal["both", "generations_only", "edits_only"]
 
 _GPT_IMAGE_MAX_LONG_EDGE = 3840
+_GPT_IMAGE_MAX_TOTAL_PIXELS = 8_294_400
 _GPT_IMAGE_STABLE_LONG_EDGE = 2560
 _GPT_IMAGE_MAX_RATIO = 3.0
 
@@ -57,6 +58,7 @@ def _resolve_openai_params(
         short,
         round_to=16,
         max_long_edge=_GPT_IMAGE_MAX_LONG_EDGE,
+        max_total_pixels=_GPT_IMAGE_MAX_TOTAL_PIXELS,
         max_ratio=_GPT_IMAGE_MAX_RATIO,
     )
     if max(w, h) > _GPT_IMAGE_STABLE_LONG_EDGE:

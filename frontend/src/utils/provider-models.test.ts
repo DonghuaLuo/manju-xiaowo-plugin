@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  lookupResolutions,
   lookupSharedImageOutputFormats,
   lookupVideoServiceTiers,
   lookupStoryboardVideoStartImageSupport,
@@ -217,5 +218,64 @@ describe("provider-models image output formats", () => {
         "gemini-aistudio/imagen",
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("provider-models custom image resolutions", () => {
+  const customProviders = [
+    {
+      id: 12,
+      display_name: "Custom Images",
+      discovery_format: "openai",
+      base_url: "",
+      api_key_masked: "",
+      created_at: "",
+      models: [
+        {
+          id: 1,
+          model_id: "gpt-image-2",
+          display_name: "GPT Image 2",
+          endpoint: "openai-images",
+          is_default: true,
+          is_enabled: true,
+          price_unit: null,
+          price_input: null,
+          price_output: null,
+          currency: null,
+          supported_durations: [],
+          resolution: null,
+        },
+        {
+          id: 2,
+          model_id: "gemini-3.1-flash-image-preview",
+          display_name: "Gemini 3.1 Flash Image",
+          endpoint: "gemini-image",
+          is_default: false,
+          is_enabled: true,
+          price_unit: null,
+          price_input: null,
+          price_output: null,
+          currency: null,
+          supported_durations: [],
+          resolution: null,
+        },
+      ],
+    },
+  ] as Parameters<typeof lookupResolutions>[2];
+
+  it("uses GPT Image 2's current OpenAI tiers for custom OpenAI-image relays", () => {
+    expect(
+      lookupResolutions([], "custom-12/gpt-image-2", customProviders, {
+        "openai-images": "image",
+      }).options,
+    ).toEqual(["1K", "2K", "3K", "4K"]);
+  });
+
+  it("uses standard K tiers for custom Gemini image endpoints", () => {
+    expect(
+      lookupResolutions([], "custom-12/gemini-3.1-flash-image-preview", customProviders, {
+        "gemini-image": "image",
+      }).options,
+    ).toEqual(["1K", "2K", "3K", "4K"]);
   });
 });

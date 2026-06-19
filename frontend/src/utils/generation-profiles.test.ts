@@ -7,7 +7,7 @@ import {
 describe("generation profile resolution defaults", () => {
   it("chooses supported defaults for constrained provider models", () => {
     const profiles = createDefaultGenerationProfiles({
-      imageResolutionOptions: ["512px", "1K"],
+      imageResolutionOptions: ["1K"],
       videoResolutionOptions: ["480p", "720p"],
     });
 
@@ -20,7 +20,7 @@ describe("generation profile resolution defaults", () => {
 
   it("defaults role, scene, and prop master assets to 1K", () => {
     const profiles = createDefaultGenerationProfiles({
-      imageResolutionOptions: ["512px", "1K", "2K", "4K"],
+      imageResolutionOptions: ["1K", "2K", "3K", "4K"],
     });
 
     expect(profiles.asset?.resolution).toBe("1K");
