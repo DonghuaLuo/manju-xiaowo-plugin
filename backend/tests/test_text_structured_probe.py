@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from lib.script_generator import ScriptGenerator
-from lib.text_backends.base import TextCapability, TextGenerationResult
+from lib.text_backends.base import TextCapability, TextGenerationResult, resolve_schema
 from lib.text_backends.structured_probe import (
     StructuredOutputProbePayload,
     ensure_text_structured_output_ready,
@@ -182,6 +182,15 @@ async def test_probe_succeeds_with_minimal_strict_schema() -> None:
     assert result.endpoint == "openai-chat"
     assert result.input_tokens == 8
     assert backend.calls == 1
+
+
+def test_project_overview_schema_is_openai_strict_object() -> None:
+    from lib.project_manager import ProjectOverview
+
+    schema = resolve_schema(ProjectOverview)
+
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
 
 
 async def test_probe_reports_schema_mismatch() -> None:
@@ -422,28 +431,50 @@ async def test_script_generator_does_not_write_invalid_non_strict_output(tmp_pat
     assert diagnostics["attempts"][-1]["validation_error"].startswith("剧本条目数与 Step 1 不一致")
 
 
-async def test_project_overview_runs_preflight_before_model_call(tmp_path: Path, monkeypatch) -> None:
+async def test_project_overview_falls_back_when_preflight_fails(tmp_path: Path, monkeypatch) -> None:
     from lib.project_manager import ProjectManager
 
     class _PreflightFailsBackend:
-        name = "fake"
-        model = "fake-model"
+        name = "dashscope"
+        model = "qwen-plus"
         capabilities = set()
 
+        def __init__(self) -> None:
+            self.requests = []
+
         async def generate(self, request):
-            raise AssertionError("overview generation must not run when preflight fails")
+            self.requests.append(request)
+            return TextGenerationResult(
+                text=json.dumps(
+                    {
+                        "synopsis": "主角在危机中发现真相，并踏上复仇与自救的主线旅程。",
+                        "genre": "现代悬疑",
+                        "theme": "复仇与救赎",
+                        "world_setting": "故事发生在现代都市，围绕家族秘密与商业阴谋展开。",
+                        "language": "zh",
+                    },
+                    ensure_ascii=False,
+                ),
+                provider=self.name,
+                model=self.model,
+            )
 
     pm = ProjectManager(tmp_path / "projects")
     pm.create_project("demo")
     pm.create_project_metadata("demo", "Demo")
     _write(pm.get_project_path("demo") / "source" / "1.txt", "source body")
+    backend = _PreflightFailsBackend()
 
     async def _fake_create_backend(*args, **kwargs):
-        return _PreflightFailsBackend()
+        return backend
 
     monkeypatch.setattr("lib.text_generator.create_text_backend_for_task", _fake_create_backend)
-    with pytest.raises(ValueError, match="capability probe"):
-        await pm.generate_overview("demo")
+    overview = await pm.generate_overview("demo")
+
+    assert overview["language"] == "zh"
+    assert backend.requests
+    assert backend.requests[0].response_schema is None
+    assert "<json_schema>" in backend.requests[0].prompt
 
 
 async def test_ipc_dispatcher_maps_text_structured_output_probe(monkeypatch) -> None:

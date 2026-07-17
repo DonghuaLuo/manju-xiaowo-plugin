@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import portalocker
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lib.agent_profile import agent_profile_dir
 from lib.asset_types import ASSET_SPECS
@@ -59,6 +59,8 @@ def _in_process_file_lock(path: Path) -> threading.RLock:
 
 PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 PROJECT_SLUG_SANITIZER = re.compile(r"[^a-zA-Z0-9]+")
+_OVERVIEW_LOCAL_VALIDATION_MAX_ATTEMPTS = 3
+_OVERVIEW_RESPONSE_EXCERPT_LIMIT = 1200
 
 _VALID_GENERATION_MODES = {"storyboard", "grid", "reference_video"}
 _DEFAULT_GENERATION_MODE = "storyboard"
@@ -112,11 +114,80 @@ class EpisodeScriptReboundError(RuntimeError):
 class ProjectOverview(BaseModel):
     """项目概述数据模型，用于 Gemini Structured Outputs"""
 
+    model_config = ConfigDict(extra="forbid")
+
     synopsis: str = Field(description="故事梗概，200-300字，概括主线剧情")
     genre: str = Field(description="题材类型，如：古装宫斗、现代悬疑、玄幻修仙")
     theme: str = Field(description="核心主题，如：复仇与救赎、成长与蜕变")
     world_setting: str = Field(description="时代背景和世界观设定，100-200字")
     language: Literal["zh", "en", "vi"] = Field(description="小说源语言代码")
+
+
+def _compact_excerpt(text: object, limit: int = _OVERVIEW_RESPONSE_EXCERPT_LIMIT) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) > limit:
+        return compact[:limit] + "..."
+    return compact
+
+
+def _overview_validation_error(exc: ValidationError, limit: int = 4) -> str:
+    parts: list[str] = []
+    for err in exc.errors()[:limit]:
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    if len(exc.errors()) > limit:
+        parts.append(f"... 另有 {len(exc.errors()) - limit} 个错误")
+    return "; ".join(parts)
+
+
+def _overview_schema_for_prompt() -> str:
+    from .text_backends.base import resolve_schema
+
+    return json.dumps(resolve_schema(ProjectOverview), ensure_ascii=False, indent=2)
+
+
+def _build_non_strict_overview_prompt(
+    base_prompt: str,
+    *,
+    preflight_error: Exception | None,
+    attempt: int,
+    previous_error: ValidationError | None = None,
+    previous_response: str | None = None,
+) -> str:
+    capability_note = _compact_excerpt(str(preflight_error), 600) if preflight_error else "未使用原生 strict schema"
+    repair_block = ""
+    if previous_error is not None:
+        repair_block = f"""
+
+# 上一次输出未通过本地校验
+
+错误：{_overview_validation_error(previous_error)}
+
+上一次输出片段：
+<previous_output>
+{_compact_excerpt(previous_response)}
+</previous_output>
+
+请重新输出完整的修正后 JSON 对象，不要只输出差异。
+"""
+
+    return f"""{base_prompt}
+
+# 输出格式约束（非 strict JSON 兜底，第 {attempt} 次）
+
+当前文本 endpoint 未通过原生 strict JSON Schema 能力校验：{capability_note}
+
+本次不会使用后端原生 response_schema 约束，但返回内容仍会被本地校验。请严格遵守：
+
+- 只输出一个 JSON 对象，不要 Markdown，不要解释文字，不要代码块。
+- JSON 必须完全匹配下面 JSON Schema；缺字段、字段类型错误、enum 不合法、额外字段都会被拒绝。
+- language 只能输出 zh、en、vi 之一。
+
+<json_schema>
+{_overview_schema_for_prompt()}
+</json_schema>
+{repair_block}"""
 
 
 class ProjectManager:
@@ -2043,19 +2114,63 @@ class ProjectManager:
             f"{source_content}"
         )
 
-        await generator.ensure_structured_output_ready()
+        response_schema = ProjectOverview
+        strict_probe_error: Exception | None = None
+        try:
+            await generator.ensure_structured_output_ready()
+        except Exception as exc:  # noqa: BLE001 - unsupported strict schema can still use local validation fallback
+            strict_probe_error = exc
+            response_schema = None
+            logger.warning(
+                "strict JSON Schema overview preflight failed; "
+                "falling back to non-strict JSON generation with local validation: %s",
+                exc,
+            )
 
-        result = await generator.generate(
-            TextGenerationRequest(
-                prompt=prompt,
-                response_schema=ProjectOverview,
-            ),
-            project_name=project_name,
+        generation_prompt = (
+            prompt
+            if response_schema is not None
+            else _build_non_strict_overview_prompt(
+                prompt,
+                preflight_error=strict_probe_error,
+                attempt=1,
+            )
         )
-        response_text = result.text
+        max_attempts = 1 if response_schema is not None else _OVERVIEW_LOCAL_VALIDATION_MAX_ATTEMPTS
+        overview: ProjectOverview | None = None
+        last_error: ValidationError | None = None
+        for attempt in range(1, max_attempts + 1):
+            result = await generator.generate(
+                TextGenerationRequest(
+                    prompt=generation_prompt,
+                    response_schema=response_schema,
+                ),
+                project_name=project_name,
+            )
+            response_text = result.text
+            try:
+                overview = ProjectOverview.model_validate_json(response_text)
+                break
+            except ValidationError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    raise ValueError(f"项目概述输出未通过本地校验：{_overview_validation_error(exc)}") from exc
+                logger.warning(
+                    "overview generation attempt %d/%d failed local validation: %s",
+                    attempt,
+                    max_attempts,
+                    _overview_validation_error(exc),
+                )
+                generation_prompt = _build_non_strict_overview_prompt(
+                    prompt,
+                    preflight_error=strict_probe_error,
+                    attempt=attempt + 1,
+                    previous_error=exc,
+                    previous_response=response_text,
+                )
 
-        # 解析并验证响应
-        overview = ProjectOverview.model_validate_json(response_text)
+        if overview is None:
+            raise ValueError("项目概述输出未通过本地校验") from last_error
         overview_dict = overview.model_dump()
         overview_dict["generated_at"] = datetime.now(UTC).isoformat()
 

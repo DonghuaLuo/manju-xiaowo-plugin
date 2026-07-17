@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -157,6 +158,19 @@ class TextGenerationResult:
     output_tokens: int | None = None
 
 
+def _normalize_strict_json_schema(schema: Any) -> Any:
+    if isinstance(schema, dict):
+        normalized = {key: _normalize_strict_json_schema(value) for key, value in schema.items()}
+        properties = normalized.get("properties")
+        if isinstance(properties, dict):
+            normalized["required"] = list(properties.keys())
+            normalized["additionalProperties"] = False
+        return normalized
+    if isinstance(schema, list):
+        return [_normalize_strict_json_schema(item) for item in schema]
+    return schema
+
+
 def resolve_schema(schema: dict | type[BaseModel]) -> dict:
     """将 response_schema 转为无 $ref 的纯 JSON Schema dict。
 
@@ -168,11 +182,11 @@ def resolve_schema(schema: dict | type[BaseModel]) -> dict:
             raise TypeError(f"resolve_schema 仅接受 dict 或 Pydantic BaseModel 子类，得到 {schema!r}")
         schema_dict: dict = schema.model_json_schema()
     else:
-        schema_dict = schema
+        schema_dict = deepcopy(schema)
 
     defs = schema_dict.get("$defs", {})
     if not defs:
-        return schema_dict
+        return _normalize_strict_json_schema(schema_dict)
 
     def _inline(obj: Any, visited_refs: frozenset[str] = frozenset()) -> Any:
         if isinstance(obj, dict):
@@ -190,7 +204,7 @@ def resolve_schema(schema: dict | type[BaseModel]) -> dict:
 
     result: dict = _inline(schema_dict)
     result.pop("$defs", None)
-    return result
+    return _normalize_strict_json_schema(result)
 
 
 class TextBackend(Protocol):
