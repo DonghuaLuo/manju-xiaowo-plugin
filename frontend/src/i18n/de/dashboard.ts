@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "Ich warte auf Ihre erste Rolle.",
   lobby_hero_summary: "{{completed}}-Folgen abgeschlossen, {{inProduction}} noch in Produktion.",
   lobby_hero_summary_idle: "Erstellen Sie ein Projekt, um Ihre erste Rolle zu starten.",
+  lobby_hero_tutorial_label: "Video-Anleitung: Schnellstart",
   lobby_stat_total: "GESAMT",
   lobby_stat_production: "PROD",
   lobby_stat_completed: "FERTIG",

@@ -1041,6 +1041,7 @@ export default {
   lobby_hero_subtitle_idle: "期待你的第一部作品。",
   lobby_hero_summary: "已完成 {{completed}} 集，{{inProduction}} 集还在制作。",
   lobby_hero_summary_idle: "新建一个项目，开始你的第一部作品。",
+  lobby_hero_tutorial_label: "视频教程：快速上手演示",
   lobby_stat_total: "项目",
   lobby_stat_production: "制作中",
   lobby_stat_completed: "已完成",

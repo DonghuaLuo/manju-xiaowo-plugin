@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "Đang chờ tác phẩm đầu tiên của bạn.",
   lobby_hero_summary: "Đã hoàn thành {{completed}} tập, {{inProduction}} tập còn đang sản xuất.",
   lobby_hero_summary_idle: "Tạo một dự án để bắt đầu tác phẩm đầu tiên của bạn.",
+  lobby_hero_tutorial_label: "Video hướng dẫn: bắt đầu nhanh",
   lobby_stat_total: "TOTAL",
   lobby_stat_production: "PROD",
   lobby_stat_completed: "DONE",

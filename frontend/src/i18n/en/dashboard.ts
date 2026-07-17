@@ -1043,6 +1043,7 @@ export default {
   lobby_hero_subtitle_idle: "Awaiting your first reel.",
   lobby_hero_summary: "{{completed}} episodes wrapped, {{inProduction}} still in production.",
   lobby_hero_summary_idle: "Create a project to start your first reel.",
+  lobby_hero_tutorial_label: "Video tutorial: quick start",
   lobby_stat_total: "TOTAL",
   lobby_stat_production: "PROD",
   lobby_stat_completed: "DONE",

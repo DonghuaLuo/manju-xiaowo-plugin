@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "Ждем вашей первой работы.",
   lobby_hero_summary: "Завершено {{completed}} серий, еще {{inProduction}} в производстве.",
   lobby_hero_summary_idle: "Создайте проект и начните свою первую работу.",
+  lobby_hero_tutorial_label: "Видеоинструкция: быстрый старт",
   lobby_stat_total: "Проекты",
   lobby_stat_production: "В производстве",
   lobby_stat_completed: "Готово",

@@ -16,10 +16,12 @@ import {
   Archive,
   BarChart3,
   Download,
+  ExternalLink,
   FolderOpen,
   Library,
   Loader2,
   MoreHorizontal,
+  PlayCircle,
   Plus,
   Search,
   Settings,
@@ -77,6 +79,8 @@ type GreetingKey =
 const PROJECTS_FETCH_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000];
 const PLUGIN_READY_WAIT_TIMEOUT_MS = 1500;
 const MINUTE_MS = 60_000;
+const TUTORIAL_VIDEO_URL =
+  "https://www.bilibili.com/video/BV1DqKE6HEGR/?vd_source=cd85bc0c651564254dc4036d698f4a6a";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -1101,6 +1105,17 @@ function HeroStrip({ totals, t }: HeroStripProps) {
         <div className="mt-1.5 text-left font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-2 md:text-right">
           {t("dashboard:lobby_hero_eyebrow")} — {dateLine}
         </div>
+        <a
+          href={TUTORIAL_VIDEO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t("dashboard:lobby_hero_tutorial_label")}
+          className="focus-ring inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/55 bg-accent-dim px-3 py-1.5 text-[12px] font-semibold text-accent-2 shadow-[0_0_18px_rgba(239,181,72,0.18)] transition-colors hover:border-accent hover:text-accent"
+        >
+          <PlayCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>{t("dashboard:lobby_hero_tutorial_label")}</span>
+          <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
+        </a>
         <div
           className="flex max-w-full items-stretch overflow-hidden rounded-[10px] border border-hairline-soft"
           style={{ background: "oklch(0.16 0.010 265 / 0.4)" }}

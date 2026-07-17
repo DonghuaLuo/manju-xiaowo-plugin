@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "En attente de votre première bobine.",
   lobby_hero_summary: "Épisodes {{completed}} terminés, {{inProduction}} toujours en production.",
   lobby_hero_summary_idle: "Créez un projet pour démarrer votre première bobine.",
+  lobby_hero_tutorial_label: "Tutoriel vidéo : démarrage rapide",
   lobby_stat_total: "TOTAL",
   lobby_stat_production: "PROD",
   lobby_stat_completed: "FAIT",

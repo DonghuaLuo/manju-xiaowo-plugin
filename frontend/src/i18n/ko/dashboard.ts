@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "첫 작품을 기다리고 있습니다.",
   lobby_hero_summary: "{{completed}}개 에피소드를 완료했고, {{inProduction}}개는 아직 제작 중입니다.",
   lobby_hero_summary_idle: "새 프로젝트를 만들어 첫 작품을 시작하세요.",
+  lobby_hero_tutorial_label: "동영상 튜토리얼: 빠른 시작",
   lobby_stat_total: "프로젝트",
   lobby_stat_production: "제작 중",
   lobby_stat_completed: "완료됨",

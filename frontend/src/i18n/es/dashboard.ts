@@ -1045,6 +1045,7 @@ export default {
   lobby_hero_subtitle_idle: "Esperando tu primer carrete.",
   lobby_hero_summary: "Episodios de {{completed}} terminados, {{inProduction}} aún en producción.",
   lobby_hero_summary_idle: "Crea un proyecto para comenzar tu primer carrete.",
+  lobby_hero_tutorial_label: "Video tutorial: inicio rápido",
   lobby_stat_total: "TOTAL",
   lobby_stat_production: "PROD",
   lobby_stat_completed: "HECHO",
